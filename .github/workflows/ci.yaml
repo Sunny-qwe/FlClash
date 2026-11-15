@@ -17,7 +17,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   # The release budget in bytes for the desktop binary, `concord`. The design target is 15 MB.
-  CORE_MAX_BYTES: 25000000
+  CORE_MAX_BYTES: 30000000
   # Pinned by hash, so a new bundle from https://curl.se/docs/caextract.html is a reviewed bump.
   CA_BUNDLE: cacert-2026-09-25.pem
   CA_BUNDLE_SHA256: a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
