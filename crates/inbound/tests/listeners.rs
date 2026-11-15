@@ -298,8 +298,31 @@ async fn tproxy_takes_the_accepted_local_address_as_the_destination() {
 }
 
 #[tokio::test]
-async fn the_native_redir_listener_binds_and_drops_connections_it_cannot_resolve() {
+async fn the_native_redir_listener_binds() {
     let listeners = Listeners::native();
+    let spec = ListenSpec {
+        redir_port: Some(0),
+        ..Default::default()
+    };
+    assert!(listeners.reconcile(&spec, Fake::echo()).await.is_empty());
+    assert_eq!(listeners.bound().await[0].kind, ListenerKind::Redir);
+}
+
+struct NoOrigin;
+
+impl Transparent for NoOrigin {
+    fn original_dst(&self, _: &TcpStream) -> io::Result<SocketAddr> {
+        Err(io::ErrorKind::NotFound.into())
+    }
+
+    fn make_transparent(&self, _: &Socket, _: bool) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn redir_drops_a_connection_whose_destination_cannot_be_recovered() {
+    let listeners = Listeners::with_transparent(Arc::new(NoOrigin));
     let fake = Fake::echo();
     let spec = ListenSpec {
         redir_port: Some(0),
