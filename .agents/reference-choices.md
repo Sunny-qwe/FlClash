@@ -210,10 +210,20 @@ Concord already takes these from the references; keep them unless the reference 
 
 - [runtime-bound] **Runtime worker threads** are one per CPU the process may use, on every platform: Tokio's
   default (`tokio-1.54.1/src/loom/std/mod.rs:99`, `available_parallelism`) and what Go gives mihomo and sing-box
-  (Go 1.27.3 `runtime/proc.go:947`, `defaultGOMAXPROCS(numCPUStartup)`). Neither reference caps it, and an idle
-  worker parks without waking (`scheduler/multi_thread/park.rs`). On Windows the count follows the process affinity
-  mask (`crates/platform/src/cpus.rs`). On Linux the TUN device opens one queue per worker
-  (`crates/tun/src/device/mod.rs`).
+  at start (Go 1.27.3 `runtime/proc.go:947`, `defaultGOMAXPROCS(numCPUStartup)`: the affinity mask, `os_linux.go:101`,
+  within the cgroup CPU quota, `cgroup_linux.go:85`). Neither reference caps it, and an idle worker parks without
+  waking (`scheduler/multi_thread/park.rs`). On Windows the count follows the process affinity mask
+  (`crates/platform/src/cpus.rs` (`available_cpus`)). On Linux the TUN device opens one queue per worker
+  (`crates/tun/src/device/mod.rs`). Go re-reads the mask and quota once a second (`runtime/proc.go:6637`,
+  `sysmonUpdateGOMAXPROCS`) when the main module's `go` line is 1.25 or later (`internal/godebugs/table.go:72`,
+  `updatemaxprocs`): sing-box's `go.mod` says 1.25.5 and follows the mask, mihomo's says 1.20 and keeps the count it
+  started with. A Tokio pool cannot grow or shrink once built (`runtime/scheduler/multi_thread/worker.rs:273`,
+  `create`), so it is sized for the most CPUs the process can get over its life. Where the launcher sets the mask
+  (a shell, `taskset`, systemd, a container, the bench's CPU split) that is the mask at start. An Android app
+  process is moved between cpusets as its state changes, and one started in the background holds the background
+  cpuset's CPUs at start, so `libconcord.so` counts the online CPUs within the same quota
+  (`crates/platform/src/cpus.rs` (`assignable_cpus`)); in the background it then runs more workers than sing-box
+  has P's.
 
 - [language-neutral] **Provider downloads and `.mrs` rule sets** have no size cap unless the provider sets
   `size-limit`: mihomo applies a limit only when it is positive (`component/resource/vehicle.go:157-160`), passes

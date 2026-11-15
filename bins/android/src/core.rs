@@ -24,7 +24,7 @@ pub struct Core<C: PlatformHost> {
 impl<C: PlatformHost> Core<C> {
     /// `on_thread_start` runs on every runtime thread, so the JVM attachment happens once per thread.
     pub fn new(on_thread_start: Option<ThreadHook>) -> std::io::Result<Self> {
-        let workers = concord_platform::available_cpus().map_or(1, |count| count.get());
+        let workers = concord_platform::assignable_cpus().map_or(1, |count| count.get());
         let mut builder = Builder::new_multi_thread();
         builder
             .worker_threads(workers)
