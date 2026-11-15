@@ -92,7 +92,9 @@ mod imp {
         }
         // SAFETY: `fstat` succeeded, so it filled the whole struct.
         let stat = unsafe { stat.assume_init() };
-        ((stat.st_mode & libc::S_IFMT) == libc::S_IFSOCK && stat.st_ino != 0).then_some(stat.st_ino)
+        // 32-bit Android has a `u32` st_mode but a `u16` mode_t.
+        let file_type = u64::from(stat.st_mode) & u64::from(libc::S_IFMT);
+        (file_type == u64::from(libc::S_IFSOCK) && stat.st_ino != 0).then_some(stat.st_ino)
     }
 
     pub(super) fn with_same_socket<R>(

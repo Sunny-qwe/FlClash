@@ -140,7 +140,7 @@ mod tests {
         reason = "the test dials its own loopback listener"
     )]
     #[tokio::test]
-    async fn an_unredirected_connection_has_no_original_destination() {
+    async fn an_unredirected_connection_reports_no_other_destination() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let (client, accepted) = tokio::join!(
@@ -148,7 +148,10 @@ mod tests {
             listener.accept()
         );
         let (stream, _) = accepted.unwrap();
-        assert!(original_dst(&stream).is_err());
+        // With conntrack loaded, Linux answers with the address the connection reached.
+        if let Ok(original) = original_dst(&stream) {
+            assert_eq!(original, addr);
+        }
         drop(client);
     }
 }
