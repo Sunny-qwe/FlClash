@@ -208,8 +208,10 @@ fn lan_covers_the_go_helper_set() {
     }
 }
 
+#[cfg(unix)]
 static MAPPED_OPENS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+#[cfg(unix)]
 fn open_counting_mappings(path: &Path) -> std::io::Result<Box<dyn AsRef<[u8]> + Send + Sync>> {
     let file = concord_platform::mmap::MappedFile::open(path)?;
     if file.is_mapped() {
