@@ -1,0 +1,368 @@
+use std::collections::HashMap;
+use std::io;
+use std::time::{Duration, Instant};
+
+use bytes::Bytes;
+use rand::Rng;
+
+use crate::util::invalid_data;
+
+pub(crate) const FRAME_TCP_REQUEST: u64 = 0x401;
+pub(crate) const MAX_MESSAGE: u64 = 2048;
+pub(crate) const MAX_PADDING: u64 = 4096;
+pub(crate) const MAX_UDP: usize = 4096;
+pub(crate) const MAX_RESPONSE_HEAD: usize = 1 + 8 + MAX_MESSAGE as usize + 8 + MAX_PADDING as usize;
+
+const PADDING_CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+const DEFRAG_TTL: Duration = Duration::from_secs(10);
+
+pub(crate) fn padding(min: usize, max: usize) -> String {
+    let mut rng = rand::rng();
+    let len = rng.random_range(min..max);
+    (0..len)
+        .map(|_| {
+            let pick = rng.random_range(0..PADDING_CHARS.len());
+            char::from(PADDING_CHARS.get(pick).copied().unwrap_or(b'a'))
+        })
+        .collect()
+}
+
+pub(crate) fn varint_len(value: u64) -> usize {
+    match value {
+        0..=63 => 1,
+        64..=16_383 => 2,
+        16_384..=1_073_741_823 => 4,
+        _ => 8,
+    }
+}
+
+pub(crate) fn put_varint(out: &mut Vec<u8>, value: u64) {
+    match varint_len(value) {
+        1 => out.push(value as u8),
+        2 => out.extend_from_slice(&(value as u16 | 0x4000).to_be_bytes()),
+        4 => out.extend_from_slice(&(value as u32 | 0x8000_0000).to_be_bytes()),
+        _ => out.extend_from_slice(&(value | 0xc000_0000_0000_0000).to_be_bytes()),
+    }
+}
+
+/// Reads one varint, or `None` when `input` ends inside it.
+pub(crate) fn get_varint(input: &[u8]) -> Option<(u64, usize)> {
+    let first = *input.first()?;
+    let len = 1usize << (first >> 6);
+    let bytes = input.get(..len)?;
+    let mut value = u64::from(first & 0x3f);
+    for byte in bytes.iter().skip(1) {
+        value = (value << 8) | u64::from(*byte);
+    }
+    Some((value, len))
+}
+
+pub(crate) fn tcp_request(addr: &str) -> Vec<u8> {
+    let pad = padding(64, 512);
+    let mut out = Vec::with_capacity(addr.len() + pad.len() + 16);
+    put_varint(&mut out, FRAME_TCP_REQUEST);
+    put_varint(&mut out, addr.len() as u64);
+    out.extend_from_slice(addr.as_bytes());
+    put_varint(&mut out, pad.len() as u64);
+    out.extend_from_slice(pad.as_bytes());
+    out
+}
+
+pub(crate) enum Response {
+    Ok,
+    Refused(String),
+}
+
+/// Parses the server's TCP response from the front of `input`.
+/// `Ok(None)` means more bytes are needed.
+pub(crate) fn parse_tcp_response(input: &[u8]) -> io::Result<Option<(Response, usize)>> {
+    let Some((&status, rest)) = input.split_first() else {
+        return Ok(None);
+    };
+    let Some((message_len, used)) = get_varint(rest) else {
+        return Ok(None);
+    };
+    if message_len > MAX_MESSAGE {
+        return Err(invalid_data("invalid message length"));
+    }
+    let message_len = message_len as usize;
+    let message_start = 1 + used;
+    let Some(message) = input.get(message_start..message_start + message_len) else {
+        return Ok(None);
+    };
+    let after = message_start + message_len;
+    let Some((padding_len, used)) = input.get(after..).and_then(get_varint) else {
+        return Ok(None);
+    };
+    if padding_len > MAX_PADDING {
+        return Err(invalid_data("invalid padding length"));
+    }
+    let end = after + used + padding_len as usize;
+    if input.len() < end {
+        return Ok(None);
+    }
+    let response = if status == 0 {
+        Response::Ok
+    } else {
+        Response::Refused(String::from_utf8_lossy(message).into_owned())
+    };
+    Ok(Some((response, end)))
+}
+
+pub(crate) struct UdpHeader<'a> {
+    pub(crate) session: u32,
+    pub(crate) packet: u16,
+    pub(crate) fragment: u8,
+    pub(crate) fragments: u8,
+    pub(crate) addr: &'a str,
+}
+
+pub(crate) fn udp_header_len(addr: &str) -> usize {
+    8 + varint_len(addr.len() as u64) + addr.len()
+}
+
+pub(crate) fn put_udp_header(out: &mut Vec<u8>, header: &UdpHeader<'_>) {
+    out.extend_from_slice(&header.session.to_be_bytes());
+    out.extend_from_slice(&header.packet.to_be_bytes());
+    out.push(header.fragment);
+    out.push(header.fragments);
+    put_varint(out, header.addr.len() as u64);
+    out.extend_from_slice(header.addr.as_bytes());
+}
+
+pub(crate) struct UdpMessage {
+    pub(crate) session: u32,
+    pub(crate) packet: u16,
+    pub(crate) fragment: u8,
+    pub(crate) fragments: u8,
+    pub(crate) addr: String,
+    pub(crate) data: Bytes,
+}
+
+pub(crate) fn parse_udp(datagram: &Bytes) -> io::Result<UdpMessage> {
+    let head = datagram
+        .get(..8)
+        .ok_or_else(|| invalid_data("short udp message"))?;
+    let (session, packet, fragment, fragments) = match head {
+        [a, b, c, d, e, f, g, h] => (
+            u32::from_be_bytes([*a, *b, *c, *d]),
+            u16::from_be_bytes([*e, *f]),
+            *g,
+            *h,
+        ),
+        _ => return Err(invalid_data("short udp message")),
+    };
+    let rest = datagram.get(8..).unwrap_or_default();
+    let (addr_len, used) = get_varint(rest).ok_or_else(|| invalid_data("short udp message"))?;
+    if addr_len == 0 || addr_len > MAX_MESSAGE {
+        return Err(invalid_data("invalid address length"));
+    }
+    let start = 8 + used;
+    let end = start + addr_len as usize;
+    let addr = datagram
+        .get(start..end)
+        .ok_or_else(|| invalid_data("short udp message"))?;
+    Ok(UdpMessage {
+        session,
+        packet,
+        fragment,
+        fragments,
+        addr: String::from_utf8_lossy(addr).into_owned(),
+        data: datagram.slice(end..),
+    })
+}
+
+struct Pending {
+    pieces: Vec<Option<Bytes>>,
+    count: usize,
+    addr: String,
+    touched: Instant,
+}
+
+/// Puts the fragments of one session's datagrams back together.
+#[derive(Default)]
+pub(crate) struct Defrag {
+    pending: HashMap<u16, Pending>,
+    /// Expired entries are swept once the map doubles, so a sweep costs O(1) per feed.
+    sweep_at: usize,
+}
+
+impl Defrag {
+    pub(crate) fn feed(&mut self, message: UdpMessage) -> Option<(String, Bytes)> {
+        if message.fragments <= 1 {
+            return Some((message.addr, message.data));
+        }
+        if message.fragment >= message.fragments {
+            return None;
+        }
+        let now = Instant::now();
+        if self.pending.len() >= self.sweep_at {
+            self.pending
+                .retain(|_, entry| now.duration_since(entry.touched) < DEFRAG_TTL);
+            self.sweep_at = 2 * self.pending.len();
+        }
+        let total = usize::from(message.fragments);
+        let entry = self
+            .pending
+            .entry(message.packet)
+            .or_insert_with(|| Pending {
+                pieces: vec![None; total],
+                count: 0,
+                addr: String::new(),
+                touched: now,
+            });
+        if entry.pieces.len() != total || now.duration_since(entry.touched) > DEFRAG_TTL {
+            *entry = Pending {
+                pieces: vec![None; total],
+                count: 0,
+                addr: String::new(),
+                touched: now,
+            };
+        }
+        entry.touched = now;
+        let slot = entry.pieces.get_mut(usize::from(message.fragment))?;
+        if slot.is_some() {
+            return None;
+        }
+        if message.fragment == 0 {
+            entry.addr.clone_from(&message.addr);
+        }
+        *slot = Some(message.data);
+        entry.count += 1;
+        if entry.count < total {
+            return None;
+        }
+        let done = self.pending.remove(&message.packet)?;
+        let size = done.pieces.iter().flatten().map(Bytes::len).sum();
+        if size == 0 {
+            return None;
+        }
+        let mut whole = Vec::with_capacity(size);
+        for piece in done.pieces.iter().flatten() {
+            whole.extend_from_slice(piece);
+        }
+        Some((done.addr, Bytes::from(whole)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn varints_round_trip_at_every_width() {
+        for value in [0u64, 63, 64, 16_383, 16_384, 1_073_741_823, 1_073_741_824] {
+            let mut out = Vec::new();
+            put_varint(&mut out, value);
+            assert_eq!(out.len(), varint_len(value));
+            assert_eq!(get_varint(&out), Some((value, out.len())));
+        }
+        assert_eq!(get_varint(&[0x44, 0x01]), Some((0x401, 2)));
+        assert_eq!(get_varint(&[0x44]), None);
+    }
+
+    #[test]
+    fn a_tcp_request_starts_with_the_frame_type_and_address() {
+        let request = tcp_request("example.com:443");
+        assert_eq!(&request[..2], &[0x44, 0x01]);
+        assert_eq!(request[2], 15);
+        assert_eq!(&request[3..18], b"example.com:443");
+        let (pad, used) = get_varint(&request[18..]).unwrap();
+        assert_eq!(request.len(), 18 + used + pad as usize);
+        assert!((64..512).contains(&(pad as usize)));
+    }
+
+    #[test]
+    fn a_tcp_response_waits_for_its_padding() {
+        let mut wire = vec![0u8, 0, 5];
+        assert!(parse_tcp_response(&wire).unwrap().is_none());
+        wire.extend_from_slice(b"12345");
+        let Some((Response::Ok, used)) = parse_tcp_response(&wire).unwrap() else {
+            panic!("expected a complete response");
+        };
+        assert_eq!(used, wire.len());
+    }
+
+    #[test]
+    fn a_refusal_carries_the_server_message() {
+        let mut wire = vec![1u8, 4];
+        wire.extend_from_slice(b"nope");
+        wire.push(0);
+        let Some((Response::Refused(message), _)) = parse_tcp_response(&wire).unwrap() else {
+            panic!("expected a refusal");
+        };
+        assert_eq!(message, "nope");
+    }
+
+    #[test]
+    fn an_oversized_message_is_rejected() {
+        let mut wire = vec![0u8];
+        put_varint(&mut wire, MAX_MESSAGE + 1);
+        assert!(parse_tcp_response(&wire).is_err());
+    }
+
+    #[test]
+    fn udp_messages_round_trip() {
+        let mut wire = Vec::new();
+        put_udp_header(
+            &mut wire,
+            &UdpHeader {
+                session: 7,
+                packet: 9,
+                fragment: 1,
+                fragments: 3,
+                addr: "1.1.1.1:53",
+            },
+        );
+        assert_eq!(wire.len(), udp_header_len("1.1.1.1:53"));
+        wire.extend_from_slice(b"data");
+        let parsed = parse_udp(&Bytes::from(wire)).unwrap();
+        assert_eq!(
+            (
+                parsed.session,
+                parsed.packet,
+                parsed.fragment,
+                parsed.fragments
+            ),
+            (7, 9, 1, 3)
+        );
+        assert_eq!(parsed.addr, "1.1.1.1:53");
+        assert_eq!(&parsed.data[..], b"data");
+    }
+
+    #[test]
+    fn a_truncated_udp_message_is_an_error() {
+        assert!(parse_udp(&Bytes::from_static(&[0, 0, 0, 1, 0, 2, 0])).is_err());
+        assert!(parse_udp(&Bytes::from_static(&[0, 0, 0, 1, 0, 2, 0, 1, 0])).is_err());
+    }
+
+    fn piece(packet: u16, fragment: u8, fragments: u8, data: &'static [u8]) -> UdpMessage {
+        UdpMessage {
+            session: 1,
+            packet,
+            fragment,
+            fragments,
+            addr: "a:1".into(),
+            data: Bytes::from_static(data),
+        }
+    }
+
+    #[test]
+    fn fragments_arrive_in_any_order() {
+        let mut defrag = Defrag::default();
+        assert!(defrag.feed(piece(5, 2, 3, b"cc")).is_none());
+        assert!(defrag.feed(piece(5, 0, 3, b"aa")).is_none());
+        assert!(defrag.feed(piece(5, 0, 3, b"zz")).is_none());
+        let (addr, whole) = defrag.feed(piece(5, 1, 3, b"bb")).unwrap();
+        assert_eq!(addr, "a:1");
+        assert_eq!(&whole[..], b"aabbcc");
+    }
+
+    #[test]
+    fn an_unfragmented_message_passes_through() {
+        let mut defrag = Defrag::default();
+        let (_, data) = defrag.feed(piece(1, 0, 1, b"x")).unwrap();
+        assert_eq!(&data[..], b"x");
+        assert!(defrag.feed(piece(1, 5, 2, b"x")).is_none());
+    }
+}

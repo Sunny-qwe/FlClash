@@ -1,0 +1,63 @@
+[package]
+name = "concord-mitm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "HTTPS interception, scripts and capture for Concord"
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[features]
+default = ["script"]
+script = ["dep:rquickjs"]
+
+[dependencies]
+concord-common = { workspace = true, features = ["io"] }
+concord-platform = { workspace = true }
+concord-tls = { workspace = true }
+tokio = { workspace = true, features = ["net", "time", "io-util", "macros", "rt", "sync"] }
+tokio-util = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+async-trait = { workspace = true }
+arc-swap = { workspace = true }
+bytes = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
+futures-util = { workspace = true }
+fancy-regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rcgen = { workspace = true, features = ["x509-parser"] }
+x509-parser = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+flate2 = { workspace = true }
+brotli-decompressor = { workspace = true }
+ruzstd = { workspace = true }
+time = { workspace = true, features = ["serde-well-known"] }
+url = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+rquickjs = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+rquickjs = { workspace = true, optional = true, features = ["bindgen"] }
+
+[dev-dependencies]
+concord-test-support = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
+tempfile = { workspace = true }
+rcgen = { workspace = true }
+
+[lints]
+workspace = true

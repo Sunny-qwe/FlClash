@@ -1,0 +1,16 @@
+mixed-port: 7890
+external-controller: 127.0.0.1:9090
+secret: not-a-real-secret
+redir-port: 7892
+tproxy-port: 7893
+listeners:
+  - {name: extra, type: mixed, port: 7894}
+experimental:
+  quic-go-disable-gso: true
+unknown-future-key:
+  nested: [1, 2, 3]
+proxies:
+  - {name: ts, type: tailscale, hostname: example}
+  - {name: plain, type: socks5, server: 192.0.2.1, port: 1080}
+rules:
+  - MATCH,DIRECT

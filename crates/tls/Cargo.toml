@@ -1,0 +1,50 @@
+[package]
+name = "concord-tls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "TLS backends, client fingerprints, REALITY and ECH for Concord"
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[features]
+# The entry points the targets in `fuzz/` drive.
+fuzzing = []
+
+[dependencies]
+concord-common = { workspace = true, features = ["io"] }
+concord-platform = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["net", "time", "io-util", "macros", "rt", "sync"] }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+aws-lc-rs = { workspace = true }
+rustls-pki-types = { workspace = true }
+webpki = { workspace = true }
+boring = { workspace = true }
+tokio-boring = { workspace = true }
+brotli-decompressor = { workspace = true }
+flate2 = { workspace = true }
+h2 = { workspace = true }
+http = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }
+rand = { workspace = true }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+concord-test-support = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+rcgen = { workspace = true }
+tempfile = { workspace = true }
+time = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,7 @@
+proxies:
+  - {name: wg, type: wireguard, server: 192.0.2.20, port: 51820, ip: 10.0.0.2, private-key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=, public-key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=, udp: true}
+  - {name: hy1, type: hysteria, server: 192.0.2.21, port: 443, auth-str: secret, up: 30, down: 100, protocol: udp, sni: example.test}
+  - {name: ssr, type: ssr, server: 192.0.2.22, port: 8388, cipher: aes-256-cfb, password: secret, obfs: tls1.2_ticket_auth, protocol: auth_aes128_md5}
+  - {name: snell, type: snell, server: 192.0.2.23, port: 8388, psk: secret, version: 3}
+  - {name: ssh, type: ssh, server: 192.0.2.24, port: 22, username: u, password: p}
+  - {name: sq, type: shadowquic, server: 192.0.2.25, port: 443, username: u, password: p, sni: example.test}

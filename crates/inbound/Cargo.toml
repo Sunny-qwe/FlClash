@@ -1,0 +1,34 @@
+[package]
+name = "concord-inbound"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "HTTP, SOCKS, mixed and transparent proxy listeners for Concord"
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+concord-common = { workspace = true, features = ["io"] }
+concord-platform = { workspace = true }
+tokio = { workspace = true, features = ["net", "time", "io-util", "macros", "rt", "sync"] }
+tokio-util = { workspace = true }
+bytes = { workspace = true }
+base64 = { workspace = true }
+httparse = { workspace = true }
+socket2 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+concord-test-support = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
+
+[lints]
+workspace = true

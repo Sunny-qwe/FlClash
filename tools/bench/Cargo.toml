@@ -1,0 +1,43 @@
+[package]
+name = "bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Data-path benchmarks of Concord against mihomo and other builds"
+repository.workspace = true
+
+[[bin]]
+name = "concord-bench"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+hex = { workspace = true }
+hmac = { workspace = true }
+libc = { workspace = true }
+rand = { workspace = true }
+rcgen = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+socket2 = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+] }
+
+[dev-dependencies]
+concord-ipc = { workspace = true }
+
+[lints]
+workspace = true

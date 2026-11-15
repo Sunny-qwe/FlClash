@@ -1,0 +1,315 @@
+{
+  "version": 1,
+  "keys": {
+    "t0": [
+      "mixed-port",
+      "port",
+      "socks-port",
+      "allow-lan",
+      "authentication",
+      "skip-auth-prefixes",
+      "mode",
+      "log-level",
+      "ipv6",
+      "unified-delay",
+      "tcp-concurrent",
+      "find-process-mode",
+      "interface-name",
+      "routing-mark",
+      "keep-alive-idle",
+      "keep-alive-interval",
+      "disable-keep-alive",
+      "global-ua",
+      "proxies",
+      "proxy-groups",
+      "proxy-providers",
+      "rule-providers",
+      "rules",
+      "dns",
+      "tun",
+      "sniffer",
+      "hosts",
+      "geox-url",
+      "geo-auto-update",
+      "geo-update-interval",
+      "geodata-loader",
+      "profile",
+      "mitm"
+    ],
+    "t1": [
+      "redir-port",
+      "tproxy-port",
+      "sub-rules",
+      "ntp",
+      "tls",
+      "experimental",
+      "external-controller",
+      "secret"
+    ],
+    "t2": [
+      "geodata-mode",
+      "listeners",
+      "tunnels",
+      "ss-config",
+      "vmess-config",
+      "tuic-server",
+      "iptables",
+      "clash-for-android",
+      "inbound-tfo",
+      "inbound-mptcp",
+      "bind-address",
+      "lan-allowed-ips",
+      "lan-disallowed-ips",
+      "external-controller-pipe",
+      "external-controller-unix",
+      "external-controller-tls",
+      "external-controller-cors",
+      "external-controller-routing-mark",
+      "external-ui",
+      "external-ui-url",
+      "external-ui-name",
+      "external-doh-server",
+      "geosite-matcher",
+      "etag-support",
+      "global-client-fingerprint"
+    ]
+  },
+  "dns": {
+    "t0": [
+      "enable",
+      "enhanced-mode",
+      "nameserver",
+      "default-nameserver",
+      "nameserver-policy",
+      "proxy-server-nameserver",
+      "direct-nameserver",
+      "direct-nameserver-follow-policy",
+      "use-hosts",
+      "use-system-hosts",
+      "respect-rules",
+      "fake-ip-range",
+      "fake-ip-filter",
+      "fake-ip-filter-mode",
+      "fake-ip-ttl",
+      "ipv6"
+    ],
+    "t1": [
+      "fallback",
+      "fallback-lazy-query",
+      "fallback-filter",
+      "ipv6-timeout",
+      "prefer-h3",
+      "cache-algorithm",
+      "cache-max-size",
+      "fake-ip-range6",
+      "proxy-server-nameserver-policy",
+      "listen",
+      "listen-routing-mark"
+    ],
+    "t2": []
+  },
+  "dns.fallback-filter": {
+    "t0": [
+      "geoip",
+      "geoip-code",
+      "geosite",
+      "ipcidr",
+      "domain"
+    ],
+    "t1": [],
+    "t2": []
+  },
+  "tun": {
+    "t0": [
+      "enable",
+      "device",
+      "stack",
+      "auto-route",
+      "auto-detect-interface",
+      "dns-hijack",
+      "route-address",
+      "route-exclude-address",
+      "strict-route",
+      "mtu"
+    ],
+    "t1": [
+      "congestion-controller",
+      "udp-timeout",
+      "disable-icmp-forwarding",
+      "gso",
+      "include-interface",
+      "exclude-interface",
+      "include-uid",
+      "exclude-uid",
+      "exclude-src-port",
+      "exclude-dst-port"
+    ],
+    "t2": [
+      "dns-mode",
+      "gso-max-size",
+      "inet6-address",
+      "iproute2-table-index",
+      "iproute2-rule-index",
+      "auto-redirect",
+      "auto-redirect-input-mark",
+      "auto-redirect-output-mark",
+      "auto-redirect-iproute2-fallback-rule-index",
+      "loopback-address",
+      "route-address-set",
+      "route-exclude-address-set",
+      "include-uid-range",
+      "exclude-uid-range",
+      "exclude-src-port-range",
+      "exclude-dst-port-range",
+      "include-android-user",
+      "include-package",
+      "exclude-package",
+      "include-mac-address",
+      "exclude-mac-address",
+      "endpoint-independent-nat",
+      "icmp-timeout",
+      "file-descriptor",
+      "inet4-route-address",
+      "inet6-route-address",
+      "inet4-route-exclude-address",
+      "inet6-route-exclude-address",
+      "recvmsgx",
+      "sendmsgx",
+      "processors-per-channel"
+    ]
+  },
+  "sniffer": {
+    "t0": [
+      "enable",
+      "sniff",
+      "override-destination",
+      "force-domain",
+      "skip-domain",
+      "sniffing",
+      "port-whitelist"
+    ],
+    "t1": [
+      "force-dns-mapping",
+      "parse-pure-ip",
+      "skip-src-address",
+      "skip-dst-address"
+    ],
+    "t2": []
+  },
+  "ntp": {
+    "t0": [
+      "enable",
+      "server",
+      "port",
+      "interval",
+      "dialer-proxy",
+      "write-to-system"
+    ],
+    "t1": [],
+    "t2": []
+  },
+  "geox-url": {
+    "t0": [
+      "mmdb",
+      "asn",
+      "geosite"
+    ],
+    "t1": [],
+    "t2": [
+      "geoip"
+    ]
+  },
+  "profile": {
+    "t0": [
+      "store-selected",
+      "store-fake-ip"
+    ],
+    "t1": [],
+    "t2": []
+  },
+  "rule-types": {
+    "t0": [
+      "DOMAIN",
+      "DOMAIN-SUFFIX",
+      "DOMAIN-KEYWORD",
+      "DOMAIN-REGEX",
+      "GEOSITE",
+      "GEOIP",
+      "SRC-GEOIP",
+      "IP-CIDR",
+      "IP-CIDR6",
+      "SRC-IP-CIDR",
+      "IP-SUFFIX",
+      "SRC-IP-SUFFIX",
+      "SRC-PORT",
+      "DST-PORT",
+      "IN-PORT",
+      "PROCESS-NAME",
+      "PROCESS-PATH",
+      "PROCESS-NAME-REGEX",
+      "PROCESS-PATH-REGEX",
+      "PROCESS-NAME-WILDCARD",
+      "PROCESS-PATH-WILDCARD",
+      "NETWORK",
+      "UID",
+      "IN-TYPE",
+      "IN-USER",
+      "AND",
+      "OR",
+      "NOT",
+      "RULE-SET",
+      "MATCH"
+    ],
+    "t1": [
+      "SUB-RULE",
+      "IP-ASN",
+      "SRC-IP-ASN",
+      "DOMAIN-WILDCARD",
+      "DSCP",
+      "IN-NAME"
+    ],
+    "t2": []
+  },
+  "proxy-types": {
+    "t0": [
+      "direct",
+      "reject",
+      "ss",
+      "vmess",
+      "vless",
+      "trojan",
+      "hysteria2",
+      "tuic",
+      "anytls",
+      "socks5",
+      "http"
+    ],
+    "t1": [
+      "wireguard",
+      "hysteria",
+      "ssr",
+      "snell",
+      "mieru",
+      "ssh",
+      "shadowquic"
+    ],
+    "t2": [
+      "tailscale",
+      "easytier",
+      "zerotier",
+      "openvpn",
+      "masque",
+      "sudoku",
+      "trusttunnel",
+      "gost-relay",
+      "rematch",
+      "dns"
+    ]
+  },
+  "group-types": [
+    "select",
+    "url-test",
+    "fallback",
+    "load-balance"
+  ]
+}

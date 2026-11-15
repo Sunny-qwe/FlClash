@@ -1,0 +1,26 @@
+[package]
+name = "concord-netstack"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "User-space TCP/IP stack behind Concord's TUN and WireGuard"
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+concord-common = { workspace = true, features = ["io"] }
+concord-platform = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "net", "time", "rt"] }
+futures-util = { workspace = true }
+socket2 = { workspace = true }
+
+[dev-dependencies]
+concord-test-support = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
+
+[lints]
+workspace = true

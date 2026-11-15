@@ -1,0 +1,62 @@
+[package]
+name = "concord-fuzz"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "GPL-3.0-or-later"
+publish = false
+repository = "https://github.com/chen08209/concord"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+concord-config = { path = "../crates/config" }
+concord-rules = { path = "../crates/rules" }
+concord-tls = { path = "../crates/tls", features = ["fuzzing"] }
+
+[workspace]
+
+# The workspace's own patches for what the targets link, so they run the code the core ships.
+[patch.crates-io]
+boring = { path = "../vendor/boring" }
+h2 = { path = "../vendor/h2" }
+mio = { path = "../vendor/mio" }
+rustls = { path = "../vendor/rustls" }
+
+[[bin]]
+name = "config_raw"
+path = "fuzz_targets/config_raw.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "profile_load"
+path = "fuzz_targets/profile_load.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "share_link"
+path = "fuzz_targets/share_link.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "rule_line"
+path = "fuzz_targets/rule_line.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "rule_binary"
+path = "fuzz_targets/rule_binary.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "tls_record_read"
+path = "fuzz_targets/tls_record_read.rs"
+test = false
+doc = false

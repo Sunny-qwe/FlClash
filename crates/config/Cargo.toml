@@ -1,0 +1,30 @@
+[package]
+name = "concord-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Clash and mihomo profile parsing and validation for Concord"
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+concord-common = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+granit-parser = { workspace = true }
+indexmap = { workspace = true }
+regex = { workspace = true }
+fancy-regex = { workspace = true }
+age = { workspace = true }
+base64 = { workspace = true }
+percent-encoding = { workspace = true }
+url = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+[lints]
+workspace = true

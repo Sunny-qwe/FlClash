@@ -1,0 +1,37 @@
+[package]
+name = "concord-tunnel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Concord's data path from an inbound flow to its outbound"
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+concord-common = { workspace = true, features = ["io"] }
+concord-dns = { workspace = true }
+concord-group = { workspace = true }
+concord-net = { workspace = true }
+concord-platform = { workspace = true }
+concord-rules = { workspace = true }
+tokio = { workspace = true, features = ["net", "time", "io-util", "macros", "rt", "sync"] }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+arc-swap = { workspace = true }
+dashmap = { workspace = true }
+aws-lc-rs = { workspace = true }
+thiserror = { workspace = true }
+rand = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+concord-test-support = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
+hex = { workspace = true }
+
+[lints]
+workspace = true

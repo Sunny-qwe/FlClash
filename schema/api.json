@@ -1,0 +1,4727 @@
+{
+  "version": 1,
+  "limits": {
+    "maxMessage": 67108864,
+    "maxBatchBytes": 51200,
+    "defaultCredit": 4,
+    "defaultBatchMs": 16
+  },
+  "methods": [
+    {
+      "name": "core.hello",
+      "kind": "rpc",
+      "exec": "inline",
+      "params": {
+        "$ref": "#/$defs/HelloParams"
+      },
+      "result": {
+        "$ref": "#/$defs/HelloResult"
+      }
+    },
+    {
+      "name": "core.init",
+      "kind": "unary",
+      "exec": "serial",
+      "params": {
+        "$ref": "#/$defs/CoreInitParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "core.releaseMemory",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "core.stats",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/CoreStats"
+      }
+    },
+    {
+      "name": "core.capabilities",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/Capabilities"
+      }
+    },
+    {
+      "name": "core.setPressure",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/SetPressureParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "core.lastWarnings",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/WarningList"
+      }
+    },
+    {
+      "name": "debug.crash",
+      "kind": "unary",
+      "exec": "concurrent",
+      "capability": "debug",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "config.apply",
+      "kind": "unary",
+      "exec": "serial",
+      "params": {
+        "$ref": "#/$defs/ConfigApplyParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ConfigApplyResult"
+      }
+    },
+    {
+      "name": "config.patch",
+      "kind": "unary",
+      "exec": "serial",
+      "params": {
+        "$ref": "#/$defs/ConfigPatchParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ChangeSeq"
+      }
+    },
+    {
+      "name": "config.general",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/GeneralState"
+      }
+    },
+    {
+      "name": "config.validate",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ConfigValidateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ConfigValidateResult"
+      }
+    },
+    {
+      "name": "config.decrypt",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ConfigDecryptParams"
+      },
+      "result": {
+        "$ref": "#/$defs/TextResult"
+      }
+    },
+    {
+      "name": "config.read",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ConfigReadParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ConfigReadResult"
+      }
+    },
+    {
+      "name": "profile.inspect",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ProfileParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ProfileInspect"
+      }
+    },
+    {
+      "name": "profile.outbounds",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ProfileParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ProfileOutbounds"
+      }
+    },
+    {
+      "name": "profile.build",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ProfileBuildParams"
+      },
+      "result": {
+        "$ref": "#/$defs/TextResult"
+      }
+    },
+    {
+      "name": "profile.clearEffect",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ClearEffectParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "proxy.groups",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/ProxyGroups"
+      }
+    },
+    {
+      "name": "proxy.watch",
+      "kind": "stream",
+      "exec": "inline",
+      "params": {
+        "$ref": "#/$defs/ProxyWatchParams"
+      },
+      "snapshot": {
+        "$ref": "#/$defs/ProxyGroups"
+      },
+      "stream": {
+        "policy": "latest",
+        "event": {
+          "$ref": "#/$defs/ProxyDelta"
+        }
+      }
+    },
+    {
+      "name": "proxy.select",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ProxySelectParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ProxySelectResult"
+      }
+    },
+    {
+      "name": "proxy.definition",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ProxyDefinitionParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ProxyDefinition"
+      }
+    },
+    {
+      "name": "proxy.states",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ProxyStatesParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ProxyStates"
+      }
+    },
+    {
+      "name": "delay.test",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/DelayTestParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DelayResult"
+      }
+    },
+    {
+      "name": "delay.run",
+      "kind": "stream",
+      "exec": "inline",
+      "params": {
+        "$ref": "#/$defs/DelayRunParams"
+      },
+      "snapshot": {
+        "$ref": "#/$defs/Empty"
+      },
+      "stream": {
+        "policy": "resync",
+        "event": {
+          "$ref": "#/$defs/DelayRunEvent"
+        }
+      }
+    },
+    {
+      "name": "validate.proxies",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ValidateProxiesParams"
+      },
+      "result": {
+        "$ref": "#/$defs/IssueList"
+      }
+    },
+    {
+      "name": "validate.filters",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ValidateFiltersParams"
+      },
+      "result": {
+        "$ref": "#/$defs/IssueList"
+      }
+    },
+    {
+      "name": "convert.subscription",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ConvertSubscriptionParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ProxyList"
+      }
+    },
+    {
+      "name": "convert.encodeLinks",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/EncodeLinksParams"
+      },
+      "result": {
+        "$ref": "#/$defs/LinkList"
+      }
+    },
+    {
+      "name": "convert.decodeLinks",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/DecodeLinksParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DecodedLinks"
+      }
+    },
+    {
+      "name": "provider.list",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/ProviderList"
+      }
+    },
+    {
+      "name": "provider.get",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ProviderNameParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ProviderInfo"
+      }
+    },
+    {
+      "name": "provider.update",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ProviderNameParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "provider.sideLoad",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ProviderSideLoadParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "provider.healthCheck",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ProviderNameParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "rule.list",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/RuleList"
+      }
+    },
+    {
+      "name": "ruleSet.dump",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/RuleSetDumpParams"
+      },
+      "result": {
+        "$ref": "#/$defs/TextResult"
+      }
+    },
+    {
+      "name": "ruleSet.compile",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/RuleSetCompileParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RuleSetInfo"
+      }
+    },
+    {
+      "name": "geo.update",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/GeoUpdateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "traffic.watch",
+      "kind": "stream",
+      "exec": "inline",
+      "params": {
+        "$ref": "#/$defs/TrafficWatchParams"
+      },
+      "snapshot": {
+        "$ref": "#/$defs/Traffic"
+      },
+      "stream": {
+        "policy": "latest",
+        "event": {
+          "$ref": "#/$defs/Traffic"
+        }
+      }
+    },
+    {
+      "name": "traffic.reset",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "connection.watch",
+      "kind": "stream",
+      "exec": "inline",
+      "params": {
+        "$ref": "#/$defs/ConnectionWatchParams"
+      },
+      "snapshot": {
+        "$ref": "#/$defs/ConnectionSnapshot"
+      },
+      "stream": {
+        "policy": "resync",
+        "event": {
+          "$ref": "#/$defs/ConnectionDelta"
+        }
+      }
+    },
+    {
+      "name": "connection.close",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ConnectionCloseParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "network.reset",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "network.update",
+      "kind": "unary",
+      "exec": "serial",
+      "params": {
+        "$ref": "#/$defs/NetworkUpdateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "dns.clearCache",
+      "kind": "unary",
+      "exec": "serial",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "dns.flushFakeIp",
+      "kind": "unary",
+      "exec": "serial",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "dns.query",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/DnsQueryParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DnsQueryResult"
+      }
+    },
+    {
+      "name": "log.watch",
+      "kind": "stream",
+      "exec": "inline",
+      "params": {
+        "$ref": "#/$defs/LogWatchParams"
+      },
+      "snapshot": {
+        "$ref": "#/$defs/Empty"
+      },
+      "stream": {
+        "policy": "drop_oldest",
+        "event": {
+          "$ref": "#/$defs/LogEntry"
+        }
+      }
+    },
+    {
+      "name": "dns.watch",
+      "kind": "stream",
+      "exec": "inline",
+      "params": {
+        "$ref": "#/$defs/DnsWatchParams"
+      },
+      "snapshot": {
+        "$ref": "#/$defs/Empty"
+      },
+      "stream": {
+        "policy": "drop_oldest",
+        "event": {
+          "$ref": "#/$defs/DnsEntry"
+        }
+      }
+    },
+    {
+      "name": "route.watch",
+      "kind": "stream",
+      "exec": "inline",
+      "params": {
+        "$ref": "#/$defs/RouteWatchParams"
+      },
+      "snapshot": {
+        "$ref": "#/$defs/RouteStamp"
+      },
+      "stream": {
+        "policy": "latest",
+        "event": {
+          "$ref": "#/$defs/RouteStamp"
+        }
+      }
+    },
+    {
+      "name": "events.watch",
+      "kind": "stream",
+      "exec": "inline",
+      "params": {
+        "$ref": "#/$defs/EventsWatchParams"
+      },
+      "snapshot": {
+        "$ref": "#/$defs/Empty"
+      },
+      "stream": {
+        "policy": "resync",
+        "event": {
+          "$ref": "#/$defs/CoreEvent"
+        }
+      }
+    },
+    {
+      "name": "engine.state",
+      "kind": "stream",
+      "exec": "inline",
+      "params": {
+        "$ref": "#/$defs/EngineStateParams"
+      },
+      "snapshot": {
+        "$ref": "#/$defs/EngineStatus"
+      },
+      "stream": {
+        "policy": "latest",
+        "event": {
+          "$ref": "#/$defs/EngineStatus"
+        }
+      }
+    },
+    {
+      "name": "engine.start",
+      "kind": "unary",
+      "exec": "serial",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "engine.stop",
+      "kind": "unary",
+      "exec": "serial",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "tun.start",
+      "kind": "unary",
+      "exec": "serial",
+      "params": {
+        "$ref": "#/$defs/TunStartParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "tun.stop",
+      "kind": "unary",
+      "exec": "serial",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "name": "route.check",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/RouteCheckParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RouteCheckResult"
+      }
+    },
+    {
+      "name": "probe.outboundIp",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/OutboundIpParams"
+      },
+      "result": {
+        "$ref": "#/$defs/OutboundIp"
+      }
+    },
+    {
+      "name": "probe.services",
+      "kind": "unary",
+      "exec": "concurrent",
+      "params": {
+        "$ref": "#/$defs/ServicesParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ServiceList"
+      }
+    },
+    {
+      "name": "mitm.certificate",
+      "kind": "unary",
+      "exec": "concurrent",
+      "capability": "mitm",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/MitmCertificate"
+      }
+    },
+    {
+      "name": "mitm.generateCertificate",
+      "kind": "unary",
+      "exec": "concurrent",
+      "capability": "mitm",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/MitmCertificate"
+      }
+    },
+    {
+      "name": "mitm.validate",
+      "kind": "unary",
+      "exec": "concurrent",
+      "capability": "mitm",
+      "params": {
+        "$ref": "#/$defs/MitmValidateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/MitmValidateResult"
+      }
+    },
+    {
+      "name": "mitm.issueCertificate",
+      "kind": "unary",
+      "exec": "concurrent",
+      "capability": "mitm",
+      "params": {
+        "$ref": "#/$defs/MitmIssueParams"
+      },
+      "result": {
+        "$ref": "#/$defs/MitmPem"
+      }
+    },
+    {
+      "name": "mitm.runScript",
+      "kind": "unary",
+      "exec": "concurrent",
+      "capability": "mitm",
+      "params": {
+        "$ref": "#/$defs/MitmScriptParams"
+      },
+      "result": {
+        "$ref": "#/$defs/MitmResult"
+      }
+    },
+    {
+      "name": "mitm.exchanges",
+      "kind": "unary",
+      "exec": "concurrent",
+      "capability": "mitm",
+      "params": {
+        "$ref": "#/$defs/MitmExchangesParams"
+      },
+      "result": {
+        "$ref": "#/$defs/MitmResult"
+      }
+    },
+    {
+      "name": "mitm.exchange",
+      "kind": "unary",
+      "exec": "concurrent",
+      "capability": "mitm",
+      "params": {
+        "$ref": "#/$defs/MitmExchangeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/MitmResult"
+      }
+    },
+    {
+      "name": "mitm.body",
+      "kind": "unary",
+      "exec": "concurrent",
+      "capability": "mitm",
+      "params": {
+        "$ref": "#/$defs/MitmBodyParams"
+      },
+      "result": {
+        "$ref": "#/$defs/MitmResult"
+      }
+    }
+  ],
+  "error": {
+    "$ref": "#/$defs/ErrorObject"
+  },
+  "errors": [
+    {
+      "kind": "invalid_params",
+      "code": -32602,
+      "fields": "path"
+    },
+    {
+      "kind": "unsupported",
+      "code": -32601,
+      "fields": "method | capability"
+    },
+    {
+      "kind": "not_found",
+      "code": -32010,
+      "fields": "entity, name"
+    },
+    {
+      "kind": "rejected",
+      "code": -32011,
+      "fields": "issues, fellBack, reason"
+    },
+    {
+      "kind": "conflict",
+      "code": -32012,
+      "fields": "state"
+    },
+    {
+      "kind": "cancelled",
+      "code": -32014,
+      "fields": ""
+    },
+    {
+      "kind": "timeout",
+      "code": -32015,
+      "fields": "after"
+    },
+    {
+      "kind": "unavailable",
+      "code": -32016,
+      "fields": "target"
+    },
+    {
+      "kind": "payload_too_large",
+      "code": -32017,
+      "fields": "limit"
+    },
+    {
+      "kind": "internal",
+      "code": -32603,
+      "fields": ""
+    }
+  ],
+  "$defs": {
+    "HelloParams": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "$ref": "#/$defs/ProtocolRange"
+        },
+        "client": {
+          "$ref": "#/$defs/ClientInfo"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "`debug` unlocks the debug methods on a build that has them.",
+          "default": []
+        }
+      },
+      "required": [
+        "protocol",
+        "client"
+      ]
+    },
+    "ProtocolRange": {
+      "type": "object",
+      "properties": {
+        "min": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "max": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ]
+    },
+    "ClientInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "HelloResult": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "server": {
+          "$ref": "#/$defs/ServerInfo"
+        },
+        "platform": {
+          "$ref": "#/$defs/PlatformInfo"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "features": {
+          "$ref": "#/$defs/Features"
+        },
+        "engine": {
+          "$ref": "#/$defs/EngineStatus"
+        }
+      },
+      "required": [
+        "protocol",
+        "server",
+        "platform",
+        "limits",
+        "methods",
+        "features",
+        "engine"
+      ]
+    },
+    "ServerInfo": {
+      "type": "object",
+      "properties": {
+        "implementation": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "build": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "implementation",
+        "version",
+        "build"
+      ]
+    },
+    "PlatformInfo": {
+      "type": "object",
+      "properties": {
+        "os": {
+          "type": "string"
+        },
+        "privileged": {
+          "type": "boolean"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What the host lets the core do, such as `tun.inherited`. Clients test\nthese, never the operating system name."
+        }
+      },
+      "required": [
+        "os",
+        "privileged",
+        "capabilities"
+      ]
+    },
+    "Limits": {
+      "type": "object",
+      "properties": {
+        "maxMessage": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "maxBatchBytes": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "maxMessage",
+        "maxBatchBytes"
+      ]
+    },
+    "Features": {
+      "type": "object",
+      "properties": {
+        "mitm": {
+          "type": "boolean"
+        },
+        "ech": {
+          "type": "boolean"
+        },
+        "systemStack": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mitm",
+        "ech",
+        "systemStack"
+      ]
+    },
+    "EngineStatus": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/EngineState"
+        },
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why the engine is `failed`."
+        },
+        "faults": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ServiceFault"
+          },
+          "description": "Requested services that did not start, as of the last apply, patch, start or stop."
+        }
+      },
+      "required": [
+        "state"
+      ]
+    },
+    "EngineState": {
+      "type": "string",
+      "enum": [
+        "created",
+        "initialized",
+        "configured",
+        "running",
+        "failed"
+      ]
+    },
+    "ServiceFault": {
+      "type": "object",
+      "properties": {
+        "service": {
+          "$ref": "#/$defs/FaultService"
+        },
+        "address": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/FaultReason"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "service",
+        "reason",
+        "message"
+      ]
+    },
+    "FaultService": {
+      "type": "string",
+      "enum": [
+        "mixed",
+        "http",
+        "socks",
+        "redir",
+        "tproxy",
+        "tun",
+        "dns"
+      ]
+    },
+    "FaultReason": {
+      "type": "string",
+      "enum": [
+        "address_in_use",
+        "address_not_available",
+        "permission_denied",
+        "other"
+      ]
+    },
+    "CoreInitParams": {
+      "type": "object",
+      "properties": {
+        "home": {
+          "type": "string"
+        },
+        "sdkInt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        }
+      },
+      "required": [
+        "home"
+      ]
+    },
+    "Empty": {
+      "type": "object",
+      "description": "The result of a method that has nothing to report."
+    },
+    "CoreStats": {
+      "type": "object",
+      "properties": {
+        "rss": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "rss"
+      ]
+    },
+    "Capabilities": {
+      "type": "object",
+      "properties": {
+        "implementation": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "proxyTypes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "transports": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ruleTypes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ssPlugins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "congestionControllers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "features": {
+          "$ref": "#/$defs/Features"
+        }
+      },
+      "required": [
+        "implementation",
+        "version",
+        "proxyTypes",
+        "transports",
+        "ruleTypes",
+        "ssPlugins",
+        "congestionControllers",
+        "features"
+      ]
+    },
+    "SetPressureParams": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "required": [
+        "level"
+      ]
+    },
+    "WarningList": {
+      "type": "object",
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        }
+      },
+      "required": [
+        "warnings"
+      ]
+    },
+    "Warning": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string"
+        },
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A stable identifier, such as `unknown_key`, for clients that word the warning themselves."
+        },
+        "path": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "level",
+        "path",
+        "message"
+      ]
+    },
+    "ConfigApplyParams": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProfileRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent applies the `config.yaml` already in the home directory."
+        },
+        "overlay": {
+          "description": "The profile gives only `proxies`, `proxy-groups`, `sub-rules` and `rules`; every other\nkey, the listeners included, comes from here. Rules listed here go before the profile's."
+        },
+        "selection": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "options": {
+          "$ref": "#/$defs/Options",
+          "default": {
+            "testUrl": "",
+            "skipCertVerify": false,
+            "delayTestTimeout": 0,
+            "mitmCapture": false
+          }
+        }
+      }
+    },
+    "ProfileRef": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "description": "A file inside the core's home directory."
+    },
+    "Options": {
+      "type": "object",
+      "properties": {
+        "testUrl": {
+          "type": "string",
+          "description": "An empty value keeps the URL in force.",
+          "default": ""
+        },
+        "skipCertVerify": {
+          "type": "boolean",
+          "default": false
+        },
+        "delayTestTimeout": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Milliseconds; zero keeps the timeout in force.",
+          "default": 0
+        },
+        "mitmCapture": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "ConfigApplyResult": {
+      "type": "object",
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        }
+      },
+      "required": [
+        "warnings"
+      ]
+    },
+    "ConfigPatchParams": {
+      "type": "object",
+      "properties": {
+        "tun": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TunPatch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "allowLan": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "mixedPort": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "findProcessMode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "logLevel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ipv6": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "tcpConcurrent": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "externalController": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secret": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unifiedDelay": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "authentication": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "`user:password` lines."
+        },
+        "geoAutoUpdate": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "geoUpdateInterval": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "geoxUrl": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "options": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Options"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "An absent field keeps the value in force."
+    },
+    "TunPatch": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean"
+        },
+        "device": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stack": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "autoRoute": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "enable"
+      ]
+    },
+    "LogLevel": {
+      "type": "string",
+      "enum": [
+        "debug",
+        "info",
+        "warning",
+        "error",
+        "silent"
+      ]
+    },
+    "ChangeSeq": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "seq"
+      ],
+      "description": "The order of a change among all changes of state a host keeps."
+    },
+    "GeneralState": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "port": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "socksPort": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "redirPort": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "tproxyPort": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "mixedPort": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "allowLan": {
+          "type": "boolean"
+        },
+        "authentication": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "User names only."
+        },
+        "skipAuthPrefixes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "type": "string"
+        },
+        "logLevel": {
+          "$ref": "#/$defs/LogLevel"
+        },
+        "ipv6": {
+          "type": "boolean"
+        },
+        "tcpConcurrent": {
+          "type": "boolean"
+        },
+        "unifiedDelay": {
+          "type": "boolean"
+        },
+        "findProcessMode": {
+          "type": "string"
+        },
+        "interfaceName": {
+          "type": "string"
+        },
+        "routingMark": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "sniffing": {
+          "type": "boolean"
+        },
+        "globalUa": {
+          "type": "string"
+        },
+        "keepAliveIdle": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "keepAliveInterval": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "disableKeepAlive": {
+          "type": "boolean"
+        },
+        "geoAutoUpdate": {
+          "type": "boolean"
+        },
+        "geoUpdateInterval": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "geoxUrl": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Keyed `mmdb`, `asn` and `geosite`."
+        },
+        "tun": {
+          "$ref": "#/$defs/TunState"
+        },
+        "selections": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The pick of each group that has one."
+        }
+      },
+      "required": [
+        "seq",
+        "port",
+        "socksPort",
+        "redirPort",
+        "tproxyPort",
+        "mixedPort",
+        "allowLan",
+        "authentication",
+        "skipAuthPrefixes",
+        "mode",
+        "logLevel",
+        "ipv6",
+        "tcpConcurrent",
+        "unifiedDelay",
+        "findProcessMode",
+        "interfaceName",
+        "routingMark",
+        "sniffing",
+        "globalUa",
+        "keepAliveIdle",
+        "keepAliveInterval",
+        "disableKeepAlive",
+        "geoAutoUpdate",
+        "geoUpdateInterval",
+        "geoxUrl",
+        "tun",
+        "selections"
+      ],
+      "description": "The general settings in force. `seq` is the last change reflected here and\nin `selections`, so `events.watch` with `state` continues after it."
+    },
+    "TunState": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean"
+        },
+        "device": {
+          "type": "string"
+        },
+        "stack": {
+          "type": "string"
+        },
+        "autoRoute": {
+          "type": "boolean"
+        },
+        "autoDetectInterface": {
+          "type": "boolean"
+        },
+        "dnsHijack": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mtu": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "enable",
+        "device",
+        "stack",
+        "autoRoute",
+        "autoDetectInterface",
+        "dnsHijack",
+        "mtu"
+      ]
+    },
+    "ConfigValidateParams": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "$ref": "#/$defs/ProfileRef"
+        }
+      },
+      "required": [
+        "profile"
+      ]
+    },
+    "ConfigValidateResult": {
+      "type": "object",
+      "properties": {
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Issue"
+          }
+        }
+      },
+      "required": [
+        "issues"
+      ]
+    },
+    "Issue": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "column": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ]
+    },
+    "ConfigDecryptParams": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "$ref": "#/$defs/ProfileRef"
+        },
+        "key": {
+          "type": "string"
+        },
+        "output": {
+          "$ref": "#/$defs/Output",
+          "default": {
+            "inline": true
+          }
+        }
+      },
+      "required": [
+        "profile",
+        "key"
+      ]
+    },
+    "Output": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "inline": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "inline"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        }
+      ],
+      "description": "Where a large result goes: back in the response, or into a file the caller\nnames inside the home directory."
+    },
+    "TextResult": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Bytes written, for a file output."
+        }
+      }
+    },
+    "ConfigReadParams": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "$ref": "#/$defs/ProfileRef"
+        },
+        "output": {
+          "$ref": "#/$defs/Output",
+          "default": {
+            "inline": true
+          }
+        }
+      },
+      "required": [
+        "profile"
+      ]
+    },
+    "ConfigReadResult": {
+      "type": "object",
+      "properties": {
+        "config": true,
+        "file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Bytes written, for a file output."
+        }
+      }
+    },
+    "ProfileParams": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "$ref": "#/$defs/ProfileRef"
+        }
+      },
+      "required": [
+        "profile"
+      ]
+    },
+    "ProfileInspect": {
+      "type": "object",
+      "properties": {
+        "config": true,
+        "digest": {
+          "type": "string"
+        },
+        "matchRules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "proxies": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "proxyGroups": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "rules": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "config",
+        "digest",
+        "matchRules",
+        "proxies",
+        "proxyGroups",
+        "rules"
+      ]
+    },
+    "ProfileOutbounds": {
+      "type": "object",
+      "properties": {
+        "proxies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OutboundRef"
+          }
+        },
+        "proxyGroups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OutboundRef"
+          }
+        }
+      },
+      "required": [
+        "proxies",
+        "proxyGroups"
+      ]
+    },
+    "OutboundRef": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ]
+    },
+    "ProfileBuildParams": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "$ref": "#/$defs/ProfileRef"
+        },
+        "overlay": true,
+        "output": {
+          "$ref": "#/$defs/Output",
+          "default": {
+            "inline": true
+          }
+        }
+      },
+      "required": [
+        "profile",
+        "overlay"
+      ]
+    },
+    "ClearEffectParams": {
+      "type": "object",
+      "properties": {
+        "profileId": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "profileId"
+      ]
+    },
+    "ProxyGroups": {
+      "type": "object",
+      "properties": {
+        "order": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GroupInfo"
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NodeInfo"
+          }
+        }
+      },
+      "required": [
+        "order",
+        "groups",
+        "nodes"
+      ],
+      "description": "Group names in display order with `GLOBAL` first, the groups, and every\nnode a group can name."
+    },
+    "GroupInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "now": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Absent for load balancing, which has no single current member."
+        },
+        "all": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "testUrl": {
+          "type": "string"
+        },
+        "expectedStatus": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fixed": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hidden": {
+          "type": "boolean"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "emptyFallback": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "testUrl",
+        "hidden",
+        "icon",
+        "emptyFallback"
+      ]
+    },
+    "NodeInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ]
+    },
+    "ProxyWatchParams": {
+      "type": "object",
+      "properties": {
+        "credit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Batches the server may send before the next `$/credit`. Default 4."
+        },
+        "maxBatchMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How long a batch may collect events. Default 16."
+        },
+        "maxBatchBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Size at which a batch is sent at once. Default 51200."
+        }
+      },
+      "description": "Options every stream method accepts beside its own parameters."
+    },
+    "ProxyDelta": {
+      "type": "object",
+      "properties": {
+        "order": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GroupInfo"
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NodeInfo"
+          }
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "What changed since the last batch of this subscription. A group or node is\nsent whole; `removed` names those that are gone."
+    },
+    "ProxySelectParams": {
+      "type": "object",
+      "properties": {
+        "group": {
+          "type": "string"
+        },
+        "proxy": {
+          "type": "string",
+          "description": "An empty name clears the pick."
+        }
+      },
+      "required": [
+        "group",
+        "proxy"
+      ]
+    },
+    "ProxySelectResult": {
+      "type": "object",
+      "properties": {
+        "changed": {
+          "type": "boolean"
+        },
+        "seq": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The change this select made, or the last change when it made none.",
+          "default": 0
+        }
+      },
+      "required": [
+        "changed"
+      ]
+    },
+    "ProxyDefinitionParams": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "ProxyDefinition": {
+      "type": "object",
+      "properties": {
+        "proxy": true
+      },
+      "required": [
+        "proxy"
+      ]
+    },
+    "ProxyStatesParams": {
+      "type": "object",
+      "properties": {
+        "names": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Absent lists every name `proxy.groups` lists; unknown names are left out."
+        }
+      }
+    },
+    "ProxyStates": {
+      "type": "object",
+      "properties": {
+        "proxies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProxyState"
+          }
+        }
+      },
+      "required": [
+        "proxies"
+      ]
+    },
+    "ProxyState": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "udp": {
+          "type": "boolean"
+        },
+        "alive": {
+          "type": "boolean"
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DelayRecord"
+          }
+        },
+        "extra": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UrlHealth"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "udp",
+        "alive",
+        "history",
+        "extra"
+      ],
+      "description": "The last ten results, overall and for each URL a node was tested at."
+    },
+    "DelayRecord": {
+      "type": "object",
+      "properties": {
+        "time": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "delay": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "required": [
+        "time",
+        "delay"
+      ],
+      "description": "`time` is Unix milliseconds; `delay` 0 is a failed test."
+    },
+    "UrlHealth": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "alive": {
+          "type": "boolean"
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DelayRecord"
+          }
+        }
+      },
+      "required": [
+        "url",
+        "alive",
+        "history"
+      ]
+    },
+    "DelayTestParams": {
+      "type": "object",
+      "properties": {
+        "proxy": {
+          "type": "string"
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Milliseconds."
+        },
+        "expected": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Status ranges such as `200/204/300-399` that count as a success. Default any."
+        }
+      },
+      "required": [
+        "proxy"
+      ]
+    },
+    "DelayResult": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "value": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "required": [
+        "name",
+        "url",
+        "value"
+      ],
+      "description": "`value` is milliseconds when positive, -1 for a timeout and -2 for a failure."
+    },
+    "DelayRunParams": {
+      "type": "object",
+      "properties": {
+        "proxies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "concurrency": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Tests running at once. Default: every proxy at once, as mihomo tests a group."
+        },
+        "expected": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "As in `delay.test`."
+        },
+        "credit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Batches the server may send before the next `$/credit`. Default 4."
+        },
+        "maxBatchMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How long a batch may collect events. Default 16."
+        },
+        "maxBatchBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Size at which a batch is sent at once. Default 51200."
+        }
+      },
+      "required": [
+        "proxies"
+      ],
+      "description": "Options every stream method accepts beside its own parameters."
+    },
+    "DelayRunEvent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "result"
+            },
+            "name": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "value": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "url",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "done"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      ],
+      "description": "One entry of `delay.run`: a result for each proxy, then `done`."
+    },
+    "ValidateProxiesParams": {
+      "type": "object",
+      "properties": {
+        "proxies": {
+          "type": "array",
+          "items": true
+        }
+      },
+      "required": [
+        "proxies"
+      ]
+    },
+    "IssueList": {
+      "type": "object",
+      "properties": {
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/IndexedIssue"
+          }
+        }
+      },
+      "required": [
+        "issues"
+      ]
+    },
+    "IndexedIssue": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "index",
+        "message"
+      ]
+    },
+    "ValidateFiltersParams": {
+      "type": "object",
+      "properties": {
+        "filters": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "filters"
+      ]
+    },
+    "ConvertSubscriptionParams": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "$ref": "#/$defs/ProfileRef"
+        }
+      },
+      "required": [
+        "profile"
+      ]
+    },
+    "ProxyList": {
+      "type": "object",
+      "properties": {
+        "proxies": {
+          "type": "array",
+          "items": true
+        }
+      },
+      "required": [
+        "proxies"
+      ]
+    },
+    "EncodeLinksParams": {
+      "type": "object",
+      "properties": {
+        "proxies": {
+          "type": "array",
+          "items": true
+        }
+      },
+      "required": [
+        "proxies"
+      ]
+    },
+    "LinkList": {
+      "type": "object",
+      "properties": {
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "links"
+      ]
+    },
+    "DecodeLinksParams": {
+      "type": "object",
+      "properties": {
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "lines"
+      ]
+    },
+    "DecodedLinks": {
+      "type": "object",
+      "properties": {
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": true
+          },
+          "description": "One entry per input line, empty when the line is not a link."
+        }
+      },
+      "required": [
+        "results"
+      ]
+    },
+    "ProviderList": {
+      "type": "object",
+      "properties": {
+        "providers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderInfo"
+          }
+        }
+      },
+      "required": [
+        "providers"
+      ]
+    },
+    "ProviderInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "vehicleType": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "path": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "Absent while the provider has never loaded."
+        },
+        "subscriptionInfo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubscriptionInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "testUrl": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Proxy providers: the health check's URL and expected statuses."
+        },
+        "expectedStatus": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "behavior": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Rule providers: `domain`, `ipcidr` or `classical`."
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Rule providers: `yaml`, `text` or `mrs`."
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "vehicleType",
+        "count",
+        "path"
+      ]
+    },
+    "ProviderKind": {
+      "type": "string",
+      "enum": [
+        "proxy",
+        "rule"
+      ]
+    },
+    "SubscriptionInfo": {
+      "type": "object",
+      "properties": {
+        "upload": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "download": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "total": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "expire": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "upload",
+        "download",
+        "total",
+        "expire"
+      ]
+    },
+    "ProviderNameParams": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "ProviderSideLoadParams": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "data": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "data"
+      ]
+    },
+    "RuleList": {
+      "type": "object",
+      "properties": {
+        "rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RuleEntry"
+          }
+        }
+      },
+      "required": [
+        "rules"
+      ]
+    },
+    "RuleEntry": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload",
+        "target"
+      ],
+      "description": "One rule of the main list in force, in match order."
+    },
+    "RuleSetDumpParams": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "$ref": "#/$defs/ProfileRef"
+        },
+        "output": {
+          "$ref": "#/$defs/Output",
+          "default": {
+            "inline": true
+          }
+        }
+      },
+      "required": [
+        "profile"
+      ]
+    },
+    "RuleSetCompileParams": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Empty compiles the file already stored under that name."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "RuleSetInfo": {
+      "type": "object",
+      "properties": {
+        "behavior": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "behavior",
+        "format"
+      ]
+    },
+    "GeoUpdateParams": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "TrafficWatchParams": {
+      "type": "object",
+      "properties": {
+        "intervalMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Default 1000."
+        },
+        "onlyProxy": {
+          "type": "boolean",
+          "default": false
+        },
+        "credit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Batches the server may send before the next `$/credit`. Default 4."
+        },
+        "maxBatchMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How long a batch may collect events. Default 16."
+        },
+        "maxBatchBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Size at which a batch is sent at once. Default 51200."
+        }
+      },
+      "description": "Options every stream method accepts beside its own parameters."
+    },
+    "Traffic": {
+      "type": "object",
+      "properties": {
+        "up": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "down": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "totalUp": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "totalDown": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "up",
+        "down",
+        "totalUp",
+        "totalDown"
+      ],
+      "description": "Rates are bytes per second; totals count from the last `traffic.reset`."
+    },
+    "ConnectionWatchParams": {
+      "type": "object",
+      "properties": {
+        "counters": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Send `counters` in the deltas. Default true; a client that shows no\ntraffic figures turns them off and the stream carries only opens and\ncloses."
+        },
+        "credit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Batches the server may send before the next `$/credit`. Default 4."
+        },
+        "maxBatchMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How long a batch may collect events. Default 16."
+        },
+        "maxBatchBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Size at which a batch is sent at once. Default 51200."
+        }
+      },
+      "description": "Options every stream method accepts beside its own parameters."
+    },
+    "ConnectionSnapshot": {
+      "type": "object",
+      "properties": {
+        "connections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConnectionInfo"
+          }
+        }
+      },
+      "required": [
+        "connections"
+      ]
+    },
+    "ConnectionInfo": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "start": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "network": {
+          "$ref": "#/$defs/Network"
+        },
+        "sourceIp": {
+          "type": "string"
+        },
+        "sourcePort": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "destinationIp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "destinationPort": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "host": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sniffHost": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The host the sniffer read from the traffic."
+        },
+        "inboundType": {
+          "type": "string",
+          "description": "The kind of inbound that accepted the connection, such as `socks5` or `tun`."
+        },
+        "inboundIp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inboundPort": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "inboundName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inboundUser": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dnsMode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`normal`, `fake-ip`, `redir-host` or `hosts`."
+        },
+        "uid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "process": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "processPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remoteDestination": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceGeoIp": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "destinationGeoIp": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "sourceAsn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "destinationAsn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "specialRules": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "specialProxy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mitm": {
+          "type": "boolean",
+          "default": false
+        },
+        "mitmRefused": {
+          "type": "boolean",
+          "default": false
+        },
+        "chains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The exit first."
+        },
+        "providerChains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rule": {
+          "type": "string"
+        },
+        "rulePayload": {
+          "type": "string"
+        },
+        "upload": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "download": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "start",
+        "network",
+        "sourceIp",
+        "sourcePort",
+        "destinationPort",
+        "inboundType",
+        "chains",
+        "rule",
+        "upload",
+        "download"
+      ]
+    },
+    "Network": {
+      "type": "string",
+      "enum": [
+        "tcp",
+        "udp"
+      ]
+    },
+    "ConnectionDelta": {
+      "type": "object",
+      "properties": {
+        "opened": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConnectionInfo"
+          }
+        },
+        "closed": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "counters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConnectionCounter"
+          }
+        }
+      },
+      "description": "An `opened` entry that a client already has is a repeat and replaces it.\nA connection that opened and closed between two batches is in both lists,\nso apply `opened` first and `closed` after."
+    },
+    "ConnectionCounter": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "upload": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "download": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "upload",
+        "download"
+      ]
+    },
+    "ConnectionCloseParams": {
+      "type": "object",
+      "properties": {
+        "ids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "all": {
+          "type": "boolean",
+          "description": "Closes every connection.",
+          "default": false
+        }
+      }
+    },
+    "NetworkUpdateParams": {
+      "type": "object",
+      "properties": {
+        "dnsServers": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Socket addresses of the resolvers the system now uses."
+        },
+        "interfaceChanged": {
+          "type": "boolean",
+          "description": "The default network changed: connections over the old one are closed.",
+          "default": false
+        }
+      }
+    },
+    "DnsQueryParams": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "qtype": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A record type such as `A` or `AAAA`. Default `A`."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "DnsQueryResult": {
+      "type": "object",
+      "properties": {
+        "rcode": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DnsQuestion"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "recursionDesired": {
+          "type": "boolean"
+        },
+        "recursionAvailable": {
+          "type": "boolean"
+        },
+        "authenticData": {
+          "type": "boolean"
+        },
+        "checkingDisabled": {
+          "type": "boolean"
+        },
+        "answers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DnsRecord"
+          }
+        },
+        "authorities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DnsRecord"
+          }
+        },
+        "additionals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DnsRecord"
+          }
+        }
+      },
+      "required": [
+        "rcode",
+        "questions",
+        "truncated",
+        "recursionDesired",
+        "recursionAvailable",
+        "authenticData",
+        "checkingDisabled",
+        "answers",
+        "authorities",
+        "additionals"
+      ]
+    },
+    "DnsQuestion": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "qtype": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "qclass": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "required": [
+        "name",
+        "qtype",
+        "qclass"
+      ]
+    },
+    "DnsRecord": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "rtype": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "ttl": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "data": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "rtype",
+        "ttl",
+        "data"
+      ],
+      "description": "`data` is the record's data in presentation format."
+    },
+    "LogWatchParams": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogLevel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Entries below this level are left out of this subscription."
+        },
+        "credit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Batches the server may send before the next `$/credit`. Default 4."
+        },
+        "maxBatchMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How long a batch may collect events. Default 16."
+        },
+        "maxBatchBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Size at which a batch is sent at once. Default 51200."
+        }
+      },
+      "description": "Options every stream method accepts beside its own parameters."
+    },
+    "LogEntry": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "$ref": "#/$defs/LogLevel"
+        },
+        "time": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "level",
+        "time",
+        "text"
+      ]
+    },
+    "DnsWatchParams": {
+      "type": "object",
+      "properties": {
+        "credit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Batches the server may send before the next `$/credit`. Default 4."
+        },
+        "maxBatchMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How long a batch may collect events. Default 16."
+        },
+        "maxBatchBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Size at which a batch is sent at once. Default 51200."
+        }
+      },
+      "description": "Options every stream method accepts beside its own parameters."
+    },
+    "DnsEntry": {
+      "type": "object",
+      "properties": {
+        "domain": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "initiator": {
+          "type": "string"
+        },
+        "upstream": {
+          "type": "string"
+        },
+        "cached": {
+          "type": "boolean",
+          "default": false
+        },
+        "answers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rcode": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "delay": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "time": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "domain",
+        "type",
+        "initiator",
+        "answers",
+        "delay",
+        "time"
+      ]
+    },
+    "RouteWatchParams": {
+      "type": "object",
+      "properties": {
+        "credit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Batches the server may send before the next `$/credit`. Default 4."
+        },
+        "maxBatchMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How long a batch may collect events. Default 16."
+        },
+        "maxBatchBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Size at which a batch is sent at once. Default 51200."
+        }
+      },
+      "description": "Options every stream method accepts beside its own parameters."
+    },
+    "RouteStamp": {
+      "type": "object",
+      "properties": {
+        "epoch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "running": {
+          "type": "boolean",
+          "description": "Whether the listeners were running when `epoch` last moved.",
+          "default": false
+        }
+      },
+      "required": [
+        "epoch",
+        "version"
+      ]
+    },
+    "EventsWatchParams": {
+      "type": "object",
+      "properties": {
+        "delays": {
+          "type": "boolean",
+          "description": "Also report every URL test result, the automatic ones of the groups included.",
+          "default": false
+        },
+        "state": {
+          "type": "boolean",
+          "description": "Also report `stateChanged`: every change of a pick or of the general\nsettings a host keeps, from any origin, in the order it took effect.",
+          "default": false
+        },
+        "credit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Batches the server may send before the next `$/credit`. Default 4."
+        },
+        "maxBatchMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How long a batch may collect events. Default 16."
+        },
+        "maxBatchBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Size at which a batch is sent at once. Default 51200."
+        }
+      },
+      "description": "Options every stream method accepts beside its own parameters."
+    },
+    "CoreEvent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resourceUpdate"
+            },
+            "kind": {
+              "$ref": "#/$defs/ResourceKind"
+            },
+            "name": {
+              "type": "string"
+            },
+            "phase": {
+              "$ref": "#/$defs/ResourcePhase"
+            },
+            "error": {
+              "type": "string",
+              "description": "Set when `phase` is `failed`."
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "name",
+            "phase"
+          ],
+          "description": "One step of a fetch of a provider or a geo database, whatever started\nit: its first load, a retry, its interval, its file changing, or a\ncaller. A geo database is named `MMDB`, `ASN` or `GEOSITE`, as\n`geo.update` names it. Every step of a provider's first load waits\nuntil the `config.apply` that made it has finished. A fetch cut short by\na newer apply or by shutdown ends `failed` with the error `superseded`."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "dialerLoop"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "delay"
+            },
+            "name": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "value": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "url",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "fatal"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "stateChanged"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "origin": {
+              "$ref": "#/$defs/ChangeOrigin"
+            },
+            "change": {
+              "$ref": "#/$defs/StateChangeKind"
+            }
+          },
+          "required": [
+            "type",
+            "seq",
+            "origin",
+            "change"
+          ],
+          "description": "Sent only to a watch that asked for `state`."
+        }
+      ],
+      "description": "One entry of `events.watch`."
+    },
+    "ResourceKind": {
+      "type": "string",
+      "enum": [
+        "proxyProvider",
+        "ruleProvider",
+        "geo"
+      ]
+    },
+    "ResourcePhase": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "updating",
+            "updated",
+            "failed"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "unchanged",
+          "description": "Fetched, and the same as the content in force."
+        }
+      ]
+    },
+    "ChangeOrigin": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "host",
+            "controller"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "core",
+          "description": "A fallback group dropped a pick whose node died."
+        }
+      ]
+    },
+    "StateChangeKind": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "selected"
+            },
+            "group": {
+              "type": "string"
+            },
+            "proxy": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "group",
+            "proxy"
+          ],
+          "description": "An empty `proxy` clears the pick."
+        },
+        {
+          "$ref": "#/$defs/GeneralChange",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "general"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "applied"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "A config apply replaced the picks with the ones it was given."
+        }
+      ]
+    },
+    "GeneralChange": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "logLevel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "allowLan": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "ipv6": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "mixedPort": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "tcpConcurrent": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "findProcessMode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unifiedDelay": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "authentication": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "User names only."
+        },
+        "geoAutoUpdate": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "geoUpdateInterval": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "geoxUrl": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Keyed `mmdb`, `asn` and `geosite`."
+        },
+        "tunEnable": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "tunDevice": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tunStack": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tunAutoRoute": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "description": "The fields of a general patch that changed, with their new values."
+    },
+    "EngineStateParams": {
+      "type": "object",
+      "properties": {
+        "credit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Batches the server may send before the next `$/credit`. Default 4."
+        },
+        "maxBatchMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How long a batch may collect events. Default 16."
+        },
+        "maxBatchBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Size at which a batch is sent at once. Default 51200."
+        }
+      },
+      "description": "Options every stream method accepts beside its own parameters."
+    },
+    "TunStartParams": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/TunSource"
+        },
+        "stack": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mtu": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "address": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "dns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "congestionController": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "source"
+      ]
+    },
+    "TunSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "device"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "inherited"
+            },
+            "handle": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "handle"
+          ]
+        }
+      ],
+      "description": "A device the core creates itself, or a descriptor the host opened and\nregistered beforehand."
+    },
+    "RouteCheckParams": {
+      "type": "object",
+      "properties": {
+        "routes": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/RouteHit"
+            }
+          }
+        }
+      },
+      "required": [
+        "routes"
+      ]
+    },
+    "RouteHit": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "proxy": {
+          "type": "string"
+        },
+        "exit": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "exit"
+      ]
+    },
+    "RouteCheckResult": {
+      "type": "object",
+      "properties": {
+        "epoch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "held": {
+          "type": "array",
+          "items": {
+            "type": "boolean"
+          }
+        }
+      },
+      "required": [
+        "epoch",
+        "version",
+        "held"
+      ],
+      "description": "`held[i]` says route `i` still leaves where it did; `epoch` and `version`\nare the stamp the answers were checked against."
+    },
+    "OutboundIpParams": {
+      "type": "object",
+      "properties": {
+        "proxy": {
+          "type": "string"
+        },
+        "urls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "timeout": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Milliseconds."
+        }
+      },
+      "required": [
+        "proxy",
+        "urls"
+      ]
+    },
+    "OutboundIp": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "delay": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "chains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "epoch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "hits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RouteHit"
+          }
+        },
+        "nodeHits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RouteHit"
+          }
+        }
+      },
+      "required": [
+        "url",
+        "body",
+        "delay",
+        "chains",
+        "epoch",
+        "version",
+        "hits"
+      ]
+    },
+    "ServicesParams": {
+      "type": "object",
+      "properties": {
+        "proxy": {
+          "type": "string"
+        },
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "timeout": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Milliseconds."
+        }
+      },
+      "required": [
+        "proxy",
+        "names"
+      ]
+    },
+    "ServiceList": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ServiceItem"
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "ServiceItem": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "delay": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "chains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "checkedAt": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "epoch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "hits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RouteHit"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "status",
+        "checkedAt",
+        "epoch",
+        "version"
+      ]
+    },
+    "MitmCertificate": {
+      "type": "object",
+      "properties": {
+        "certificate": {
+          "description": "Absent while no certificate authority exists."
+        }
+      }
+    },
+    "MitmValidateParams": {
+      "type": "object",
+      "properties": {
+        "config": true
+      },
+      "required": [
+        "config"
+      ]
+    },
+    "MitmValidateResult": {
+      "type": "object",
+      "properties": {
+        "issues": true
+      },
+      "required": [
+        "issues"
+      ]
+    },
+    "MitmIssueParams": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host"
+      ]
+    },
+    "MitmPem": {
+      "type": "object",
+      "properties": {
+        "pem": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pem"
+      ]
+    },
+    "MitmScriptParams": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "MitmResult": {
+      "type": "object",
+      "properties": {
+        "result": true
+      },
+      "required": [
+        "result"
+      ]
+    },
+    "MitmExchangesParams": {
+      "type": "object",
+      "properties": {
+        "connection": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "A connection id from `connection.watch`, open or closed since, as long as\nthe capture still holds its exchanges."
+        }
+      },
+      "required": [
+        "connection"
+      ]
+    },
+    "MitmExchangeParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "MitmBodyParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "response": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "ErrorObject": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/ErrorData"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "data"
+      ]
+    },
+    "ErrorData": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "invalid_params"
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "unsupported"
+            },
+            "method": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "capability": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "not_found"
+            },
+            "entity": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "entity",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "rejected"
+            },
+            "issues": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Issue"
+              },
+              "default": []
+            },
+            "fellBack": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "A stable subcode, such as `rule_set_empty`, for clients that word the failure themselves."
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "conflict"
+            },
+            "state": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "cancelled"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "timeout"
+            },
+            "after": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "unavailable"
+            },
+            "target": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "payload_too_large"
+            },
+            "limit": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "limit"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "internal"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ],
+      "description": "The stable part of an error. Clients branch on `kind`; `message` is for people."
+    }
+  }
+}

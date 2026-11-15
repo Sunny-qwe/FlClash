@@ -1,0 +1,28 @@
+[package]
+name = "concord-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "C ABI through which an in-process host reaches Concord"
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+concord-api = { workspace = true }
+concord-rpc = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+concord-engine = { workspace = true }
+concord-platform = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
+
+[lints]
+workspace = true

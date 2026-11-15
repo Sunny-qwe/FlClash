@@ -1,0 +1,44 @@
+hosts:
+  router.test: 192.168.1.1
+  multi.test:
+    - 10.0.0.1
+    - 10.0.0.2
+  alias.test: router.test
+  "*.wild.test": 10.9.9.9
+dns:
+  enable: true
+  listen: 127.0.0.1:1053
+  ipv6: true
+  prefer-h3: false
+  use-hosts: true
+  use-system-hosts: false
+  respect-rules: true
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter-mode: blacklist
+  fake-ip-filter:
+    - "*.lan"
+    - "+.local"
+  default-nameserver:
+    - 223.5.5.5
+    - 8.8.8.8
+  nameserver:
+    - https://dns.example.test/dns-query
+    - tls://dns.example.test:853
+    - udp://1.1.1.1
+  proxy-server-nameserver:
+    - 1.0.0.1
+  nameserver-policy:
+    "geosite:cn":
+      - 223.5.5.5
+    "+.corp.test":
+      - 10.0.0.53
+  fallback:
+    - 8.8.4.4
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr:
+      - 240.0.0.0/4
+    domain:
+      - "+.blocked.test"

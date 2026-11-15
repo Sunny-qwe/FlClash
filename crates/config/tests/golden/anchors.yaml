@@ -1,0 +1,10 @@
+x-base: &base {type: socks5, port: 1080, udp: true}
+mixed-port: 7890
+proxies:
+  - {<<: *base, name: anchored-one, server: 192.0.2.1}
+  - name: anchored-two
+    <<: *base
+    server: 192.0.2.2
+  - {name: reality, type: vless, server: 192.0.2.3, port: 443, uuid: 6a4f3bc1-2c44-4a43-a5a3-3f1a2b0e6a11, tls: true, reality-opts: {public-key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA, short-id: 12345678}}
+rules:
+  - MATCH,DIRECT

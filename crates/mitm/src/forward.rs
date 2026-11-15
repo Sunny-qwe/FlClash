@@ -1,0 +1,320 @@
+use std::io;
+use std::sync::Arc;
+
+use http::header::{ACCEPT_ENCODING, CONNECTION, CONTENT_ENCODING, HOST, UPGRADE};
+use http::{HeaderMap, HeaderValue, Request, Response, StatusCode, Uri, Version};
+use hyper::body::Incoming;
+use hyper::upgrade::OnUpgrade;
+
+use crate::body::{Body, Buffered, Tap, buffer_body, empty, failing, full};
+use crate::capture::{PHASE_REQUEST, PHASE_RESPONSE};
+use crate::exchange::{OutRequest, ReplyError, Sent, Target, has_response_body, set_length};
+use crate::headers::{is_grpc, remove_hop_by_hop, text, with_host};
+use crate::limits::{BODY_WAIT, PRESSURE_NO_BODIES};
+use crate::rules::BodyRewrite;
+use crate::session::{PoolKey, Sender, Session};
+use http_body_util::BodyExt;
+
+impl Session {
+    /// Applies the rules to a request about to go upstream.
+    pub(crate) async fn rewrite_request(
+        self: &Arc<Self>,
+        out: &mut OutRequest,
+        target: &mut Target,
+    ) {
+        self.apply_request_rules(out, target).await;
+        let cap = &target.cap;
+        if !cap.is_some() {
+            return;
+        }
+        cap.set_request_length(
+            out.length
+                .and_then(|length| i64::try_from(length).ok())
+                .unwrap_or(-1),
+        );
+        if out.has_body {
+            let kept = cap.clone();
+            let body = std::mem::replace(&mut out.body, empty());
+            out.body = Tap::new(
+                body,
+                Some(Box::new(move |data| kept.keep_request(data))),
+                None,
+            )
+            .boxed_unsync();
+        }
+        cap.sent(&out.url.raw, with_host(&out.headers, &out.host_header()));
+    }
+
+    async fn apply_request_rules(self: &Arc<Self>, out: &mut OutRequest, target: &mut Target) {
+        let rules = &self.core.config.rules;
+        let max_body = self.core.config.limits.max_body_size;
+        let address = out.url.raw.clone();
+        if rules.rewrite_headers(&address, &mut out.headers, false) > 0 {
+            target.cap.note("header-rewrite", PHASE_REQUEST, "");
+            tracing::info!("[MITM] rewrite request headers of {address}");
+        }
+        let grpc = is_grpc(&out.headers);
+        let body_rules = rules.body_rewrites_for(&address, false);
+        if !body_rules.is_empty()
+            && !grpc
+            && out.has_body
+            && self.core.shared.pressure.level() < PRESSURE_NO_BODIES
+            && self
+                .reserve_body(target, &address, &out.headers, out.length, max_body)
+                .await
+        {
+            let body = std::mem::replace(&mut out.body, empty());
+            match rewrite_body(&mut out.headers, body, out.length, max_body, &body_rules).await {
+                Ok((body, length)) => {
+                    out.set_body(body, length);
+                    target.cap.note("body-rewrite", PHASE_REQUEST, "");
+                    tracing::info!("[MITM] rewrite request body of {address}");
+                }
+                Err(err) => {
+                    out.body = failing(err);
+                    return;
+                }
+            }
+        }
+        if let Some(script) = rules.script_for(&address, false) {
+            self.run_request_script(out, target, script).await;
+        }
+        if !grpc && self.rewrites_response_body(&out.url.raw) {
+            out.headers
+                .insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
+        }
+    }
+
+    fn rewrites_response_body(&self, address: &str) -> bool {
+        let rules = &self.core.config.rules;
+        !rules.body_rewrites_for(address, true).is_empty()
+            || rules
+                .script_for(address, true)
+                .is_some_and(|script| script.requires_body)
+    }
+
+    /// Makes room for a body about to be read whole: its length, or the size
+    /// limit when that is unknown or the body is to be decoded. A body that finds
+    /// none within a while passes on as it came.
+    pub(crate) async fn reserve_body(
+        &self,
+        target: &mut Target,
+        address: &str,
+        headers: &HeaderMap,
+        length: Option<u64>,
+        limit: i64,
+    ) -> bool {
+        let cap = u64::try_from(limit).unwrap_or(0);
+        if length.is_some_and(|length| length > cap) {
+            return true;
+        }
+        let encoding = text(headers, CONTENT_ENCODING).trim().to_ascii_lowercase();
+        let size = match length {
+            Some(length) if encoding.is_empty() || encoding == "identity" => length,
+            _ => cap,
+        };
+        if size == 0 {
+            return true;
+        }
+        let permits = u32::try_from(size).unwrap_or(u32::MAX);
+        let acquired = tokio::time::timeout(
+            BODY_WAIT,
+            self.core.bodies.clone().acquire_many_owned(permits),
+        )
+        .await;
+        match acquired {
+            Ok(Ok(permit)) => {
+                target.reserved.push(permit);
+                true
+            }
+            _ => {
+                tracing::info!(
+                    "[MITM] the body of {address} passes on as it came: the bodies being worked on fill the buffer"
+                );
+                false
+            }
+        }
+    }
+
+    pub(crate) async fn rewrite_response(
+        self: &Arc<Self>,
+        head: &mut http::response::Parts,
+        body: &mut Body,
+        sent: &Sent,
+        target: &mut Target,
+    ) -> Result<(), ReplyError> {
+        let rules = &self.core.config.rules;
+        let max_body = self.core.config.limits.max_body_size;
+        let address = sent.url.raw.clone();
+        if rules.rewrite_headers(&address, &mut head.headers, true) > 0 {
+            target.cap.note("header-rewrite", PHASE_RESPONSE, "");
+            tracing::info!("[MITM] rewrite response headers of {address}");
+        }
+        if head.status == StatusCode::SWITCHING_PROTOCOLS {
+            return Ok(());
+        }
+        let body_rules = rules.body_rewrites_for(&address, true);
+        let length = hyper::body::Body::size_hint(body).exact();
+        if !body_rules.is_empty()
+            && has_response_body(&sent.method, head.status)
+            && !is_grpc(&head.headers)
+            && self.core.shared.pressure.level() < PRESSURE_NO_BODIES
+            && self
+                .reserve_body(target, &address, &head.headers, length, max_body)
+                .await
+        {
+            let source = std::mem::replace(body, empty());
+            let (rewritten, length) =
+                rewrite_body(&mut head.headers, source, length, max_body, &body_rules).await?;
+            *body = rewritten;
+            set_length(&mut head.headers, length);
+            target.cap.note("body-rewrite", PHASE_RESPONSE, "");
+            tracing::info!("[MITM] rewrite response body of {address}");
+        }
+        if let Some(script) = rules.script_for(&address, true) {
+            self.run_response_script(head, body, sent, target, script)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Sends the request to its server on a connection from the pool, a fresh
+    /// one if a reused one turns out to be gone.
+    pub(crate) async fn round_trip(
+        &self,
+        out: OutRequest,
+        target: &Target,
+    ) -> io::Result<(Response<Incoming>, Option<OnUpgrade>)> {
+        let key = PoolKey {
+            https: out.url.https,
+            host: out.url.host.to_ascii_lowercase(),
+            port: out.url.port,
+        };
+        let cap = &target.cap;
+        let authority = out.host_header();
+        let path = out.url.path_and_query.clone();
+        let https = out.url.https;
+        let mut request = build_request(out, target.http1)?;
+        let mut attempt = 0;
+        loop {
+            let (mut conn, reused) = self.connection_for(&key, target.http1, cap).await?;
+            adapt(&mut request, conn.is_h2(), https, &authority, &path)?;
+            let sent = match &mut conn.sender {
+                Sender::H1(sender) => sender.try_send_request(request).await,
+                Sender::H2(sender) => {
+                    sender.ready().await.map_err(io::Error::other)?;
+                    sender.try_send_request(request).await
+                }
+            };
+            match sent {
+                Ok(mut response) => {
+                    let upgrade = (response.status() == StatusCode::SWITCHING_PROTOCOLS)
+                        .then(|| hyper::upgrade::on(&mut response));
+                    if upgrade.is_none() {
+                        self.give_back(&key, conn);
+                    }
+                    return Ok((response, upgrade));
+                }
+                Err(mut err) => match err.take_message() {
+                    Some(returned) if reused && attempt == 0 => {
+                        request = returned;
+                        attempt += 1;
+                    }
+                    _ => return Err(io::Error::other(err.into_error())),
+                },
+            }
+        }
+    }
+}
+
+/// A request with an absolute URI and a `Host` header, which `adapt` fits to the
+/// connection it goes out on.
+fn build_request(out: OutRequest, upgrading: bool) -> io::Result<Request<Body>> {
+    let mut headers = out.headers;
+    let upgrade_type = text(&headers, UPGRADE).to_string();
+    remove_hop_by_hop(&mut headers, false);
+    if upgrading && !upgrade_type.is_empty() {
+        headers.insert(CONNECTION, HeaderValue::from_static("Upgrade"));
+        if let Ok(value) = HeaderValue::from_str(&upgrade_type) {
+            headers.insert(UPGRADE, value);
+        }
+    }
+    let mut request = Request::new(out.body);
+    *request.method_mut() = out.method;
+    *request.headers_mut() = headers;
+    Ok(request)
+}
+
+fn adapt(
+    request: &mut Request<Body>,
+    h2: bool,
+    https: bool,
+    authority: &str,
+    path: &str,
+) -> io::Result<()> {
+    let headers = request.headers_mut();
+    let uri = if h2 {
+        headers.remove(HOST);
+        Uri::builder()
+            .scheme(if https { "https" } else { "http" })
+            .authority(authority)
+            .path_and_query(path)
+            .build()
+    } else {
+        let host = HeaderValue::from_str(authority).map_err(io::Error::other)?;
+        headers.insert(HOST, host);
+        path.parse::<Uri>().map_err(Into::into)
+    }
+    .map_err(io::Error::other)?;
+    *request.uri_mut() = uri;
+    *request.version_mut() = if h2 {
+        Version::HTTP_2
+    } else {
+        Version::HTTP_11
+    };
+    Ok(())
+}
+
+/// A body over the limit, not UTF-8, or in an encoding it cannot decode is
+/// passed on unchanged.
+pub(crate) async fn rewrite_body(
+    headers: &mut HeaderMap,
+    body: Body,
+    length: Option<u64>,
+    limit: i64,
+    rules: &[&BodyRewrite],
+) -> io::Result<(Body, Option<u64>)> {
+    match buffer_body(headers, body, length, limit).await? {
+        Buffered::Rest { body, length } => Ok((body, length)),
+        Buffered::Whole(data) => match String::from_utf8(data) {
+            Err(invalid) => {
+                let data = invalid.into_bytes();
+                let length = data.len() as u64;
+                Ok((full(data), Some(length)))
+            }
+            Ok(text) => {
+                let text = rules.iter().fold(text, |text, rule| rule.apply(text));
+                let length = text.len() as u64;
+                Ok((full(text), Some(length)))
+            }
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_request_adapts_to_http1_and_http2() {
+        let mut out = http::Request::new(empty());
+        *out.method_mut() = http::Method::GET;
+        adapt(&mut out, true, true, "example.test:8443", "/p?q=1").unwrap();
+        assert_eq!(out.uri().to_string(), "https://example.test:8443/p?q=1");
+        assert!(out.headers().get(HOST).is_none());
+        adapt(&mut out, false, true, "example.test:8443", "/p?q=1").unwrap();
+        assert_eq!(out.uri().to_string(), "/p?q=1");
+        assert_eq!(out.headers().get(HOST).unwrap(), "example.test:8443");
+        assert_eq!(out.version(), Version::HTTP_11);
+    }
+}

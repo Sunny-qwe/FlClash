@@ -1,0 +1,169 @@
+{
+  "port": 0,
+  "socks-port": 0,
+  "redir-port": 0,
+  "tproxy-port": 0,
+  "mixed-port": 0,
+  "authentication": [],
+  "skip-auth-prefixes": null,
+  "allow-lan": false,
+  "mode": "rule",
+  "unified-delay": false,
+  "log-level": "info",
+  "ipv6": true,
+  "external-controller": "",
+  "secret": "",
+  "interface-name": "",
+  "routing-mark": 0,
+  "geo-auto-update": false,
+  "geo-update-interval": 24,
+  "geodata-loader": "memconservative",
+  "tcp-concurrent": false,
+  "find-process-mode": "strict",
+  "global-ua": "clash.meta/1.10.0",
+  "keep-alive-idle": 0,
+  "keep-alive-interval": 0,
+  "disable-keep-alive": false,
+  "proxy-providers": null,
+  "rule-providers": null,
+  "sub-rules": null,
+  "proxies": [],
+  "proxy-groups": [],
+  "rule": [],
+  "hosts": {
+    "router.test": "192.168.1.1",
+    "multi.test": [
+      "10.0.0.1",
+      "10.0.0.2"
+    ],
+    "alias.test": "router.test",
+    "*.wild.test": "10.9.9.9"
+  },
+  "dns": {
+    "enable": true,
+    "prefer-h3": false,
+    "ipv6": true,
+    "ipv6-timeout": 100,
+    "use-hosts": true,
+    "use-system-hosts": false,
+    "respect-rules": true,
+    "nameserver": [
+      "https://dns.example.test/dns-query",
+      "tls://dns.example.test:853",
+      "udp://1.1.1.1"
+    ],
+    "fallback": [
+      "8.8.4.4"
+    ],
+    "fallback-filter": {
+      "geoip": true,
+      "geoip-code": "CN",
+      "ipcidr": [
+        "240.0.0.0/4"
+      ],
+      "domain": [
+        "+.blocked.test"
+      ],
+      "geosite": []
+    },
+    "fallback-lazy-query": false,
+    "listen": "127.0.0.1:1053",
+    "listen-routing-mark": 0,
+    "enhanced-mode": "fake-ip",
+    "fake-ip-range": "198.18.0.1/16",
+    "fake-ip-range6": "",
+    "fake-ip-filter": [
+      "*.lan",
+      "+.local"
+    ],
+    "fake-ip-filter-mode": "blacklist",
+    "fake-ip-ttl": 1,
+    "default-nameserver": [
+      "223.5.5.5",
+      "8.8.8.8"
+    ],
+    "cache-algorithm": "",
+    "cache-max-size": 0,
+    "nameserver-policy": {
+      "geosite:cn": [
+        "223.5.5.5"
+      ],
+      "+.corp.test": [
+        "10.0.0.53"
+      ]
+    },
+    "proxy-server-nameserver": [
+      "1.0.0.1"
+    ],
+    "proxy-server-nameserver-policy": null,
+    "direct-nameserver": null,
+    "direct-nameserver-follow-policy": false
+  },
+  "tun": {
+    "enable": false,
+    "device": "",
+    "stack": "Mips",
+    "dns-mode": "",
+    "dns-hijack": [
+      "0.0.0.0:53"
+    ],
+    "auto-route": true,
+    "auto-detect-interface": true
+  },
+  "sniffer": {
+    "enable": false,
+    "override-destination": true,
+    "sniffing": null,
+    "force-domain": [],
+    "skip-src-address": null,
+    "skip-dst-address": null,
+    "skip-domain": [],
+    "port-whitelist": [],
+    "force-dns-mapping": true,
+    "parse-pure-ip": true,
+    "sniff": {}
+  },
+  "ntp": {
+    "enable": false,
+    "server": "time.apple.com",
+    "port": 123,
+    "interval": 30,
+    "dialer-proxy": "",
+    "write-to-system": false
+  },
+  "geox-url": {
+    "mmdb": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb",
+    "asn": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/GeoLite2-ASN.mmdb",
+    "geosite": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+  },
+  "profile": {
+    "store-selected": true,
+    "store-fake-ip": false
+  },
+  "experimental": {
+    "fingerprints": null,
+    "quic-go-disable-gso": false,
+    "quic-go-disable-ecn": true,
+    "dialer-ip4p-convert": false
+  },
+  "tls": {
+    "certificate": "",
+    "private-key": "",
+    "client-auth-type": "",
+    "client-auth-cert": "",
+    "ech-key": "",
+    "custom-certifactes": null
+  },
+  "mitm": {
+    "enable": false,
+    "hostname": null,
+    "skip-server-cert-verify": false,
+    "url-rewrite": null,
+    "header-rewrite": null,
+    "body-rewrite": null,
+    "map-local": null,
+    "script": null,
+    "h2": false,
+    "limits": {}
+  }
+}

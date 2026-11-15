@@ -1,0 +1,29 @@
+[package]
+name = "concord-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Socket factory, dialing and the relay for Concord"
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+concord-common = { workspace = true, features = ["io"] }
+concord-platform = { workspace = true }
+tokio = { workspace = true, features = ["net", "time", "rt", "sync", "io-util", "macros"] }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+futures-util = { workspace = true }
+socket2 = { workspace = true }
+dashmap = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+
+[lints]
+workspace = true

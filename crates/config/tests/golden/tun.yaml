@@ -1,0 +1,23 @@
+tun:
+  enable: true
+  stack: mixed
+  device: utun9
+  auto-route: true
+  auto-detect-interface: true
+  strict-route: true
+  mtu: 1500
+  gso: true
+  dns-hijack:
+    - any:53
+  route-address:
+    - 0.0.0.0/1
+    - 128.0.0.0/1
+  route-exclude-address:
+    - 192.168.0.0/16
+  endpoint-independent-nat: true
+  udp-timeout: 300
+  include-uid:
+    - 1000
+  exclude-package:
+    - com.example.skip
+  disable-icmp-forwarding: true

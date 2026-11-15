@@ -1,0 +1,14 @@
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-indexing-slicing-in-tests = true
+disallowed-methods = [
+  { path = "tokio::net::TcpStream::connect", reason = "use net::Sockets, otherwise protect is skipped" },
+  { path = "tokio::net::UdpSocket::bind", reason = "use net::Sockets, otherwise protect is skipped" },
+  { path = "tokio::net::lookup_host", reason = "getaddrinfo bypasses protect and the query loops back into the VPN" },
+  { path = "std::net::TcpStream::connect", reason = "use net::Sockets, otherwise protect is skipped" },
+  { path = "std::net::UdpSocket::bind", reason = "use net::Sockets, otherwise protect is skipped" },
+  { path = "std::net::ToSocketAddrs::to_socket_addrs", reason = "getaddrinfo bypasses protect and the query loops back into the VPN" },
+  { path = "std::sync::Mutex::lock", reason = "use concord_common::sync::lock, which outlives a panicked holder" },
+  { path = "std::sync::RwLock::read", reason = "use concord_common::sync::read, which outlives a panicked writer" },
+  { path = "std::sync::RwLock::write", reason = "use concord_common::sync::write, which outlives a panicked writer" },
+]

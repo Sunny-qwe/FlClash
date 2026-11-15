@@ -1,0 +1,50 @@
+[package]
+name = "concord-platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Operating-system integration for Concord behind a common interface"
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+concord-common = { workspace = true, features = ["io"] }
+tokio = { workspace = true, features = ["net", "time", "rt", "sync", "io-util"] }
+async-trait = { workspace = true }
+socket2 = { workspace = true }
+tracing = { workspace = true }
+rustls-pki-types = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))'.dependencies]
+rustls-native-certs = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Time",
+] }
+
+[dev-dependencies]
+concord-test-support = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+mio = { workspace = true }
+
+[lints]
+workspace = true

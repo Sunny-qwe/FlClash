@@ -1,0 +1,230 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::Poll;
+
+use concord_common::stream_buffer::ReadBufferOptions;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, duplex};
+
+use super::*;
+
+mod cancellation;
+
+#[test]
+fn the_last_read_releases_data_storage_before_the_next_frame_arrives() {
+    struct DataOwner([u8; 4], Arc<AtomicUsize>);
+    impl AsRef<[u8]> for DataOwner {
+        fn as_ref(&self) -> &[u8] {
+            &self.0
+        }
+    }
+    impl Drop for DataOwner {
+        fn drop(&mut self) {
+            self.1.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let mut reader = H2Reader::new(Incoming::Done);
+    reader.pending = Bytes::from_owner(DataOwner(*b"data", dropped.clone()));
+    let mut cx = Context::from_waker(std::task::Waker::noop());
+    for (index, expected) in [b"da", b"ta"].into_iter().enumerate() {
+        let mut bytes = [0; 2];
+        let mut buf = ReadBuf::new(&mut bytes);
+        assert!(matches!(
+            Pin::new(&mut reader).poll_read(&mut cx, &mut buf),
+            Poll::Ready(Ok(()))
+        ));
+        assert_eq!(buf.filled(), expected);
+        assert_eq!(dropped.load(Ordering::SeqCst), index);
+    }
+    assert!(reader.pending.is_empty());
+}
+
+struct TrackedIo {
+    inner: DuplexStream,
+    payload: Arc<(AtomicUsize, AtomicUsize)>,
+    direct_writes: Arc<AtomicUsize>,
+}
+
+impl AsyncRead for TrackedIo {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for TrackedIo {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        data: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let pointer = data.as_ptr() as usize;
+        let first = self.payload.0.load(Ordering::SeqCst);
+        let last = self.payload.1.load(Ordering::SeqCst);
+        let result = Pin::new(&mut self.inner).poll_write(cx, data);
+        if matches!(result, Poll::Ready(Ok(n)) if n > 0)
+            && first != 0
+            && (first..last).contains(&pointer)
+        {
+            self.direct_writes.fetch_add(1, Ordering::SeqCst);
+        }
+        result
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+impl Stream for TrackedIo {
+    concord_common::stream_policy!(default: all);
+}
+
+#[tokio::test]
+async fn owned_data_preserves_storage_and_partial_reads_under_flow_control() {
+    for window in [16, 1 << 20] {
+        let (near, far) = duplex(1 << 16);
+        let payload_range = Arc::new((AtomicUsize::new(0), AtomicUsize::new(0)));
+        let direct_writes = Arc::new(AtomicUsize::new(0));
+        let near = Box::new(TrackedIo {
+            inner: near,
+            payload: payload_range.clone(),
+            direct_writes: direct_writes.clone(),
+        }) as BoxStream;
+        let (received_tx, received_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut conn = h2::server::Builder::new()
+                .initial_window_size(window)
+                .handshake::<_, Bytes>(far)
+                .await
+                .unwrap();
+            let (request, mut respond) = conn.accept().await.unwrap().unwrap();
+            let mut send = respond
+                .send_response(http::Response::new(()), false)
+                .unwrap();
+            tokio::spawn(async move {
+                let mut body = request.into_body();
+                let mut got = Vec::new();
+                while let Some(data) = body.data().await {
+                    let data = data.unwrap();
+                    got.extend_from_slice(&data);
+                    body.flow_control().release_capacity(data.len()).unwrap();
+                }
+                send.send_data(Bytes::copy_from_slice(&got), true).unwrap();
+                let _ = received_tx.send(got);
+            });
+            while conn.accept().await.is_some() {}
+        });
+        let (mut sender, connection) = h2::client::Builder::new()
+            .handshake::<_, Bytes>(near)
+            .await
+            .unwrap();
+        let client = tokio::spawn(connection);
+        let (response, send) = sender.send_request(http::Request::new(()), false).unwrap();
+        let response = response.await.unwrap();
+        let mut body = H2Body::new(send, Incoming::Body(response.into_body()));
+        let payload: Vec<_> = (0..4096).map(|n| (n % 251) as u8).collect();
+        let mut buffer = ReadBufferOptions::for_copy(Default::default(), Default::default())
+            .unwrap()
+            .take();
+        buffer.spare_mut()[..payload.len()].copy_from_slice(&payload);
+        buffer.advance(payload.len()).unwrap();
+        let pointer = buffer.as_slice().as_ptr() as usize;
+        payload_range.0.store(pointer, Ordering::SeqCst);
+        payload_range
+            .1
+            .store(pointer + payload.len(), Ordering::SeqCst);
+        assert_eq!(
+            std::future::poll_fn(|cx| body.poll_write_buffer(cx, &mut buffer))
+                .await
+                .unwrap(),
+            payload.len()
+        );
+        assert!(buffer.is_empty());
+        body.shutdown().await.unwrap();
+        let mut response = Vec::new();
+        let mut one = [0; 1];
+        while body.read(&mut one).await.unwrap() != 0 {
+            response.push(one[0]);
+        }
+        assert_eq!(response, payload);
+        assert_eq!(received_rx.await.unwrap(), payload);
+        if window > payload.len() as u32 {
+            assert!(direct_writes.load(Ordering::SeqCst) > 0);
+        }
+        client.abort();
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn the_drop_hook_runs_once_after_both_halves_are_gone() {
+    let (client, server) = tokio::io::duplex(1 << 16);
+    tokio::spawn(async move {
+        let mut conn = h2::server::handshake(server).await.unwrap();
+        while let Some(Ok((_request, mut respond))) = conn.accept().await {
+            let _ = respond.send_response(http::Response::new(()), true);
+        }
+    });
+    let (mut sender, conn) = client_builder().handshake(client).await.unwrap();
+    tokio::spawn(conn);
+    let (response, send) = sender.send_request(http::Request::new(()), false).unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&runs);
+    let body = H2Body::new(send, Incoming::Response(response)).on_drop(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    });
+    let (read, write) = Box::new(body).into_split();
+    drop(read);
+    assert_eq!(runs.load(Ordering::SeqCst), 0);
+    drop(write);
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+}
+
+/// Plays the server side of a client handshake on `far`: sends an empty SETTINGS, then
+/// returns the client's SETTINGS and its connection-level WINDOW_UPDATE increment.
+pub(crate) async fn client_settings(
+    far: &mut DuplexStream,
+) -> (std::collections::BTreeMap<u16, u32>, u32) {
+    far.write_all(&[0, 0, 0, 4, 0, 0, 0, 0, 0]).await.unwrap();
+    let mut preface = [0; 24];
+    far.read_exact(&mut preface).await.unwrap();
+    assert_eq!(&preface, b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
+    let mut settings = std::collections::BTreeMap::new();
+    let mut connection_update = None;
+    loop {
+        let mut header = [0; 9];
+        far.read_exact(&mut header).await.unwrap();
+        let length = u32::from_be_bytes([0, header[0], header[1], header[2]]) as usize;
+        let mut payload = vec![0; length];
+        far.read_exact(&mut payload).await.unwrap();
+        match header[3] {
+            4 if header[4] & 1 == 0 => {
+                assert_eq!(payload.len() % 6, 0);
+                for setting in payload.as_chunks::<6>().0 {
+                    settings.insert(
+                        u16::from_be_bytes(setting[..2].try_into().unwrap()),
+                        u32::from_be_bytes(setting[2..].try_into().unwrap()),
+                    );
+                }
+            }
+            8 => {
+                assert_eq!(&header[5..9], &[0; 4]);
+                connection_update = Some(u32::from_be_bytes(payload.try_into().unwrap()));
+            }
+            _ => {}
+        }
+        if !settings.is_empty()
+            && let Some(update) = connection_update
+        {
+            return (settings, update);
+        }
+    }
+}

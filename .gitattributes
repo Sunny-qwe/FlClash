@@ -1,0 +1,4 @@
+# Tests compare these byte for byte; a Windows checkout with core.autocrlf must not turn them into CRLF.
+crates/config/tests/golden/* text eol=lf
+schema/*.json text eol=lf
+vendor/** -text

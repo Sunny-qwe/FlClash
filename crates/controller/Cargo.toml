@@ -1,0 +1,41 @@
+[package]
+name = "concord-controller"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The mihomo REST and WebSocket API over Concord's control surface, for dashboards"
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+concord-api = { workspace = true }
+concord-proto = { workspace = true }
+bytes = { workspace = true }
+futures-util = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+percent-encoding = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true, features = ["net", "rt", "macros", "sync", "time"] }
+tokio-tungstenite = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+concord-engine = { workspace = true }
+concord-platform = { workspace = true }
+concord-test-support = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
+tokio-tungstenite = { workspace = true, features = ["connect"] }
+
+[lints]
+workspace = true

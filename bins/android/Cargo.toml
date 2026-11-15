@@ -1,0 +1,36 @@
+[package]
+name = "concord-android"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Concord as an Android library with a C ABI"
+repository.workspace = true
+
+[lib]
+name = "concord"
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+concord-common = { workspace = true, features = ["io"] }
+concord-api = { workspace = true }
+concord-controller = { workspace = true }
+concord-engine = { workspace = true }
+concord-ffi = { workspace = true }
+concord-platform = { workspace = true }
+concord-rpc = { workspace = true }
+arc-swap = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true, features = ["release_max_level_debug"] }
+# Never called here: it caps the `log` records that dependencies such as rustls compile in.
+log = { workspace = true, features = ["release_max_level_debug"] }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

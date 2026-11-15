@@ -1,0 +1,81 @@
+# Tunables without a basis yet (`.agents/rules.md`, "Tunables"): `<item> <value>`, then a note.
+# The list only shrinks: give an item its basis in `.agents/reference-choices.md` "Tunables" and delete its line.
+api::bus::CONN_CAPACITY 8192  # sing-box queues 64 opens/closes per subscriber (`common/trafficcontrol/manager.go:60`); taking it would resync the host inside one 250 ms batch window and drop short connections from its list. Needs a host-side measurement of that loss.
+desktop::EXIT_CLEANUP_TIMEOUT 3 s  # sing-box bounds cleanup at FatalStopTimeout 10 s (`constant/timeout.go:18`), but the host also waits 10 s for the exit and then reports it unconfirmed. Needs a margin the host and core agree on.
+dns::fakeip::STORED_SIZE 65536  # Listed under Deviations To Resolve (reference-choices.md, "Stored fake-ip pool size"): mihomo bounds a stored pool only by its range because bbolt keeps it on disk; Concord keeps it in memory and writes it whole. No value follows; needs a memory budget.
+engine::ops::PARSE_STACK_BYTES 33554432  # Analogue Go maxstacksize 1 GB / 250 MB (`runtime/proc.go:160-167`) risks a failed spawn under strict overcommit or on 32-bit. Needs the deepest document a parse must survive.
+engine::probe::DEFAULT_PROBE_TIMEOUT 10 s  # equals the FlClash host's probeTimeoutDuration (FlClash rs `lib/common/constant.dart:82`), which the host always sends; neither side derives 10 s.
+engine::probe::fetch::SCAN_OVERLAP 256  # The longest fixed marker gives 18, but the regex markers (Prime, TikTok) have no length bound. Needs a bounded marker list.
+engine::probe::fetch::TUNNEL_POLL 50 ms  # No event exists yet: the tunnel status is an atomic. Resolves when concord-tunnel exposes its status as a watch.
+engine::probe::outbound_ip::MAX_BODY 4096  # No requirement fixes 4096; removing it reads block pages whole until the deadline, raising phone memory. Needs a memory budget for probes.
+engine::probe::outbound_ip::STAGGER 800 ms  # The only candidate, 1 s, rests on a host comment rather than a limit. Needs a host requirement.
+engine::probe::services::CHECK_CONCURRENCY 4  # The requirement (a sweep must leave probe slots free) bounds it to 1..9 against PROBE_CONCURRENCY 10 and does not pick one.
+engine::probe::services::HTML_MAX_BODY 524288  # No requirement fixes 512 KiB; removing it holds whole pages per check. Needs a memory budget for probes.
+engine::probe::services::SCAN_MAX_BODY 8388608  # No requirement fixes 8 MiB (the marker offsets are observed page layout); removing it reads pages without a marker whole. Needs a memory budget for probes.
+engine::probe::services::SMALL_MAX_BODY 16384  # No requirement fixes 16 KiB; removing it reads large error pages whole. Needs a memory budget for probes.
+engine::probe::services::SWEEP_BUDGET_FACTOR 6  # The host keeps serviceSweepBudgetFactor in step with it (FlClash rs `lib/common/constant.dart:112-113`); 6 does not follow from the 13 checks, CHECK_CONCURRENCY and their sequential requests on either side.
+ffi::dart::EXTERNAL_FROM 16384  # allo-isolate has no size threshold (always copied or always external); handing every frame over as external adds a finalizer per small frame on the host. Needs a host-side measurement.
+ipc::auth::HANDSHAKE_TIMEOUT 5 s  # equals the FlClash host's IPC responder handshakeTimeout (FlClash rs `lib/core/desktop/transport.dart:99`); equality is a coupling and neither side derives 5 s.
+ipc::frame::WRITE_TIMEOUT 10 s  # The requirement holds (a host the OS suspends must not block the core, `crates/ipc/src/frame.rs:180-183`), but no host limit fixes 10 s: the host's per-call timeout of 3 min is only an upper bound. Needs a host time limit the drop must beat.
+mitm::engine::QUIC_CACHE_SIZE 4096  # Caches a pure per-flow decision; dropping it puts host matching back on every UDP packet. Needs a measurement of that cost.
+mitm::engine::QUIC_MEMORY 60 s  # Lifetime of the same cache as QUIC_CACHE_SIZE; resolves with it.
+mitm::limits::BODY_WAIT 5 s  # No reference; an unbounded wait can deadlock sessions holding request permits, and not waiting passes more bodies through unrewritten. Needs a requirement for that trade.
+mitm::limits::DEFAULT_BODY_BUFFER 33554432  # equals the FlClash host's desktop `body-buffer` (FlClash rs `lib/models/clash_config.dart:2236`), used only before the host sends its limits; neither side derives the value.
+mitm::limits::DEFAULT_CAPTURE_BYTES 67108864  # equals the FlClash host's desktop `capture-bytes` (FlClash rs `lib/models/clash_config.dart:2241`), used only before the host sends its limits; neither side derives the value.
+mitm::limits::DEFAULT_CAPTURE_ENTRIES 2000  # equals the FlClash host's desktop `capture-entries` (FlClash rs `lib/models/clash_config.dart:2240`), used only before the host sends its limits; neither side derives the value.
+mitm::limits::DEFAULT_CERTIFICATE_CACHE 1024  # equals the FlClash host's desktop `certificate-cache` (FlClash rs `lib/models/clash_config.dart:2237`), used only before the host sends its limits; neither side derives the value.
+mitm::limits::DEFAULT_MAX_BODY_SIZE 4194304  # equals the FlClash host's desktop `max-body-size` (FlClash rs `lib/models/clash_config.dart:2235`), used only before the host sends its limits; neither side derives the value.
+mitm::limits::DEFAULT_SCRIPT_CONCURRENCY 4  # equals the FlClash host's desktop `script-concurrency` (FlClash rs `lib/models/clash_config.dart:2238`), used only before the host sends its limits; neither side derives the value.
+mitm::limits::DEFAULT_SCRIPT_MEMORY 268435456  # equals the FlClash host's desktop `script-memory` (FlClash rs `lib/models/clash_config.dart:2239`), used only before the host sends its limits; neither side derives the value.
+mitm::limits::PRESSURE_HOLD 60 s  # Exists because the Android host drops the NONE pressure level; removable once the host reports every level.
+mitm::quickjs::store::MAX_SIZE 8388608  # The Surge manual caps one value only; removing the total lets the store and its file grow with what scripts keep. Needs a storage budget.
+mitm::script::MAX_SCRIPT_TIMEOUT 60 s  # The Surge manual states no maximum; removing the clamp lets a profile hold a response and a script slot that long. Needs a requirement.
+mitm::script::MAX_TASK_TIMEOUT 3600 s  # The Surge manual states no maximum; removing the clamp lets a task hold one of the two task slots that long. Needs a requirement.
+mitm::session::IDLE_TIMEOUT 300 s  # Keep-alive wait of a decrypted client session; the references set none, and without it idle sessions would hold Android's 256 MITM session slots. Needs a requirement for how long a slot may idle.
+mitm::task::MAX_OUTPUT_LINES 200  # No host, Surge or reference limit found; removing it lets a looping console.log grow memory. Needs a host display limit.
+mitm::task::SCHEDULE_CHECK 60 s  # Bounds how late a cron fire is after the device wakes (monotonic timers stop in suspend); no cron step or reference fixes 60 s. Needs a wall-clock wake event.
+netstack::attach::GATHER_SLICES 64  # Iovecs per attached-socket upload writev. reference-choices: Concord's bound on sing-tun's single writeVector of all it holds, no count limit (`stack_go_splice.go:329-339`); 64 is Concord's own.
+netstack::attach::SLICES 8  # Iovecs per attached-socket download read (8 x 16 KiB chunks). sing-tun reads at most goSpliceReadChunk = 2 slabs = 64 KiB per readVector (`stack_go_splice.go:20`, `:399-412`). No matching reference.
+netstack::buffer::CHUNK 16384  # Chunk size of the netstack byte queues, 16 KiB. sing-tun slabs are goSlabSize = 32 KiB (`stack_go_ring.go:13`).
+netstack::buffer::MAX_RANGES 64  # Cap on out-of-order ranges kept per connection, 64. sing-tun goMaxOOORanges = 32 (`stack_go_ring.go:597`).
+netstack::buffer::POOL_LIMIT 512  # Free chunks kept in the pool, 512 x 16 KiB. sing-tun keeps goSlabPoolLowWater = 128 slabs of 32 KiB, split per engine (`stack_go_profile_default.go:18`, `stack_go_engine.go:221`).
+netstack::cc::MAX_CWND 67108864  # Congestion window clamp, 64 MiB. sing-tun goMaxCongestionSize = 4 MiB (`stack_go_tcp_input.go:39`, clamp at `stack_go_tcp_cong.go:147`).
+netstack::cc::MIN_RTT_WINDOW 10000000  # Window of the min-RTT filter, 10 s. sing-tun goMinRoundTripWindow = 300 s (`stack_go_tcp_cong.go:29`).
+netstack::frag::MAX_ENTRIES 32  # Concurrent IP reassembly entries, 32. sing-tun goReassemblyEntries = 8 (`stack_go_profile_default.go:17`).
+netstack::frag::TIMEOUT 15000000  # IP reassembly timeout, 15 s. sing-tun goReassemblyTimeout = 3 s (`stack_go_engine.go:848`).
+netstack::stream::DIRECT_SLICES 8  # Iovecs per DirectIo vectored read/write on the TUN stream (`stream.rs:379`, `:419`); no reference found.
+netstack::stream::UNSENT_LIMIT 524288  # Bytes taken from the app ahead of what the connection has sent, 512 KiB; comment names a direction only. No sing-tun counterpart found (transmit capacity 2 MiB, `stack_go_profile_default.go:10`).
+netstack::stream::WINDOW_NOTIFY 16384  # Freed receive space below which app reads do not wake the engine, 16 KiB; no reference found.
+netstack::tcp::KEEP_ALIVE 120000000  # Keepalive idle/probe interval, 120 s. sing-tun keepalive defaults idle 5 min, interval 75 s, count 9 (`stack_go_conn_options.go:9-11`); established conns idle 2h4m (`stack_go_conn.go:319`, `flow_dispatch.go:21`).
+netstack::tcp::TIME_WAIT 2000000  # TIME_WAIT hold, 2 s, far below RFC 9293 2 MSL; sing-tun has no TIME_WAIT timer, only goFinLinger = 5 s (`stack_go_tcp_input.go:26`).
+netstack::tcp::recovery::MAX_REO_MULT 16  # Cap of the RACK reordering-window multiplier, 16. sing-tun caps reorderWindowSteps at 0xff (`stack_go_tcp_ack.go:711`).
+netstack::tcp::recv::DELAYED_ACK 10000  # Delayed-ACK timer, 10 ms; comment gives a direction. sing-tun goDelayedAckInterval = 25 ms (`stack_go_tcp_input.go:37`).
+netstack::tcp::send::MIN_SEND_BUFFER 65536  # Floor of the autotuned send buffer, 64 KiB. sing-tun uses a fixed transmit capacity goTransmitCapacityMax = 2 MiB (`stack_go_conn.go:318`), user minimum goSlabSize 32 KiB (`stack_go_conn_options.go:84`).
+netstack::tcp::send::PAYLOAD_SLICES 8  # Iovecs for one emitted segment's payload; no reference found.
+netstack::tcp::timers::IDLE_TIMEOUT 360000000  # Abort after 360 s without receiving; sing-tun aborts after keepalive probes (75 s x 9 after idle, `stack_go_conn_options.go:9-11`). No matching reference.
+netstack::tcp::timers::MAX_RETRIES 15  # RTO retries before abort, 15. sing-tun goRetransmitLimit = 8 (`stack_go_tcp_input.go:28`).
+netstack::tcp::timers::MAX_SYN_RETRIES 4  # SYN/SYN-ACK retries before giving up, 4. sing-tun goSynAckAttempts = 5 (`stack_go_tcp_input.go:25`, `:1286`).
+netstack::tcp::timers::PROBE_FLOOR 10000  # Floor of the tail-loss probe timeout, 10 ms. sing-tun goProbeFloorMicros = 50000 (`stack_go_tcp_input.go:29`).
+platform::watch::POLL 2 s  # mihomo and sing-box use fsnotify events, which needs a watcher crate and a standing thread the design avoids (`crates/platform/src/watch.rs:16-17`). Needs that design decision.
+proto::DEFAULT_BATCH_MS 16  # sing-box's daemon sends each batch as soon as one entry arrives (`daemon/started_service.go:414-445`); 0 would change the host's frame rate. Needs a host-side measurement.
+proto::DEFAULT_CREDIT 4  # equals the FlClash host's `_initialCredit` and Kotlin `INITIAL_CREDIT` (FlClash rs `lib/core/api/core_client.dart:18`, `android/core/src/main/java/com/follow/clash/core/CoreClient.kt:23`); equality is a coupling, not a basis, and neither side derives 4 (no reference has batch credit).
+proto::MAX_MESSAGE 67108864  # equals the FlClash host's frame codec MAX_FRAME_SIZE (FlClash rs `plugins/rust_api/rust/src/ipc/frame.rs:4`); equality is a coupling, and neither side derives 64 MiB from the largest message it must carry.
+proxy::hysteria::BRUTAL_MTU 1200  # Initial datagram size given to Hysteria Brutal, 1200; mihomo Hysteria Brutal starts at 1252 (`transport/hysteria/congestion/brutal.go:11`, `initMaxDatagramSize = 1252`)
+proxy::hysteria::DATAGRAM_FRAME 1200  # Advertised max_datagram_frame_size 1200, chosen for Hysteria 1 server interop; mihomo's quic-go advertises 16383 (`internal/wire/datagram_frame.go:14`, `connection.go:351`)
+proxy::mieru::packet::OUT_QUEUE 32  # Per-session outgoing queue 32 on the packet underlay; Concord's own, no reference found
+proxy::mieru::underlay::BATCH 16  # Frames coalesced per stream-underlay write 16; Concord's own, no reference found
+proxy::mieru::underlay::OUT_QUEUE 32  # Stream underlay outgoing frame queue 32; Concord's own, no reference found
+proxy::shadowquic::BRUTAL_MTU 1200  # Datagram size handed to the Brutal/BBR controller at switch; equals Quinn INITIAL_MTU 1200 (`vendor/quinn-proto/src/lib.rs:332`) but mihomo Brutal starts at quic-go InitialPacketSize 1280 (`transport/tuic/congestion_v2/brutal.go:39`, quic-go `internal/protocol/params.go:12`).
+rpc::server::OUTBOX_DEPTH 16  # mihomo writes push frames inline with no queue (`hub/route/server.go:530-561`); depth one with backpressure changes how replies wait on each other. Needs a host-side measurement.
+rules::runs::KEYWORD_AUTOMATON_FROM 16  # Either drop is possible (always automaton, as aho-corasick advises, or always linear, as mihomo and sing-box do); needs a rule-matching measurement.
+tun::device::linux::TunDevice::try_send_parts::MAX_PARTS 10  # Bound on iovecs (vnet header + parts) for one vectored TUN write; no reference found.
+tun::stack::driver::DNS_CONCURRENCY 256  # In-flight hijacked DNS queries. Concord's own value with no reference or measurement behind it; sing-tun has no DNS in-flight cap.
+tun::stack::driver::MAX_ROUNDS 8  # Driver rounds per wake. Concord's own value with no reference or measurement behind it; sing-tun bounds a burst by goEngineBurstBytes 1 MiB (`stack_go_engine.go:642`).
+tun::stack::driver::MIN_FREE_SLOTS 2  # Free TX slots required before a round. Concord's own value with no reference or measurement behind it.
+tun::stack::driver::RX_BUFFER 65552  # sing-tun slot is virtioNetHdrLen(10) + gsoMaxSize + headroom (stack_go_io_linux.go:275); Concord 64 KiB + 16
+tun::stack::driver::SEGMENTED_SLOTS 64  # TX slots that grow to a GSO frame. Concord's own value with no reference or measurement behind it.
+tun::stack::driver::SWEEP_INTERVAL 15000000  # Driver sweep period, 15 s. Concord's own value with no reference or measurement behind it; sing-tun drives timers from a wheel.
+tun::stack::driver::TX_POOL_BYTES 1048576  # TX buffer pool bound, 1 MiB. Concord's own value with no reference or measurement behind it; sing-tun goEngineBurstBytes is also 1 MiB but bounds a different thing (`stack_go_profile_default.go:11`).
+tun::stack::queues::INBOX_LIMIT 256  # Cross-queue hand-off inbox bound. Concord's own value with no reference or measurement behind it; sing-tun has no cross-queue hand-off.
+tun::stack::udp::TABLE_LIMIT 65536  # TUN UDP reply table cap, 65536; sing-tun bounds flows at goFlowCapacity = 16384 split per engine (`stack_go_profile_default.go:12`, `stack_go_engine.go:220`).
+tun::vnet::SEGMENT_LIMIT 61440  # TCP payload per GSO frame, 61440. Concord's own margin under the 65535-byte IP length that sing-tun enforces (`stack_go_io_linux.go:543`).

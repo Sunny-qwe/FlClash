@@ -1,0 +1,62 @@
+proxies:
+  - {name: a, type: socks5, server: 192.0.2.1, port: 1080}
+  - {name: b, type: http, server: 192.0.2.2, port: 8080}
+proxy-providers:
+  remote:
+    type: http
+    url: https://example.test/sub
+    interval: 3600
+    path: ./providers/remote.yaml
+    health-check: {enable: true, url: "https://www.gstatic.com/generate_204", interval: 300}
+  local:
+    type: file
+    path: ./providers/local.yaml
+  inline:
+    type: inline
+    payload:
+      - {name: i1, type: socks5, server: 192.0.2.3, port: 1080}
+proxy-groups:
+  - {name: Select, type: select, proxies: [a, b, DIRECT, Auto], use: [remote]}
+  - {name: Auto, type: url-test, proxies: [a, b], url: "https://www.gstatic.com/generate_204", interval: 300, tolerance: 50, lazy: true}
+  - {name: Fall, type: fallback, proxies: [a, b], url: "https://www.gstatic.com/generate_204", interval: 300}
+  - {name: Balance, type: load-balance, proxies: [a, b], strategy: consistent-hashing}
+  - {name: Filtered, type: select, include-all: true, filter: "^a", exclude-filter: "b"}
+rule-providers:
+  ads:
+    type: http
+    behavior: domain
+    format: mrs
+    url: https://example.test/ads.mrs
+    path: ./rules/ads.mrs
+    interval: 86400
+  custom:
+    type: inline
+    behavior: classical
+    payload:
+      - DOMAIN-SUFFIX,custom.test
+sub-rules:
+  extra:
+    - DOMAIN,sub.test,DIRECT
+    - MATCH,Select
+rules:
+  - DOMAIN,exact.test,DIRECT
+  - DOMAIN-SUFFIX,suffix.test,Select
+  - DOMAIN-KEYWORD,keyword,Fall
+  - DOMAIN-WILDCARD,*.wild.test,Balance
+  - DOMAIN-REGEX,^re[0-9]+\.test$,REJECT
+  - GEOSITE,cn,DIRECT
+  - GEOIP,CN,DIRECT,no-resolve
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR6,fd00::/8,DIRECT,no-resolve
+  - SRC-IP-CIDR,192.168.1.0/24,Select
+  - DST-PORT,443,Select
+  - SRC-PORT,1000-2000,REJECT
+  - NETWORK,udp,DIRECT
+  - PROCESS-NAME,curl,DIRECT
+  - AND,((DOMAIN,and.test),(NETWORK,tcp)),Select
+  - OR,((DST-PORT,80),(DST-PORT,8080)),Select
+  - NOT,((DOMAIN-SUFFIX,not.test)),DIRECT
+  - RULE-SET,ads,REJECT
+  - RULE-SET,custom,Select
+  - SUB-RULE,(DOMAIN-SUFFIX,sub.test),extra
+  - MATCH,Select

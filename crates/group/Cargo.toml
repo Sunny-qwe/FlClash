@@ -1,0 +1,44 @@
+[package]
+name = "concord-group"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Proxy groups, providers and health checks for Concord"
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+concord-common = { workspace = true, features = ["io"] }
+concord-config = { workspace = true }
+concord-platform = { workspace = true }
+concord-proxy = { workspace = true }
+concord-tls = { workspace = true }
+tokio = { workspace = true, features = ["net", "time", "io-util", "macros", "rt", "sync"] }
+tokio-util = { workspace = true }
+futures-util = { workspace = true }
+async-trait = { workspace = true }
+arc-swap = { workspace = true }
+bytes = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
+indexmap = { workspace = true }
+md-5 = { workspace = true }
+psl = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+concord-test-support = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

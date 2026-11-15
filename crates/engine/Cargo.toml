@@ -1,0 +1,64 @@
+[package]
+name = "concord-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Concord's composition root: lifecycle, config apply and the running core"
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[features]
+default = ["mitm"]
+# Without it the MITM methods answer `unsupported_capability` and a `mitm` section is ignored.
+mitm = ["dep:concord-mitm"]
+
+[dependencies]
+concord-common = { workspace = true, features = ["io"] }
+concord-config = { workspace = true }
+concord-dns = { workspace = true }
+concord-group = { workspace = true }
+concord-inbound = { workspace = true }
+concord-net = { workspace = true }
+concord-platform = { workspace = true }
+concord-proxy = { workspace = true }
+concord-rules = { workspace = true }
+concord-tls = { workspace = true }
+concord-tun = { workspace = true }
+concord-tunnel = { workspace = true }
+concord-mitm = { workspace = true, optional = true }
+rustls-pki-types = { workspace = true }
+socket2 = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+md-5 = { workspace = true }
+rand = { workspace = true }
+time = { workspace = true }
+url = { workspace = true }
+tokio ={ workspace = true, features = ["full"] }
+tokio-util = { workspace = true }
+arc-swap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+futures-util = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+concord-test-support = { workspace = true }
+tempfile = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+tokio-rustls = { workspace = true }
+
+[lints]
+workspace = true

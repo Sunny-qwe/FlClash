@@ -1,0 +1,33 @@
+[package]
+name = "concord-common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Types, traits, errors and events shared across Concord's crates"
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[features]
+default = ["io"]
+# `config` and `rules` stay free of tokio, so everything async sits behind this.
+io = ["dep:tokio", "dep:tokio-util", "dep:async-trait", "dep:uuid"]
+
+[dependencies]
+compact_str = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, optional = true, features = ["net", "io-util", "time", "sync", "rt", "macros"] }
+tokio-util = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+
+[dev-dependencies]
+concord-test-support = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true

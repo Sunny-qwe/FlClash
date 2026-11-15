@@ -1,0 +1,287 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/common",
+    "crates/config",
+    "crates/rules",
+    "crates/platform",
+    "crates/net",
+    "crates/tls",
+    "crates/transport",
+    "crates/proxy",
+    "crates/dns",
+    "crates/group",
+    "crates/tunnel",
+    "crates/mitm",
+    "crates/inbound",
+    "crates/netstack",
+    "crates/tun",
+    "crates/engine",
+    "crates/proto",
+    "crates/api",
+    "crates/controller",
+    "crates/rpc",
+    "crates/ipc",
+    "crates/ffi",
+    "crates/test-support",
+    "bins/desktop",
+    "bins/android",
+    "tools/api-bench",
+    "tools/bench",
+    "xtask",
+]
+exclude = ["vendor/boring", "vendor/h2", "vendor/mio", "vendor/quinn", "vendor/quinn-proto", "vendor/rustls", "vendor/shadowsocks", "vendor/tun-rs"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "GPL-3.0-or-later"
+publish = false
+repository = "https://github.com/chen08209/concord"
+
+[workspace.dependencies]
+concord-common = { path = "crates/common", default-features = false }
+concord-config = { path = "crates/config" }
+concord-rules = { path = "crates/rules" }
+concord-platform = { path = "crates/platform" }
+concord-net = { path = "crates/net" }
+concord-tls = { path = "crates/tls" }
+concord-transport = { path = "crates/transport" }
+concord-proxy = { path = "crates/proxy" }
+concord-dns = { path = "crates/dns" }
+concord-group = { path = "crates/group" }
+concord-tunnel = { path = "crates/tunnel" }
+concord-mitm = { path = "crates/mitm" }
+concord-inbound = { path = "crates/inbound" }
+concord-netstack = { path = "crates/netstack" }
+concord-tun = { path = "crates/tun" }
+concord-engine = { path = "crates/engine" }
+concord-proto = { path = "crates/proto" }
+concord-api = { path = "crates/api" }
+concord-controller = { path = "crates/controller" }
+concord-rpc = { path = "crates/rpc" }
+concord-ipc = { path = "crates/ipc" }
+concord-ffi = { path = "crates/ffi" }
+concord-test-support = { path = "crates/test-support" }
+
+# Runtime. tokio >= 1.54.1 fixes a timer race that caused a use-after-free
+# (GHSA-5wjr-9356-4wc8).
+mio = { version = "1.2.4", default-features = false, features = ["os-poll", "os-ext"] }
+tokio = { version = "1.54.1", default-features = false }
+tokio-util = { version = "0.7.20", features = ["rt"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+async-trait = "0.1"
+bytes = "1"
+arc-swap = "1.9.3"
+dashmap = "6"
+socket2 = { version = "0.6.5", features = ["all"] }
+libc = "0.2"
+windows-sys = "0.61"
+
+# Serialization and config. serde-saphyr is pinned exactly because its error and
+# budget behavior is part of what the corpus tests pin.
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["preserve_order", "raw_value"] }
+serde-saphyr = "=2.0.0"
+schemars = "1.2.3"
+age = { version = "0.11.5", features = ["armor"] }
+granit-parser = { version = "=2.0.0", default-features = false, features = ["std", "error_messages"] }
+indexmap = { version = "2", features = ["serde"] }
+
+# Matching
+regex = "1.13.1"
+fancy-regex = "0.20"
+aho-corasick = "1.1.5"
+maxminddb = "0.32"
+prost = "0.14.4"
+ruzstd = "0.9.1"
+
+# TLS and QUIC
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12", "logging"] }
+aws-lc-rs = { version = "1.19", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12"] }
+rustls-native-certs = "0.8"
+rustls-pki-types = "1"
+webpki = { package = "rustls-webpki", version = "0.103", default-features = false, features = ["std", "aws-lc-rs"] }
+boring = "5.4"
+tokio-boring = "5.3"
+quinn = { version = "0.11.12", default-features = false, features = ["rustls-aws-lc-rs", "runtime-tokio"] }
+quinn-proto = { version = "0.11.19", default-features = false }
+h3 = "=0.0.8"
+h3-quinn = "=0.0.10"
+
+# Protocols
+shadowsocks = { version = "1.25", default-features = false }
+sha3 = "0.10"
+hyper = { version = "1.12", features = ["client", "http1", "http2", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http = "1"
+httparse = "1"
+http-body-util = "0.1"
+h2 = "0.4.20"
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+hickory-proto = { version = "0.26.3", default-features = false, features = ["std"] }
+gotatun = { version = "0.10.2", default-features = false, features = ["device", "aws-lc-rs"] }
+ipnetwork = "0.21"
+russh = { version = "0.65.1", default-features = false, features = ["aws-lc-rs"] }
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
+
+# Crypto primitives the TLS stacks do not expose
+sha1 = "0.10"
+sha2 = "0.10"
+md-5 = "0.10"
+psl = "2"
+hmac = "0.12"
+hkdf = "0.12"
+blake2 = "0.10"
+blake3 = "1"
+aes = "0.8"
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+cfb-mode = "0.8"
+crc32fast = "1"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc", "reduced-round"] }
+chacha20 = { version = "0.9", default-features = false, features = ["std"] }
+
+# TUN
+tun-rs = { version = "=2.8.16", default-features = false, features = ["async_tokio"] }
+smoltcp = { version = "0.14", default-features = false }
+route_manager = "0.2.17"
+core-foundation = "0.10"
+rtnetlink = "0.23"
+
+# Misc
+base64 = "0.22"
+clap = { version = "4.5", features = ["derive", "env"] }
+compact_str = { version = "0.9", features = ["serde"] }
+hex = "0.4"
+log = "0.4"
+num-bigint = { version = "0.4", default-features = false }
+percent-encoding = "2"
+proc-macro2 = { version = "1", default-features = false }
+quote = { version = "1", default-features = false }
+rand = "0.9"
+smallvec = "1"
+syn = { version = "2", default-features = false }
+thiserror = "2"
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "registry", "fmt"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
+brotli-decompressor = "5"
+x509-parser = { version = "0.18", default-features = false }
+rquickjs = { version = "0.14", default-features = false }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+allow_attributes_without_reason = "deny"
+disallowed_methods = "deny"
+undocumented_unsafe_blocks = "deny"
+
+# Fat LTO over BoringSSL and aws-lc takes minutes, so only the release profile
+# pays for it. `dev` keeps the C libraries optimized because the protocol tests
+# run real handshakes.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 1
+debug = false
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+strip = true
+
+# hysteria2 upload used about 10% less CPU with the runtime at 3 (Linux arm64, 4 builds); no size change.
+[profile.release.package.tokio]
+opt-level = 3
+
+[profile.release.package.mio]
+opt-level = 3
+
+[profile.release.package.bytes]
+opt-level = 3
+
+# `z` everywhere else costs these twice the apply time on a large profile.
+[profile.release.package.concord-config]
+opt-level = "s"
+
+[profile.release.package.concord-rules]
+opt-level = "s"
+
+[profile.release.package.concord-tun]
+opt-level = 3
+
+[profile.release.package.concord-netstack]
+opt-level = 3
+
+[profile.release.package.concord-net]
+opt-level = 3
+
+[profile.release.package.concord-tunnel]
+opt-level = 3
+
+[profile.release.package.concord-common]
+opt-level = 3
+
+[profile.release.package.concord-proxy]
+opt-level = 3
+
+[profile.release.package.concord-transport]
+opt-level = 3
+
+[profile.release.package.concord-tls]
+opt-level = 3
+
+[profile.release.package.concord-inbound]
+opt-level = 3
+
+[profile.release.package.concord-group]
+opt-level = 3
+
+[profile.release.package.quinn]
+opt-level = 3
+
+[profile.release.package.quinn-proto]
+opt-level = 3
+
+[profile.release.package.quinn-udp]
+opt-level = 3
+
+[profile.release.package.aes]
+opt-level = 3
+
+[profile.release.package.aes-gcm]
+opt-level = 3
+
+[profile.release.package.ghash]
+opt-level = 3
+
+[profile.release.package.polyval]
+opt-level = 3
+
+[profile.release.package.aws-lc-sys]
+opt-level = 3
+
+[patch.crates-io]
+boring = { path = "vendor/boring" }
+h2 = { path = "vendor/h2" }
+tun-rs = { path = "vendor/tun-rs" }
+quinn = { path = "vendor/quinn" }
+quinn-proto = { path = "vendor/quinn-proto" }
+shadowsocks = { path = "vendor/shadowsocks" }
+mio = { path = "vendor/mio" }
+
+rustls = { path = "vendor/rustls" }
