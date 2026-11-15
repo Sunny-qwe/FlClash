@@ -30,7 +30,7 @@ commit. xtask's
   sing-tun `611d83b7`, sing `v0.9.7-0.20261023115510` (`03a6cce6`), sing-anytls `580984e4`.
 - shadowsocks-rust `v1.25.0` (`ab388c7466d21f979430e33cc9ef10e22fb05955`), the Tokio TCP reference. Its original lock
   uses Tokio 1.53.1 and aws-lc-rs 1.18.0; the source build keeps the upstream full features and release profile.
-- Go 1.27.3, the toolchain of the reference builds; Rust 1.99.0 (`rust-toolchain.toml`) and Tokio 1.54.1
+- Go 1.27.3, the toolchain of the reference builds; Rust 1.100.0 (`rust-toolchain.toml`) and Tokio 1.54.1
   (`Cargo.lock`), Concord's own; Linux v7.0.
 - A clean mihomo source archive and the sing-box build provenance are kept with the bench reference builds.
 
@@ -133,9 +133,9 @@ Concord already takes these from the references; keep them unless the reference 
   implementations retain their framing and authentication state; scalar AsyncRead remains the default capability
   fallback.
 - [runtime-bound] **Vectored TCP signal handling** on Linux/Android uses socket2's
-  `send_vectored_with_flags(MSG_NOSIGNAL)`. Rust 1.99's scalar TCP write supplies the same flag
-  (`library/std/src/sys/net/connection/socket/mod.rs:439`); its vectored path delegates to `writev` through
-  `socket/unix.rs:372-373` and `sys/fd/unix.rs`. Per-call suppression preserves the scalar error behaviour without
+  `send_vectored_with_flags(MSG_NOSIGNAL)`. Rust 1.100's scalar TCP write supplies the same flag
+  (`library/std/src/sys/net/connection/socket/mod.rs:446`); its vectored path delegates to `writev` through
+  `socket/unix.rs:376-377` and `sys/fd/unix.rs`. Per-call suppression preserves the scalar error behaviour without
   depending on the embedding host's signal disposition.
 
 - [language-neutral] **AnyTLS writes** coalesce the frames of each accepted write into one TLS write group, with

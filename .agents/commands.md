@@ -114,8 +114,10 @@ Run nothing else on the machine while a bench measures, and a full run only on a
 - Do not give each crate or each agent its own target inside one checkout either; that multiplies a tree that already
   passes 10 GB.
 - Keep debug builds small: `CARGO_INCREMENTAL=0` and `CARGO_PROFILE_DEV_DEBUG=line-tables-only`.
-- Check `du -sh target` before and after a round. After a round of tests, `target/debug/deps` keeps many hashed copies
-  of the same crate; keep the two most recent per crate and delete the rest, and clear `target/debug/incremental`.
+- Check `du -sh target` before and after a round. Cargo keeps each compiled unit whole in
+  `target/debug/build/<package>/<hash>/`, and a round of tests leaves several hashes of the same package; keep the
+  two most recent per package and delete the rest, and clear `target/debug/incremental`. Find a binary through
+  cargo's JSON messages or the copy cargo places in `target/debug/`, not by its path under `build/`.
   First check that no one else is building in this checkout (`pgrep -f "cargo (test|build|clippy|check)"`).
 - Keep that target warm between builds, also on a measurement VM: prune hashes no recent build used rather than
   deleting the tree. Delete the whole target when the toolchain changes or the disk is short.

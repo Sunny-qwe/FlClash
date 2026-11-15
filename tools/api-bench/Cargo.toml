@@ -16,12 +16,14 @@ path = "src/main.rs"
 concord-common = { workspace = true, features = ["io"] }
 concord-api = { workspace = true }
 concord-engine = { workspace = true }
-concord-ipc = { workspace = true }
 concord-platform = { workspace = true }
 concord-rpc = { workspace = true }
 serde_json = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+
+[target.'cfg(unix)'.dependencies]
+concord-ipc = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

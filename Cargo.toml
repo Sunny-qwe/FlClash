@@ -35,7 +35,7 @@ exclude = ["vendor/boring", "vendor/h2", "vendor/mio", "vendor/quinn", "vendor/q
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.99"
+rust-version = "1.100"
 license = "GPL-3.0-or-later"
 publish = false
 repository = "https://github.com/chen08209/concord"
@@ -133,7 +133,6 @@ sha2 = "0.10"
 md-5 = "0.10"
 psl = "2"
 hmac = "0.12"
-hkdf = "0.12"
 blake2 = "0.10"
 blake3 = "1"
 aes = "0.8"

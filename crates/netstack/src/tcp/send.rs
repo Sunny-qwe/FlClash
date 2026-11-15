@@ -235,10 +235,7 @@ impl Tcb {
         } else {
             self.snd_nxt
         };
-        if self.ack_now && !self.emit(egress, state, ack_seq, 0, FLAG_ACK, now) {
-            return false;
-        }
-        true
+        !self.ack_now || self.emit(egress, state, ack_seq, 0, FLAG_ACK, now)
     }
 
     fn retransmit_lost(&mut self, now: u64, state: &SharedState, egress: &mut dyn Egress) -> bool {
