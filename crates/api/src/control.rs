@@ -582,7 +582,7 @@ impl ControlService for Control {
         let capabilities = self.engine.capabilities();
         ServiceInfo {
             server: ServerInfo {
-                implementation: "concord".to_string(),
+                implementation: concord_common::CORE_NAME.to_string(),
                 version: capabilities.version.to_string(),
                 build: self.options.build.clone(),
             },

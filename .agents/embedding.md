@@ -49,7 +49,7 @@ the host keeps no shadow copy.
 
 ## External Controller And State Sync
 
-`config.patch` with `externalController` (and `secret`) opens mihomo's REST API at that address through
+`config.patch` with `externalController` (and `secret`) opens the Clash REST API at that address through
 `concord-controller`; an empty address closes it, and a change moves it, ending the sessions on the old address. The
 profile's `external-controller` and `secret` are ignored while a host drives the core (`host_owned_key` warning).
 

@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 use crate::http::{
     Body, bad_request, empty, error, json, not_found, parse_body, query, segments, unsupported,
 };
-use crate::mihomo::{self, Catalog};
+use crate::shapes::{self, Catalog};
 use crate::stream;
 
 pub struct Routes {
@@ -34,7 +34,9 @@ impl Routes {
         let path = segments(request.uri().path());
         let path: Vec<&str> = path.iter().map(String::as_str).collect();
         match (&method, path.as_slice()) {
-            (&Method::GET, []) => json(&json!({ "hello": "mihomo" })),
+            (&Method::GET, []) => {
+                json(&json!({ "hello": self.control.info().server.implementation }))
+            }
             (&Method::GET, ["version"]) => json(&json!({
                 "meta": true,
                 "version": format!("v{}", self.control.info().server.version),
@@ -86,7 +88,7 @@ impl Routes {
 
     async fn logs(&self, request: Request<Incoming>) -> Response<Body> {
         let level = query(request.uri(), "level").unwrap_or_else(|| "info".to_string());
-        let Some(level) = mihomo::parse_level(&level) else {
+        let Some(level) = shapes::parse_level(&level) else {
             return bad_request();
         };
         let structured = query(request.uri(), "format").as_deref() == Some("structured");
@@ -240,7 +242,7 @@ impl Routes {
             return not_found();
         };
         match tail {
-            [] => json(&mihomo::group(info, catalog.states.get(*name))),
+            [] => json(&shapes::group(info, catalog.states.get(*name))),
             ["delay"] => {
                 if info.fixed.is_some() {
                     let _ = self.clear_fixed(name).await;
@@ -300,7 +302,7 @@ impl Routes {
 
     async fn rules(&self) -> Response<Body> {
         match self.control.rule_list(Empty {}).await {
-            Ok(list) => json(&mihomo::rules(&list.rules)),
+            Ok(list) => json(&shapes::rules(&list.rules)),
             Err(_) => json(&json!({ "rules": [] })),
         }
     }
@@ -424,7 +426,7 @@ impl Routes {
                     return not_found();
                 };
                 match rest {
-                    [] => json(&mihomo::node(member, catalog.states.get(*proxy))),
+                    [] => json(&shapes::node(member, catalog.states.get(*proxy))),
                     ["healthcheck"] => self.delay(&request, proxy).await,
                     _ => not_found_text(),
                 }
@@ -447,7 +449,7 @@ impl Routes {
             (&Method::GET, []) => {
                 let map: Map<String, Value> = providers
                     .iter()
-                    .map(|info| (info.name.clone(), mihomo::rule_provider(info)))
+                    .map(|info| (info.name.clone(), shapes::rule_provider(info)))
                     .collect();
                 json(&json!({ "providers": map }))
             }
@@ -473,7 +475,7 @@ impl Routes {
             qtype: Some(query(request.uri(), "type").unwrap_or_else(|| "A".to_string())),
         };
         match self.control.dns_query(params).await {
-            Ok(result) => json(&mihomo::dns(&result)),
+            Ok(result) => json(&shapes::dns(&result)),
             Err(err) if matches!(err.data, ErrorData::InvalidParams { .. }) => {
                 error(StatusCode::BAD_REQUEST, "invalid query type")
             }
@@ -489,7 +491,7 @@ impl Routes {
     ) -> Response<Body> {
         match (method, rest) {
             (&Method::GET, []) => match self.control.config_general(Empty {}).await {
-                Ok(state) => json(&mihomo::configs(&state)),
+                Ok(state) => json(&shapes::configs(&state)),
                 Err(err) => error(StatusCode::SERVICE_UNAVAILABLE, &err.message),
             },
             (&Method::PATCH, []) => self.patch(request).await,
@@ -741,7 +743,7 @@ fn patch_params(body: &Map<String, Value>, host_owned: bool) -> Result<ConfigPat
         "log-level",
         &["debug", "info", "warning", "error", "silent"],
     )? {
-        Some(level) => mihomo::parse_level(&level),
+        Some(level) => shapes::parse_level(&level),
         None => None,
     };
     params.allow_lan = flag("allow-lan")?;

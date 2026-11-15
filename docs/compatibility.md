@@ -28,12 +28,13 @@ widen exposure are never ignored silently, and keys that name a server's identit
 | `GEOIP` | Reads the mmdb or `GeoIP.dat` | Reads the mmdb only; `geodata-mode: true` and `geox-url.geoip` are ignored with a warning, and a code that only a custom `GeoIP.dat` held does not match. `GEOIP,!cn` negates against the mmdb |
 | `IP-ASN` and `SRC-IP-ASN` without `ASN.mmdb` | The apply downloads the file and fails if the download does | The apply goes ahead; the rules match nothing until the file, fetched in the background and retried, loads, and a `NOT` around one does not turn that into a match |
 | `dns.fallback-filter` left out | `geoip: true`, `geoip-code: CN` | `geoip: false` and no code, so no region is singled out; `geoip: true` without a `geoip-code` skips the GeoIP filter with a warning |
+| The process name of connections the core opens itself (provider updates, health checks, DNS through the tunnel) | `mihomo`, in the connections API, the routing log and `PROCESS-NAME` | `concord` |
 | File providers | Reloaded on file-system events | Reloaded by polling the file every 2 s |
 | Picking a dead `fallback` member | Stores the pick, then tests the member; a connection during the test drops the pick (`adapter/outboundgroup/fallback.go:105-145`) | Stores the pick, then tests the member; a connection during the test uses another member, and the pick stays until the test decides |
 
 ## External Controller
 
-Concord serves mihomo's REST and WebSocket API for dashboards such as metacubexd, zashboard and yacd, with the same
+Concord serves the Clash REST and WebSocket API, in mihomo's shapes, for dashboards such as metacubexd, zashboard and yacd, with the same
 paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differences:
 
 - Not served, answered with status 501: `/restart`, `/upgrade` (core, UI and geo), `/debug`, `/storage`, `/ui`
@@ -45,6 +46,8 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
 - `PUT /configs` reads a `path` only inside the home directory; `SAFE_PATHS` is not read. The profile, given by
   `path` or `payload` or, with neither, the file `concord run` started with, replaces the working `config.yaml`.
 - Connection `id`s are decimal numbers, not UUIDs.
+- `GET /` answers `{"hello":"concord"}`. metacubexd and zashboard check the backend with `/version` and do not read
+  it.
 - `/version` reports Concord's version with `meta: true`. Dashboards compare it with mihomo's releases, so they may
   offer a core update; the update itself answers 501.
 - `/rules` has no hit counters (`extra`), and `size` is always -1.

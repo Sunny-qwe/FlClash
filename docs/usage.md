@@ -49,12 +49,12 @@ The home directory (`-d`, default `~/.config/concord`) holds:
 
 `GEOIP` reads `Country.mmdb` (or `geoip.metadb`), `IP-ASN` reads `ASN.mmdb` and `GEOSITE` reads `GeoSite.dat` from
 the home directory. A file that a rule needs and the directory lacks is downloaded from the profile's `geox-url`,
-which defaults to mihomo's `MetaCubeX/meta-rules-dat` releases. Files placed there beforehand are used as they are.
+which defaults to the `MetaCubeX/meta-rules-dat` releases. Files placed there beforehand are used as they are.
 
 ## Dashboards
 
-The profile's `external-controller` and `secret` serve mihomo's REST API, so dashboards such as metacubexd, zashboard
-and yacd connect as they do to mihomo. [compatibility.md](compatibility.md) lists the endpoints that differ.
+The profile's `external-controller` and `secret` serve the Clash REST API, so dashboards such as metacubexd, zashboard
+and yacd connect as they do to other Clash cores. [compatibility.md](compatibility.md) lists the endpoints that differ.
 
 ## Embedding
 

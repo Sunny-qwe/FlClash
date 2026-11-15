@@ -31,6 +31,10 @@ pub mod stream;
 #[cfg(feature = "io")]
 pub mod stream_buffer;
 
+/// The core's own name: the process of the connections it opens itself and the implementation it
+/// reports to hosts.
+pub const CORE_NAME: &str = "concord";
+
 /// What end users see this core called: the MITM CA's subject and the Android TUN device. The
 /// embedding app sets `CONCORD_PRODUCT_NAME` when it builds Concord.
 pub const PRODUCT_NAME: &str = match option_env!("CONCORD_PRODUCT_NAME") {

@@ -1,11 +1,11 @@
-//! mihomo's REST and WebSocket API (the "external controller") for dashboards.
+//! The Clash REST and WebSocket API (the "external controller") for dashboards.
 //! Every route calls the same `concord_api::Control` a host calls and converts
-//! the answer to mihomo's JSON; the controller keeps no state beyond its
-//! listener and the sessions on it.
+//! the answer to the JSON mihomo's controller writes; the controller keeps no
+//! state beyond its listener and the sessions on it.
 
 mod http;
-mod mihomo;
 mod routes;
+mod shapes;
 mod stream;
 
 use std::convert::Infallible;

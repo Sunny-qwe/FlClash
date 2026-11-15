@@ -39,7 +39,7 @@ mod tests {
         assert_eq!(
             keys::TOP_T0.len() + keys::TOP_T1.len() + keys::TOP_T2.len(),
             66,
-            "the 66 top-level mihomo keys"
+            "the 66 top-level profile keys"
         );
         assert_eq!(
             schema["rule-types"]["t0"].as_array().map(Vec::len),

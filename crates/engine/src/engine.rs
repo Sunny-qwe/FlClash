@@ -285,7 +285,7 @@ impl Engine {
     pub fn capabilities(&self) -> Capabilities {
         let config = apply::capabilities();
         Capabilities {
-            implementation: "concord",
+            implementation: concord_common::CORE_NAME,
             version: env!("CARGO_PKG_VERSION"),
             proxy_types: config.proxy_types,
             transports: config.transports,

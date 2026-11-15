@@ -1,4 +1,4 @@
-//! Concord's API types in the JSON shapes mihomo's controller writes.
+//! Concord's API types in the JSON shapes of the Clash API, as mihomo's controller writes them.
 
 use std::collections::HashMap;
 

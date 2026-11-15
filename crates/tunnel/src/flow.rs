@@ -3,15 +3,14 @@ use std::sync::Arc;
 
 use concord_common::addr::unmap;
 use concord_common::{
-    Address, ConnMeta, DnsMode, FlowKey, FlowMeta, Host, InboundKind, ProcessInfo, RouteState,
+    Address, CORE_NAME, ConnMeta, DnsMode, FlowKey, FlowMeta, Host, InboundKind, ProcessInfo,
+    RouteState,
 };
 use concord_dns::Resolver;
 use concord_rules::Observed;
 
 use crate::intercept::InterceptFlow;
 use crate::sniff::SniffTarget;
-
-pub(crate) const INNER_NAME: &str = "mihomo";
 
 /// mihomo's `Metadata`: what a flow has learned about where it is going.
 #[derive(Clone, Debug)]
@@ -86,7 +85,7 @@ impl FlowState {
             process: inner.then(|| {
                 Arc::new(ProcessInfo {
                     uid: None,
-                    name: INNER_NAME.to_string(),
+                    name: CORE_NAME.to_string(),
                     path: String::new(),
                 })
             }),
@@ -174,7 +173,7 @@ impl FlowState {
 
     pub fn source_detail(&self) -> String {
         if self.meta.inbound.kind == InboundKind::Inner {
-            return INNER_NAME.to_string();
+            return CORE_NAME.to_string();
         }
         let source = self.meta.src;
         let process = self.process.as_deref();
@@ -331,7 +330,7 @@ mod tests {
         }));
         assert_eq!(flow.source_detail(), "10.0.0.1:1000(curl, uid=1000)");
         flow.meta.inbound.kind = InboundKind::Inner;
-        assert_eq!(flow.source_detail(), "mihomo");
+        assert_eq!(flow.source_detail(), "concord");
     }
 
     #[test]

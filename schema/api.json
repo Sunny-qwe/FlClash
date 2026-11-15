@@ -2432,7 +2432,7 @@
           ],
           "format": "uint32",
           "minimum": 0,
-          "description": "Tests running at once. Default: every proxy at once, as mihomo tests a group."
+          "description": "Tests running at once. Default: every proxy at once, as the Clash API tests a group."
         },
         "expected": {
           "type": [

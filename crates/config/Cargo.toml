@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Clash and mihomo profile parsing and validation for Concord"
+description = "Clash profile parsing and validation for Concord"
 repository.workspace = true
 
 [lib]

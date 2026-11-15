@@ -226,7 +226,7 @@ async fn the_secret_guards_every_route_and_a_websocket_may_pass_it_as_a_token() 
     assert_eq!(open.status, 401);
     assert_eq!(open.json(), json!({ "message": "Unauthorized" }));
     let hello = rig.call("GET", "/", None).await;
-    assert_eq!(hello.json(), json!({ "hello": "mihomo" }));
+    assert_eq!(hello.json(), json!({ "hello": "concord" }));
     let version = rig.call("GET", "/version", None).await.json();
     assert_eq!(version["meta"], true);
     assert!(version["version"].as_str().unwrap().starts_with('v'));
