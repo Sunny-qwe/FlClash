@@ -27,6 +27,7 @@ use crate::group::{Emptiness, Group, GroupParts, Pick, Policy, Touch};
 use crate::health::StatusRanges;
 use crate::node::{Ghost, Item, Leaf, Node};
 use crate::provider::{self, ProxyProvider};
+use crate::selection::Probing;
 use crate::shared::Shared;
 use crate::strategy::Strategy;
 
@@ -68,6 +69,7 @@ pub struct Staged {
     target: Arc<Group>,
     proxy: String,
     before: String,
+    probing: Option<Probing>,
 }
 
 pub fn load_balancer_exit(group: &str) -> String {
@@ -704,7 +706,9 @@ impl Outbounds {
 
     /// Stores the pick, as mihomo's `Set` does before it tests a fallback
     /// member (`fallback.go:139-145`); `settle_selection` tells whether routing
-    /// moved once `probe_selection` has run.
+    /// moved once `probe_selection` has run. A fallback member believed dead is
+    /// marked under test before it is stored, so routing in between cannot drop
+    /// the pick before the test decides.
     pub fn stage_selection(&self, group: &str, proxy: &str) -> Result<Staged, SelectOutcome> {
         let fail = |message: &str| SelectOutcome {
             message: message.to_string(),
@@ -720,6 +724,7 @@ impl Outbounds {
         }
         let before = target.now(&dummy_flow(Address::new("", 0), Network::Tcp));
         let store = &self.shared.selections;
+        let mut probing = None;
         if proxy.is_empty() {
             if matches!(target.policy(), Policy::Select { .. }) {
                 store.set(group, "");
@@ -734,12 +739,20 @@ impl Outbounds {
             if !listed {
                 return Err(fail("proxy not exist"));
             }
+            if matches!(target.policy(), Policy::Fallback)
+                && members
+                    .find(proxy)
+                    .is_some_and(|node| !node.health().alive_for(target.url()))
+            {
+                probing = Some(store.probing(target.name()));
+            }
             store.set(group, proxy);
         }
         Ok(Staged {
             target,
             proxy: proxy.to_string(),
             before,
+            probing,
         })
     }
 
@@ -747,23 +760,23 @@ impl Outbounds {
     /// it. Holds no lock, so a slow probe never delays another change.
     pub async fn probe_selection(&self, staged: &Staged) {
         let target = &staged.target;
-        if staged.proxy.is_empty() || !matches!(target.policy(), Policy::Fallback) {
-            return;
-        }
-        if let Some(node) = target.members().find(&staged.proxy)
-            && !node.health().alive_for(target.url())
+        if staged.probing.is_some()
+            && let Some(node) = target.members().find(&staged.proxy)
         {
-            let _probing = self.shared.selections.probing(target.name());
             self.url_test_node(node, target.url(), target.expected(), PROBE_TIMEOUT)
                 .await;
         }
     }
 
     pub fn settle_selection(&self, staged: Staged) -> SelectOutcome {
-        let changed = staged
-            .target
-            .now(&dummy_flow(Address::new("", 0), Network::Tcp))
-            != staged.before;
+        let Staged {
+            target,
+            before,
+            probing,
+            ..
+        } = staged;
+        drop(probing);
+        let changed = target.now(&dummy_flow(Address::new("", 0), Network::Tcp)) != before;
         self.refresh_picks();
         SelectOutcome {
             message: String::new(),
