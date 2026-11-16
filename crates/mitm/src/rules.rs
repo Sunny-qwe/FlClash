@@ -119,7 +119,7 @@ pub struct MapLocal {
 pub struct Rules {
     pub(crate) url_rewrites: Vec<UrlRewrite>,
     pub(crate) header_rewrites: Vec<HeaderRewrite>,
-    pub(crate) body_rewrites: Vec<BodyRewrite>,
+    pub(crate) body_rewrites: Vec<std::sync::Arc<BodyRewrite>>,
     pub(crate) map_locals: Vec<MapLocal>,
     pub(crate) scripts: Vec<std::sync::Arc<Script>>,
 }
@@ -590,10 +590,15 @@ impl Rules {
             .count()
     }
 
-    pub(crate) fn body_rewrites_for(&self, url: &str, response: bool) -> Vec<&BodyRewrite> {
+    pub(crate) fn body_rewrites_for(
+        &self,
+        url: &str,
+        response: bool,
+    ) -> Vec<std::sync::Arc<BodyRewrite>> {
         self.body_rewrites
             .iter()
             .filter(|rule| rule.response == response && rule.pattern.is_match(url))
+            .cloned()
             .collect()
     }
 

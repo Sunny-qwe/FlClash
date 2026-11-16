@@ -1,6 +1,8 @@
 use std::io;
 use std::sync::Arc;
 
+use bytes::Bytes;
+
 use http::header::{ACCEPT_ENCODING, CONNECTION, CONTENT_ENCODING, HOST, UPGRADE};
 use http::{HeaderMap, HeaderValue, Request, Response, StatusCode, Uri, Version};
 use hyper::body::Incoming;
@@ -12,6 +14,7 @@ use crate::exchange::{OutRequest, ReplyError, Sent, Target, has_response_body, s
 use crate::headers::{is_grpc, remove_hop_by_hop, text, with_host};
 use crate::limits::{BODY_WAIT, PRESSURE_NO_BODIES};
 use crate::rules::BodyRewrite;
+use crate::script::DEFAULT_SCRIPT_TIMEOUT;
 use crate::session::{PoolKey, Sender, Session};
 use http_body_util::BodyExt;
 
@@ -64,7 +67,7 @@ impl Session {
                 .await
         {
             let body = std::mem::replace(&mut out.body, empty());
-            match rewrite_body(&mut out.headers, body, out.length, max_body, &body_rules).await {
+            match rewrite_body(&mut out.headers, body, out.length, max_body, body_rules).await {
                 Ok((body, length)) => {
                     out.set_body(body, length);
                     target.cap.note("body-rewrite", PHASE_REQUEST, "");
@@ -165,7 +168,7 @@ impl Session {
         {
             let source = std::mem::replace(body, empty());
             let (rewritten, length) =
-                rewrite_body(&mut head.headers, source, length, max_body, &body_rules).await?;
+                rewrite_body(&mut head.headers, source, length, max_body, body_rules).await?;
             *body = rewritten;
             set_length(&mut head.headers, length);
             target.cap.note("body-rewrite", PHASE_RESPONSE, "");
@@ -282,28 +285,116 @@ pub(crate) async fn rewrite_body(
     body: Body,
     length: Option<u64>,
     limit: i64,
-    rules: &[&BodyRewrite],
+    rules: Vec<Arc<BodyRewrite>>,
 ) -> io::Result<(Body, Option<u64>)> {
     match buffer_body(headers, body, length, limit).await? {
         Buffered::Rest { body, length } => Ok((body, length)),
-        Buffered::Whole(data) => match String::from_utf8(data) {
-            Err(invalid) => {
-                let data = invalid.into_bytes();
-                let length = data.len() as u64;
-                Ok((full(data), Some(length)))
-            }
-            Ok(text) => {
-                let text = rules.iter().fold(text, |text, rule| rule.apply(text));
-                let length = text.len() as u64;
-                Ok((full(text), Some(length)))
-            }
-        },
+        Buffered::Whole(data) => {
+            let data = apply_off_runtime(Bytes::from(data), rules, DEFAULT_SCRIPT_TIMEOUT).await;
+            let length = data.len() as u64;
+            Ok((full(data), Some(length)))
+        }
+    }
+}
+
+/// Rewrites run on the blocking pool, as a jq filter may run for long or never end. One that
+/// outlives `budget` leaves the body as it came; its thread runs on until the filter returns.
+pub(crate) async fn apply_off_runtime(
+    data: Bytes,
+    rules: Vec<Arc<BodyRewrite>>,
+    budget: std::time::Duration,
+) -> Bytes {
+    let input = data.clone();
+    let work = tokio::task::spawn_blocking(move || {
+        let text = std::str::from_utf8(&input).ok()?.to_owned();
+        Some(rules.iter().fold(text, |text, rule| rule.apply(text)))
+    });
+    match tokio::time::timeout(budget, work).await {
+        Ok(Ok(Some(text))) => Bytes::from(text),
+        Ok(Ok(None)) => data,
+        Ok(Err(err)) => {
+            tracing::warn!("[MITM] a body rewrite failed: {err}");
+            data
+        }
+        Err(_) => {
+            tracing::warn!(
+                "[MITM] a body rewrite ran past {budget:?}, the body passes on as it came"
+            );
+            data
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::parse_body_rewrite;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    fn rules(lines: &[&str]) -> Vec<Arc<BodyRewrite>> {
+        lines
+            .iter()
+            .map(|line| Arc::new(parse_body_rewrite(line).unwrap()))
+            .collect()
+    }
+
+    const SLOW: &str =
+        r"http-response-jq ^http:// '.n = (reduce range(3000000) as $i (0; . + $i))'";
+
+    #[tokio::test]
+    async fn a_long_rewrite_leaves_the_runtime_free() {
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let ticker = tokio::spawn({
+            let ticks = ticks.clone();
+            async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                    ticks.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+        let started = Instant::now();
+        let out = apply_off_runtime(
+            Bytes::from_static(b"{}"),
+            rules(&[SLOW]),
+            Duration::from_secs(600),
+        )
+        .await;
+        ticker.abort();
+        assert_eq!(&out[..], br#"{"n":4499998500000}"#);
+        assert!(
+            ticks.load(Ordering::Relaxed) > 0,
+            "the ticker on the same thread never ran in {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rewrite_past_its_budget_keeps_the_body() {
+        let out = apply_off_runtime(
+            Bytes::from_static(b"{}"),
+            rules(&[SLOW]),
+            Duration::from_millis(1),
+        )
+        .await;
+        assert_eq!(&out[..], b"{}");
+        let out = apply_off_runtime(
+            Bytes::from_static(b"{\"ad\":1}"),
+            rules(&[
+                r"http-response ^http:// ad noad",
+                "http-response-jq ^http:// '.x = 1'",
+            ]),
+            Duration::from_secs(600),
+        )
+        .await;
+        assert_eq!(&out[..], br#"{"noad":1,"x":1}"#);
+        let raw = Bytes::from_static(&[0xff, 0xfe]);
+        assert_eq!(
+            apply_off_runtime(raw.clone(), rules(&[SLOW]), Duration::from_secs(600)).await,
+            raw
+        );
+    }
 
     #[test]
     fn a_request_adapts_to_http1_and_http2() {

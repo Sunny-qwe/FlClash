@@ -129,7 +129,10 @@ const LISTS: [ListSpec; 6] = [
         key: "body-rewrite",
         lines: |raw| &raw.body_rewrite,
         add: |config, _, line| {
-            config.rules.body_rewrites.push(parse_body_rewrite(line)?);
+            config
+                .rules
+                .body_rewrites
+                .push(Arc::new(parse_body_rewrite(line)?));
             Ok(())
         },
     },

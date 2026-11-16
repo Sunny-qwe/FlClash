@@ -18,7 +18,7 @@ pub const EVENT_NETWORK_CHANGED: &str = "network-changed";
 pub const EVENT_ENGINE_STARTED: &str = "engine-started";
 pub const EVENT_PROFILE_RELOADED: &str = "profile-reloaded";
 
-const DEFAULT_SCRIPT_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const DEFAULT_SCRIPT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_SCRIPT_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_TASK_TIMEOUT: Duration = Duration::from_secs(3600);
 const LOON_NETWORK_CHANGED: &str = "network-changed";

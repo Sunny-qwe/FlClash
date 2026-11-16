@@ -108,4 +108,6 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
   and `random` with a warning.
 - **TProxy UDP** does not carry DSCP.
 - **MITM:** `cron` scripts are not exercised end to end; WebSocket over HTTP/2, reclaiming upstream connections after
-  90 s idle, and a per-chunk limit against zip bombs are not implemented.
+  90 s idle, and a per-chunk limit against zip bombs are not implemented. Body rewrites run on the blocking pool and
+  give up after 5 s (the Surge script default), leaving the body as it came; a jq filter that never ends, such as
+  `until(false; .)`, keeps its blocking thread busy until the process exits, as jaq cannot be interrupted.
