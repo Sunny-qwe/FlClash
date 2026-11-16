@@ -58,7 +58,7 @@ impl<C: PlatformHost> Core<C> {
         let server = Arc::new(Server::new(control.clone()));
         runtime.spawn(concord_controller::serve(control.clone()));
         drop(entered);
-        let hub = Hub::new(runtime.handle().clone(), server, control.clone());
+        let hub = Hub::new(runtime.handle().clone(), server);
         Ok(Core {
             _runtime: runtime,
             control,
