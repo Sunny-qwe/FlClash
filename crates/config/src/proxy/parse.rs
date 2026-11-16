@@ -29,6 +29,8 @@ pub const T1_PROXY_TYPES: &[&str] = &[
     "mieru",
     "ssh",
     "shadowquic",
+    "dns",
+    "rematch",
 ];
 pub const T2_PROXY_TYPES: &[&str] = &[
     "tailscale",
@@ -39,17 +41,10 @@ pub const T2_PROXY_TYPES: &[&str] = &[
     "sudoku",
     "trusttunnel",
     "gost-relay",
-    "rematch",
-    "dns",
 ];
 
 const T2_NETWORKS: &[&str] = &["mkcp", "kcp", "mekya"];
-const T2_TLS_KEYS: &[&str] = &[
-    "shadow-tls-opts",
-    "restls-opts",
-    "jls-opts",
-    "tlsmirror-opts",
-];
+const T2_TLS_KEYS: &[&str] = &["restls-opts", "jls-opts", "tlsmirror-opts"];
 const T2_SS_PLUGINS: &[&str] = &["restls", "gost-plugin", "kcptun", "jls"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -162,11 +157,16 @@ fn parse_typed(
             return quarantine(format!("option '{key}' is not supported by this core"));
         }
     }
+    if !matches!(type_name, "vmess" | "vless" | "trojan" | "anytls") {
+        f.ignore("shadow-tls-opts", "this type does not use ShadowTLS");
+    }
     let common = common_opts(f)?;
     let smux = smux_opts(f, caps)?;
     let kind = match type_name {
         "direct" => ProxyKind::Direct(DirectOpts),
         "reject" => ProxyKind::Reject(RejectOpts),
+        "dns" => ProxyKind::Dns(DnsOpts),
+        "rematch" => ProxyKind::Rematch(super::rematch::parse(f)?),
         "ss" => ProxyKind::Ss(parse_ss(f, caps)?),
         "vmess" => ProxyKind::Vmess(Box::new(parse_vmess(f, caps)?)),
         "vless" => ProxyKind::Vless(Box::new(parse_vless(f, caps)?)),
@@ -290,7 +290,26 @@ fn reality_opts(f: &mut Fields<'_>) -> R<Option<RealityOpts>> {
 fn tls_opts(f: &mut Fields<'_>, name_key: &str, caps: &Capabilities) -> R<TlsOpts> {
     let mut tls = tls_fields(f, name_key, caps)?;
     tls.reality = reality_opts(f)?;
+    tls.shadow_tls = shadow_tls_layer(f)?.flatten();
     Ok(tls)
+}
+
+/// mihomo `ShadowTLSOptions.Parse` (`adapter/outbound/shadowtls.go:10-15`): written with neither
+/// a password nor a version it is off, and version 0 means 2.
+fn shadow_tls_layer(f: &mut Fields<'_>) -> R<Option<Option<ShadowTlsLayer>>> {
+    let Some(mut o) = f.sub("shadow-tls-opts")? else {
+        return Ok(None);
+    };
+    let password = o.string("password")?;
+    let version = o.i64("version")?;
+    if password.is_empty() && version == 0 {
+        return Ok(Some(None));
+    }
+    let version = if version == 0 { 2 } else { version };
+    let Some(version) = u8::try_from(version).ok().filter(|v| (1..=3).contains(v)) else {
+        return quarantine(format!("shadow-tls: unknown protocol version: {version}"));
+    };
+    Ok(Some(Some(ShadowTlsLayer { password, version })))
 }
 
 /// mihomo reads `reality-opts` on vmess, vless and trojan only.
@@ -313,6 +332,7 @@ fn tls_fields(f: &mut Fields<'_>, name_key: &str, caps: &Capabilities) -> R<TlsO
         client_fingerprint: f.string("client-fingerprint")?,
         reality: None,
         ech: ech_opts(f, caps)?,
+        shadow_tls: None,
     })
 }
 
@@ -388,6 +408,7 @@ fn xhttp_download(mut d: Fields<'_>, caps: &Capabilities) -> R<XhttpDownload> {
         server_name: opt_text(&mut d, "servername")?,
         client_fingerprint: opt_text(&mut d, "client-fingerprint")?,
         ech: ech_opts(&mut d, caps)?,
+        shadow_tls: shadow_tls_layer(&mut d)?,
     })
 }
 
@@ -789,6 +810,7 @@ fn parse_anytls(f: &mut Fields<'_>, caps: &Capabilities) -> R<AnyTlsOpts> {
     let password = f.req_string("password")?;
     let mut tls = tls_without_reality(f, "sni", caps)?;
     tls.enabled = true;
+    tls.shadow_tls = shadow_tls_layer(f)?.flatten();
     // mihomo reads these as int; a negative one acts as unset.
     let mut non_negative =
         |key: &str| -> R<u32> { Ok(u32::try_from(f.i64(key)?.max(0)).unwrap_or(u32::MAX)) };
@@ -1115,6 +1137,44 @@ mod tests {
     }
 
     #[test]
+    fn rematch_preserves_absent_and_empty_targets() {
+        for (field, opts) in [
+            (
+                "target-rematch-name",
+                RematchOpts {
+                    target_rematch_name: Some(String::new()),
+                    target_sub_rule: None,
+                },
+            ),
+            (
+                "target-sub-rule",
+                RematchOpts {
+                    target_rematch_name: None,
+                    target_sub_rule: Some(String::new()),
+                },
+            ),
+        ] {
+            let mut value = json!({"name": "r", "type": "rematch"});
+            value[field] = json!("");
+            assert_eq!(def(value).kind, ProxyKind::Rematch(opts));
+        }
+        assert_eq!(
+            error(json!({"name": "r", "type": "rematch"})),
+            "rematch requires at least one of target-rematch-name or target-sub-rule"
+        );
+        let proxy = def(
+            json!({"name":"r", "type":"rematch", "target-rematch-name":"Next", "target-sub-rule":"inner"}),
+        );
+        assert_eq!(
+            proxy.kind,
+            ProxyKind::Rematch(RematchOpts {
+                target_rematch_name: Some("Next".into()),
+                target_sub_rule: Some("inner".into())
+            })
+        );
+    }
+
+    #[test]
     fn supported_types_parse_with_weak_typing() {
         let p = def(
             json!({"name": "a", "type": "ss", "server": "x", "port": "8388", "cipher": "aes-128-gcm",
@@ -1161,8 +1221,8 @@ mod tests {
     #[test]
     fn download_settings_with_a_tls_layer_this_core_lacks_set_the_node_aside() {
         let node = json!({"name": "e", "type": "vless", "server": "x", "port": 1, "uuid": "u", "network": "xhttp",
-            "xhttp-opts": {"download-settings": {"shadow-tls-opts": {"host": "a.test"}}}});
-        assert!(quarantined(node).contains("download-settings.shadow-tls-opts"));
+            "xhttp-opts": {"download-settings": {"jls-opts": {"password": "p"}}}});
+        assert!(quarantined(node).contains("download-settings.jls-opts"));
     }
 
     #[test]
@@ -1289,8 +1349,6 @@ mod tests {
             "sudoku",
             "trusttunnel",
             "gost-relay",
-            "rematch",
-            "dns",
         ] {
             let reason = quarantined(json!({"name": "n", "type": kind}));
             assert!(reason.contains(kind), "{reason}");
@@ -1302,7 +1360,6 @@ mod tests {
         for (key, value) in [
             ("network", json!("mkcp")),
             ("network", json!("kcp")),
-            ("shadow-tls-opts", json!({"host": "h"})),
             ("restls-opts", json!({})),
             ("jls-opts", json!({})),
             ("tlsmirror-opts", json!({})),
@@ -1478,6 +1535,71 @@ mod tests {
         };
         assert!(tls(json!({"alpn": []})).alpn_set);
         assert!(!tls(json!({})).alpn_set);
+    }
+
+    #[test]
+    fn shadow_tls_opts_are_read_on_the_types_mihomo_reads_them_on() {
+        let layer = |password: &str, version| {
+            Some(ShadowTlsLayer {
+                password: password.to_string(),
+                version,
+            })
+        };
+        let opts = |kind: &str, extra: Value| {
+            let mut node = json!({"name": "n", "type": kind, "server": "x", "port": 1, "uuid": "u",
+                "cipher": "auto", "password": "p", "tls": true});
+            node["shadow-tls-opts"] = extra;
+            def(node)
+        };
+        let tls_of = |def: ProxyDef| match def.kind {
+            ProxyKind::Vmess(o) => o.tls,
+            ProxyKind::Vless(o) => o.tls,
+            ProxyKind::Trojan(o) => o.tls,
+            ProxyKind::AnyTls(o) => o.tls,
+            _ => panic!("not a TLS node"),
+        };
+        for kind in ["vmess", "vless", "trojan", "anytls"] {
+            let tls = tls_of(opts(kind, json!({"password": "s", "version": 3})));
+            assert_eq!(tls.shadow_tls, layer("s", 3), "{kind}");
+        }
+        assert_eq!(
+            tls_of(opts("vmess", json!({"password": "s"}))).shadow_tls,
+            layer("s", 2)
+        );
+        assert_eq!(tls_of(opts("vmess", json!({}))).shadow_tls, None);
+        assert!(
+            quarantined(
+                json!({"name": "n", "type": "trojan", "server": "x", "port": 1,
+            "password": "p", "shadow-tls-opts": {"password": "s", "version": 4}})
+            )
+            .contains("unknown protocol version: 4")
+        );
+
+        let ss = def(
+            json!({"name": "n", "type": "ss", "server": "x", "port": 1, "cipher": "aes-128-gcm",
+            "password": "p", "shadow-tls-opts": {"password": "s", "version": 3}}),
+        );
+        assert_eq!(ss.ignored.len(), 1, "{:?}", ss.ignored);
+
+        let xhttp = |ds: Value| {
+            let node = def(
+                json!({"name": "n", "type": "vless", "server": "x", "port": 1, "uuid": "u",
+                "tls": true, "network": "xhttp", "xhttp-opts": {"download-settings": ds}}),
+            );
+            let ProxyKind::Vless(o) = node.kind else {
+                panic!("not vless")
+            };
+            let Transport::Xhttp(x) = o.transport else {
+                panic!("not xhttp")
+            };
+            x.download.map(|d| d.shadow_tls)
+        };
+        assert_eq!(xhttp(json!({})), Some(None));
+        assert_eq!(xhttp(json!({"shadow-tls-opts": {}})), Some(Some(None)));
+        assert_eq!(
+            xhttp(json!({"shadow-tls-opts": {"password": "d", "version": 1}})),
+            Some(Some(layer("d", 1)))
+        );
     }
 
     #[test]

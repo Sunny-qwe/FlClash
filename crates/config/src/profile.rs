@@ -1083,7 +1083,7 @@ rules:
 
     #[test]
     fn unknown_and_malformed_rules_are_hard_errors() {
-        assert!(error("rules:\n  - REMATCH-NAME,x,DIRECT\n").contains("rules[0]"));
+        assert!(error("rules:\n  - UNKNOWN-RULE,x,DIRECT\n").contains("rules[0]"));
         assert!(error("rules:\n  - DOMAIN,only\n").contains("format invalid"));
     }
 

@@ -19,6 +19,7 @@ use super::inbox::{Inbox, send_detached, write_frames};
 use crate::http1::invalid;
 
 const VERSION: u8 = 1;
+const FIRST_STREAM_ID: u32 = 3;
 const CMD_SYN: u8 = 0;
 const CMD_FIN: u8 = 1;
 const CMD_PSH: u8 = 2;
@@ -83,7 +84,7 @@ impl SmuxSession {
         let (tx, rx) = mpsc::channel(QUEUE);
         let core = Arc::new(Core {
             streams: Mutex::new(HashMap::new()),
-            next_id: AtomicU32::new(1),
+            next_id: AtomicU32::new(FIRST_STREAM_ID),
             tx,
             closed: AtomicBool::new(false),
             bucket: AtomicI64::new(MAX_RECEIVE_BUFFER),
@@ -393,6 +394,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn first_smux_syn_matches_mihomo_and_sing_box_client_bytes() {
+        let (near, mut far) = duplex(128);
+        let session = SmuxSession::new(Box::new(near));
+        let _first = session.open().await.unwrap();
+        let mut header = [0; 8];
+        far.read_exact(&mut header).await.unwrap();
+        assert_eq!(header, [1, 0, 0, 0, 3, 0, 0, 0]);
+        let _second = session.open().await.unwrap();
+        far.read_exact(&mut header).await.unwrap();
+        assert_eq!(header, [1, 0, 0, 0, 5, 0, 0, 0]);
+    }
+
+    #[tokio::test]
     async fn dropping_either_half_first_leaves_the_session_to_other_streams() {
         for read_first in [true, false] {
             let (near, far) = duplex(64 * 1024);
@@ -400,8 +414,11 @@ mod tests {
             let session = SmuxSession::new(Box::new(near));
             let first = session.open().await.unwrap();
             let mut second = session.open().await.unwrap();
-            assert_eq!(next_frame(&mut far_read).await, (CMD_SYN, 1));
-            assert_eq!(next_frame(&mut far_read).await, (CMD_SYN, 3));
+            assert_eq!(next_frame(&mut far_read).await, (CMD_SYN, FIRST_STREAM_ID));
+            assert_eq!(
+                next_frame(&mut far_read).await,
+                (CMD_SYN, FIRST_STREAM_ID + 2)
+            );
             let (read, write) = first.into_split();
             let rest: Box<dyn Send> = if read_first {
                 drop(read);
@@ -413,17 +430,17 @@ mod tests {
             let flood = usize::try_from(MAX_RECEIVE_BUFFER).unwrap() / MAX_FRAME + 8;
             tokio::time::timeout(Duration::from_secs(10), async {
                 if !read_first {
-                    assert_eq!(next_frame(&mut far_read).await, (CMD_FIN, 1));
+                    assert_eq!(next_frame(&mut far_read).await, (CMD_FIN, FIRST_STREAM_ID));
                 }
                 let chunk = vec![7u8; MAX_FRAME];
                 for _ in 0..flood {
                     far_write
-                        .write_all(&frame(CMD_PSH, 1, &chunk))
+                        .write_all(&frame(CMD_PSH, FIRST_STREAM_ID, &chunk))
                         .await
                         .unwrap();
                 }
                 far_write
-                    .write_all(&frame(CMD_PSH, 3, b"ok"))
+                    .write_all(&frame(CMD_PSH, FIRST_STREAM_ID + 2, b"ok"))
                     .await
                     .unwrap();
                 let mut got = [0u8; 2];
@@ -431,7 +448,7 @@ mod tests {
                 assert_eq!(&got, b"ok");
                 drop(rest);
                 if read_first {
-                    assert_eq!(next_frame(&mut far_read).await, (CMD_FIN, 1));
+                    assert_eq!(next_frame(&mut far_read).await, (CMD_FIN, FIRST_STREAM_ID));
                 }
             })
             .await

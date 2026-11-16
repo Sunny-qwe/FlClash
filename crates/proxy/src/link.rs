@@ -4,14 +4,14 @@ use std::sync::Arc;
 use arc_swap::ArcSwapOption;
 use concord_common::{Address, DialCx, DialEnv, Initiator};
 use concord_config::proxy::{
-    GrpcOpts, H2Opts, HttpOpts, ProxyDef, ShadowTlsOpts, TlsOpts, Transport, WsOpts, XhttpOpts,
-    XhttpReuse,
+    GrpcOpts, H2Opts, HttpOpts, ProxyDef, ShadowTlsLayer, ShadowTlsOpts, TlsOpts, Transport,
+    WsOpts, XhttpOpts, XhttpReuse,
 };
 use concord_tls::TlsConnector;
 use concord_transport::{
     DialFn, GrpcOptions, GunClient, H2Options, HttpOptions, Layer, ShadowTlsClient,
-    ShadowTlsOptions, TransportStack, WsOptions, XhttpClient, XhttpDownload, XhttpOptions,
-    tls_dial,
+    ShadowTlsOptions, TransportStack, WS_ALPN, WsOptions, XhttpClient, XhttpDownload, XhttpOptions,
+    shadow_tls_dial, tls_dial,
 };
 
 use crate::ctx::{BuildCtx, BuildError};
@@ -136,20 +136,113 @@ pub(crate) fn shadow_tls_layer(
         client_fingerprint: client_fingerprint.to_string(),
         ..TlsOpts::default()
     };
+    let layer = ShadowTlsLayer {
+        password: opts.password.clone(),
+        version: opts.version,
+    };
     let spec = TlsSpec {
         sni: opts.host.clone(),
         alpn: opts.alpn.clone(),
     };
+    Ok(Layer::ShadowTls(shadow_tls_client(
+        &layer, &node_tls, spec, ctx,
+    )?))
+}
+
+/// mihomo `vmess.StreamTLSConn` (`transport/vmess/tls.go:52-68`): ShadowTLS takes the place of
+/// the node's TLS and keeps its name, certificate checks and fingerprint, but not ECH.
+fn shadow_tls_client(
+    layer: &ShadowTlsLayer,
+    tls: &TlsOpts,
+    spec: TlsSpec,
+    ctx: &BuildCtx,
+) -> Result<Arc<ShadowTlsClient>, BuildError> {
+    let decoy = TlsOpts {
+        enabled: true,
+        reality: None,
+        ech: None,
+        shadow_tls: None,
+        ..tls.clone()
+    };
     let client = ShadowTlsClient::new(
         ShadowTlsOptions {
-            password: opts.password.clone(),
-            version: opts.version,
-            tls: tls_options(&node_tls, spec, ctx, None)?,
+            password: layer.password.clone(),
+            version: layer.version,
+            tls: tls_options(&decoy, spec, ctx, None)?,
         },
         ctx.trust.clone(),
     )
     .map_err(|err| BuildError::invalid(err.to_string()))?;
-    Ok(Layer::ShadowTls(Arc::new(client)))
+    Ok(Arc::new(client))
+}
+
+/// What secures a connection the node dials: its TLS, or ShadowTLS in TLS's place.
+enum Secure {
+    Tls(TlsConnector),
+    ShadowTls(Arc<ShadowTlsClient>),
+}
+
+impl Secure {
+    fn new(
+        tls: &TlsOpts,
+        spec: TlsSpec,
+        ctx: &BuildCtx,
+        env: &EnvSlot,
+    ) -> Result<Secure, BuildError> {
+        match &tls.shadow_tls {
+            Some(layer) => shadow_tls_client(layer, tls, spec, ctx).map(Secure::ShadowTls),
+            None => connector(tls, spec, ctx, Some(env)).map(Secure::Tls),
+        }
+    }
+
+    /// The node's TLS, or its stack with ShadowTLS beneath the other layers.
+    fn place(
+        secure: Option<Secure>,
+        stack: TransportStack,
+    ) -> (Option<TlsConnector>, TransportStack) {
+        match secure {
+            Some(Secure::Tls(tls)) => (Some(tls), stack),
+            Some(Secure::ShadowTls(client)) => (None, stack.under(Layer::ShadowTls(client))),
+            None => (None, stack),
+        }
+    }
+
+    fn wrap(self, raw: DialFn, sni: String, required_alpn: Option<&'static str>) -> DialFn {
+        match self {
+            Secure::Tls(tls) => tls_dial(raw, Arc::new(tls), sni, required_alpn),
+            Secure::ShadowTls(client) => shadow_tls_dial(raw, client, sni),
+        }
+    }
+}
+
+/// mihomo checks a node's security modes when it builds the node (`adapter/outbound/vless.go:536-555`,
+/// `:770-788` for xhttp's download side).
+fn check_security(tls: &TlsOpts, tls_on: bool, download: bool) -> Result<(), BuildError> {
+    if tls.shadow_tls.is_none() {
+        return Ok(());
+    }
+    let side = if download {
+        "xhttp download-settings"
+    } else {
+        ""
+    };
+    if tls
+        .reality
+        .as_ref()
+        .is_some_and(|r| !r.public_key.is_empty())
+    {
+        let sep = if download { " " } else { "" };
+        return Err(BuildError::invalid(format!(
+            "{side}{sep}security modes are mutually exclusive: ShadowTLS, REALITY"
+        )));
+    }
+    if !tls_on {
+        let sep = if download { ": " } else { "" };
+        return Err(BuildError::invalid(format!(
+            "{side}{sep}ShadowTLS requires TLS"
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn build_link(spec: LinkSpec<'_>, ctx: &BuildCtx) -> Result<Link, BuildError> {
@@ -165,6 +258,7 @@ pub(crate) fn build_link(spec: LinkSpec<'_>, ctx: &BuildCtx) -> Result<Link, Bui
     let tls_on = tls.enabled || trojan;
     let egress = Egress::new(&def.name, &def.common);
     let server_addr = Address::new(server, port);
+    check_security(tls, tls_on, false)?;
 
     let reality = tls
         .reality
@@ -202,10 +296,10 @@ pub(crate) fn build_link(spec: LinkSpec<'_>, ctx: &BuildCtx) -> Result<Link, Bui
             } else {
                 host_header(ws).map_or_else(|| server.to_string(), str::to_string)
             };
-            let alpn = if trojan && alpn_given {
+            let alpn = if trojan && alpn_given && tls.shadow_tls.is_none() {
                 tls.alpn.clone()
             } else {
-                vec!["http/1.1".to_string()]
+                WS_ALPN.map(str::to_string).to_vec()
             };
             let host = if trojan {
                 plain_sni.clone()
@@ -230,19 +324,18 @@ pub(crate) fn build_link(spec: LinkSpec<'_>, ctx: &BuildCtx) -> Result<Link, Bui
     };
 
     let env_slot: EnvSlot = Arc::new(ArcSwapOption::empty());
-    let connector_for =
-        |alpn: Vec<String>, sni: &str| -> Result<Option<TlsConnector>, BuildError> {
-            if !tls_on {
-                return Ok(None);
-            }
-            let spec = TlsSpec {
-                sni: sni.to_string(),
-                alpn,
-            };
-            let mut tls = tls.clone();
-            tls.enabled = true;
-            connector(&tls, spec, ctx, Some(&env_slot)).map(Some)
+    let secure_for = |alpn: Vec<String>, sni: &str| -> Result<Option<Secure>, BuildError> {
+        if !tls_on {
+            return Ok(None);
+        }
+        let spec = TlsSpec {
+            sni: sni.to_string(),
+            alpn,
         };
+        let mut tls = tls.clone();
+        tls.enabled = true;
+        Secure::new(&tls, spec, ctx, &env_slot).map(Some)
+    };
 
     let mut slot = None;
     let stack = match transport {
@@ -267,7 +360,7 @@ pub(crate) fn build_link(spec: LinkSpec<'_>, ctx: &BuildCtx) -> Result<Link, Bui
             let dial = grpc_dial(
                 egress.clone(),
                 server_addr.clone(),
-                connector_for(alpn.clone(), &sni)?.map(Arc::new),
+                secure_for(alpn.clone(), &sni)?,
                 sni.clone(),
                 env_slot.clone(),
                 (!reality).then_some("h2"),
@@ -285,12 +378,13 @@ pub(crate) fn build_link(spec: LinkSpec<'_>, ctx: &BuildCtx) -> Result<Link, Bui
         }
     };
 
-    let ech_lookup = tls_on && looks_up_ech(tls);
-    let tls = if matches!(transport, Transport::Grpc(_) | Transport::Xhttp(_)) {
+    let ech_lookup = tls_on && tls.shadow_tls.is_none() && looks_up_ech(tls);
+    let secure = if matches!(transport, Transport::Grpc(_) | Transport::Xhttp(_)) {
         None
     } else {
-        connector_for(alpn, &sni)?
+        secure_for(alpn, &sni)?
     };
+    let (tls, stack) = Secure::place(secure, stack);
     if slot.is_none() && ech_lookup {
         slot = Some(env_slot);
     }
@@ -318,20 +412,24 @@ pub(crate) fn simple_link(
     } else {
         tls.server_name.clone()
     };
+    check_security(tls, tls.enabled, false)?;
     let env_slot: EnvSlot = Arc::new(ArcSwapOption::empty());
     let secured = if tls.enabled {
         let spec = TlsSpec {
             sni: sni.clone(),
             alpn: tls.alpn.clone(),
         };
-        Some(connector(tls, spec, ctx, Some(&env_slot))?)
+        Some(Secure::new(tls, spec, ctx, &env_slot)?)
     } else {
         None
     };
+    let (secured, stack) = Secure::place(secured, TransportStack::default());
     Ok(Link {
         tls: secured,
         sni_fallback: sni,
-        env_slot: (tls.enabled && looks_up_ech(tls)).then_some(env_slot),
+        stack,
+        env_slot: (tls.enabled && tls.shadow_tls.is_none() && looks_up_ech(tls))
+            .then_some(env_slot),
         ..Link::plain(def, server, port)
     })
 }
@@ -339,14 +437,14 @@ pub(crate) fn simple_link(
 fn grpc_dial(
     egress: Egress,
     server: Address,
-    tls: Option<Arc<TlsConnector>>,
+    secure: Option<Secure>,
     sni: String,
     slot: EnvSlot,
     required_alpn: Option<&'static str>,
 ) -> DialFn {
     let raw = dial_server(egress, server, slot);
-    match tls {
-        Some(tls) => tls_dial(raw, tls, sni, required_alpn),
+    match secure {
+        Some(secure) => secure.wrap(raw, sni, required_alpn),
         None => raw,
     }
 }
@@ -436,6 +534,10 @@ fn xhttp_dial(
         sni: sni.clone(),
         alpn: vec![wire.to_string()],
     };
+    if let Some(layer) = &tls.shadow_tls {
+        let client = shadow_tls_client(layer, tls, spec, ctx)?;
+        return Ok((shadow_tls_dial(raw, client, sni), http1));
+    }
     let connector = Arc::new(connector(tls, spec, ctx, Some(slot))?);
     let reality = tls
         .reality
@@ -503,6 +605,10 @@ fn xhttp_layer(
             if let Some(ech) = &ds.ech {
                 side.ech = Some(ech.clone());
             }
+            if let Some(shadow_tls) = &ds.shadow_tls {
+                side.shadow_tls = shadow_tls.clone();
+            }
+            check_security(&side, side.enabled, true)?;
             let host = ds.server.as_deref().unwrap_or(server);
             let (dial, http1) =
                 xhttp_dial(egress, &side, (host, ds.port.unwrap_or(port)), slot, ctx)?;
@@ -563,20 +669,28 @@ mod tests {
     use concord_common::{
         Address, BoxStream, CoreError, DialCx, Initiator, NodeDialer, Outbound, PacketSession,
     };
+    use concord_config::proxy::{ProxyDef, ProxyKind};
     use concord_config::{Capabilities, ProxyParse, parse_proxy};
     use concord_tls::TrustStore;
+    use concord_transport::Layer;
     use serde_json::{Value, json};
     use tokio::sync::Barrier;
 
+    use super::{Flavor, LinkSpec, build_link};
+    use crate::node::Link;
     use crate::testing::test_env_with;
     use crate::{BuildCtx, build_outbound};
 
     fn build(extra: Value) -> Result<(), String> {
-        let mut node = json!({
+        let node = json!({
             "name": "n", "type": "vless", "server": "127.0.0.1", "port": 443,
             "uuid": "b831381d-6324-4d53-ad4f-8cda48b30811",
             "reality-opts": {"public-key": "SHbG8EvyDdqrc-BMXJTMtSwVPS7mVZGHN0SjL1yYa1I"}
         });
+        build_node(node, extra)
+    }
+
+    fn def_of(mut node: Value, extra: Value) -> Result<ProxyDef, String> {
         if let (Some(node), Some(extra)) = (node.as_object_mut(), extra.as_object()) {
             node.extend(extra.clone());
         }
@@ -586,10 +700,112 @@ mod tests {
         let Ok(ProxyParse::Ok(def)) = parse_proxy(map, &Capabilities::full()) else {
             return Err("does not parse".into());
         };
+        Ok(*def)
+    }
+
+    fn build_node(node: Value, extra: Value) -> Result<(), String> {
+        let def = def_of(node, extra)?;
         let ctx = BuildCtx::new(TrustStore::new(b"", Vec::new()));
         build_outbound(&def, &ctx)
             .map(drop)
             .map_err(|err| err.to_string())
+    }
+
+    fn vmess_link(extra: Value) -> Link {
+        let node = json!({"name": "n", "type": "vmess", "server": "127.0.0.1", "port": 443,
+            "uuid": "b831381d-6324-4d53-ad4f-8cda48b30811", "cipher": "auto", "tls": true,
+            "shadow-tls-opts": {"password": "p", "version": 3}});
+        let def = def_of(node, extra).unwrap();
+        let ProxyKind::Vmess(opts) = &def.kind else {
+            panic!("not vmess");
+        };
+        let spec = LinkSpec {
+            def: &def,
+            server: &opts.server,
+            port: opts.port,
+            tls: &opts.tls,
+            transport: &opts.transport,
+            flavor: Flavor::Vmess,
+        };
+        build_link(spec, &BuildCtx::new(TrustStore::new(b"", Vec::new()))).unwrap()
+    }
+
+    #[test]
+    fn shadow_tls_takes_the_place_of_tls_under_the_transport() {
+        let layers = |link: &Link| {
+            assert!(link.tls.is_none());
+            link.stack
+                .layers()
+                .iter()
+                .map(|layer| match layer {
+                    Layer::ShadowTls(_) => "shadow-tls",
+                    Layer::Ws(_) => "ws",
+                    Layer::H2(_) => "h2",
+                    Layer::Grpc(_) => "grpc",
+                    _ => "other",
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(layers(&vmess_link(json!({}))), ["shadow-tls"]);
+        assert_eq!(
+            layers(&vmess_link(json!({"network": "ws"}))),
+            ["shadow-tls", "ws"]
+        );
+        assert_eq!(
+            layers(&vmess_link(json!({"network": "h2"}))),
+            ["shadow-tls", "h2"]
+        );
+        let grpc = vmess_link(json!({"network": "grpc"}));
+        assert_eq!(layers(&grpc), ["grpc"]);
+    }
+
+    #[test]
+    fn shadow_tls_is_refused_where_mihomo_refuses_it() {
+        let shadow = json!({"shadow-tls-opts": {"password": "p", "version": 3}});
+        let err = build(merge(
+            shadow.clone(),
+            json!({"tls": true, "client-fingerprint": "chrome"}),
+        ))
+        .unwrap_err();
+        assert!(
+            err.contains("mutually exclusive: ShadowTLS, REALITY"),
+            "{err}"
+        );
+
+        let vmess = json!({"name": "n", "type": "vmess", "server": "127.0.0.1", "port": 443,
+            "uuid": "b831381d-6324-4d53-ad4f-8cda48b30811", "cipher": "auto"});
+        let err = build_node(vmess.clone(), shadow.clone()).unwrap_err();
+        assert!(err.contains("ShadowTLS requires TLS"), "{err}");
+        build_node(vmess, merge(shadow.clone(), json!({"tls": true}))).unwrap();
+
+        let xhttp = |download: Value| {
+            let vless = json!({"name": "n", "type": "vless", "server": "127.0.0.1", "port": 443,
+                "uuid": "b831381d-6324-4d53-ad4f-8cda48b30811", "tls": true, "network": "xhttp",
+                "xhttp-opts": {"path": "/x", "download-settings": download}});
+            build_node(vless, json!({}))
+        };
+        let err = xhttp(json!({"tls": false, "shadow-tls-opts": {"password": "p"}})).unwrap_err();
+        assert!(
+            err.contains("xhttp download-settings: ShadowTLS requires TLS"),
+            "{err}"
+        );
+        let err = xhttp(
+            json!({"shadow-tls-opts": {"password": "p"}, "client-fingerprint": "chrome",
+            "reality-opts": {"public-key": "SHbG8EvyDdqrc-BMXJTMtSwVPS7mVZGHN0SjL1yYa1I"}}),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("xhttp download-settings security modes are mutually exclusive"),
+            "{err}"
+        );
+        xhttp(json!({"shadow-tls-opts": {"password": "p", "version": 2}})).unwrap();
+    }
+
+    fn merge(mut base: Value, more: Value) -> Value {
+        if let (Some(base), Some(more)) = (base.as_object_mut(), more.as_object()) {
+            base.extend(more.clone());
+        }
+        base
     }
 
     #[test]

@@ -5,12 +5,16 @@ use concord_config::proxy::{ProxyDef, ProxyKind};
 
 use crate::ctx::{BuildCtx, BuildError};
 use crate::direct::{self, Direct};
+use crate::dns::Dns;
 use crate::node::Egress;
 use crate::reject::Reject;
 
 /// One arm per protocol module; a new protocol adds a module and a line here.
 pub fn build_outbound(def: &ProxyDef, ctx: &BuildCtx) -> Result<Arc<dyn Outbound>, BuildError> {
     let outbound = build_kind(def, ctx)?;
+    if outbound.info().kind == OutboundKind::Rematch {
+        return Ok(outbound);
+    }
     match def.smux.as_ref().filter(|smux| smux.enabled) {
         Some(smux) => crate::smux::wrap(outbound, smux),
         None => Ok(outbound),
@@ -25,6 +29,8 @@ fn build_kind(def: &ProxyDef, ctx: &BuildCtx) -> Result<Arc<dyn Outbound>, Build
             ctx.loopback.clone(),
         ))),
         ProxyKind::Reject(_) => Ok(Arc::new(Reject::new(&def.name, OutboundKind::Reject))),
+        ProxyKind::Dns(_) => Ok(Arc::new(Dns::new(&def.name))),
+        ProxyKind::Rematch(opts) => Ok(Arc::new(crate::rematch::Rematch::new(&def.name, opts))),
         ProxyKind::Socks5(opts) => crate::socks5::build(def, opts, ctx),
         ProxyKind::Http(opts) => crate::http::build(def, opts, ctx),
         ProxyKind::Ss(opts) => crate::ss::build(def, opts, ctx),

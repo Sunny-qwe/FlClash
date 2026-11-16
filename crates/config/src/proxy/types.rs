@@ -72,6 +72,15 @@ pub struct TlsOpts {
     pub client_fingerprint: String,
     pub reality: Option<RealityOpts>,
     pub ech: Option<EchOpts>,
+    pub shadow_tls: Option<ShadowTlsLayer>,
+}
+
+/// `shadow-tls-opts`: the ShadowTLS handshake takes the place of the node's TLS, which supplies
+/// the decoy's name, certificate checks and fingerprint.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShadowTlsLayer {
+    pub password: String,
+    pub version: u8,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -156,6 +165,8 @@ pub struct XhttpDownload {
     pub server_name: Option<String>,
     pub client_fingerprint: Option<String>,
     pub ech: Option<EchOpts>,
+    /// `Some(None)` turns off the node's ShadowTLS for this side.
+    pub shadow_tls: Option<Option<ShadowTlsLayer>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -216,6 +227,9 @@ pub struct DirectOpts;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RejectOpts;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DnsOpts;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SsPlugin {
@@ -564,9 +578,17 @@ pub struct ShadowQuicOpts {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RematchOpts {
+    pub target_rematch_name: Option<String>,
+    pub target_sub_rule: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProxyKind {
     Direct(DirectOpts),
     Reject(RejectOpts),
+    Dns(DnsOpts),
+    Rematch(RematchOpts),
     Ss(SsOpts),
     Vmess(Box<VmessOpts>),
     Vless(Box<VlessOpts>),
@@ -590,6 +612,8 @@ impl ProxyKind {
         match self {
             ProxyKind::Direct(_) => "direct",
             ProxyKind::Reject(_) => "reject",
+            ProxyKind::Dns(_) => "dns",
+            ProxyKind::Rematch(_) => "rematch",
             ProxyKind::Ss(_) => "ss",
             ProxyKind::Vmess(_) => "vmess",
             ProxyKind::Vless(_) => "vless",
@@ -611,7 +635,11 @@ impl ProxyKind {
 
     pub fn server(&self) -> Option<(&str, u16)> {
         match self {
-            ProxyKind::Direct(_) | ProxyKind::Reject(_) | ProxyKind::WireGuard(_) => None,
+            ProxyKind::Direct(_)
+            | ProxyKind::Reject(_)
+            | ProxyKind::Dns(_)
+            | ProxyKind::Rematch(_)
+            | ProxyKind::WireGuard(_) => None,
             ProxyKind::Ss(o) => Some((&o.server, o.port)),
             ProxyKind::Vmess(o) => Some((&o.server, o.port)),
             ProxyKind::Vless(o) => Some((&o.server, o.port)),

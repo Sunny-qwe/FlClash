@@ -39,6 +39,12 @@ widen exposure are never ignored silently, and keys that name a server's identit
 | A provider `path` outside the home directory, or one that passes through a symlink | Read when `SAFE_PATHS` lists the directory; a symlink is followed | Refused: the apply fails, naming the provider and the path |
 | Picking a dead `fallback` member | Stores the pick, then tests the member; a connection during the test drops the pick (`adapter/outboundgroup/fallback.go:105-145`) | Stores the pick, then tests the member; a connection during the test uses another member, and the pick stays until the test decides |
 
+## Routing
+
+`rematch` outbounds support `target-rematch-name` and `target-sub-rule`, including empty strings that clear a
+previous value. `REMATCH-NAME` matches case-sensitive names separated by `/`. Matching restarts after selecting a
+rematch node, including through a group; unknown sub-rule names use the main rules, and cycles close the flow.
+
 ## External Controller
 
 Concord serves the Clash REST and WebSocket API, in mihomo's shapes, for dashboards such as metacubexd, zashboard and yacd, with the same
@@ -78,8 +84,8 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
   from its `url` or fails to load, as in mihomo when the home directory has no `BundleMRS.7z`. The key is ignored
   with a warning.
 - The `relay` group type, which mihomo also removed; use `dialer-proxy`.
-- ShadowsocksR `chacha20` and `xchacha20` (obsolete unauthenticated ciphers); VLESS `encryption`; xhttp over HTTP/3;
-  Hysteria `faketcp`; ShadowQUIC over QUIC v2; Snell version 6, whose node is set aside with a warning.
+- VLESS `encryption`; xhttp over HTTP/3; Hysteria `faketcp`; ShadowQUIC over QUIC v2; Snell version 6, whose node is set
+  aside with a warning.
 - sing-mux brutal on the client's own socket, which needs a Linux kernel module. The sing-mux exchange is done, so
   the server still paces its sends.
 - A node's `tfo` on macOS and Windows, where it does nothing.

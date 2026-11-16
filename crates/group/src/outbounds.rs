@@ -53,6 +53,7 @@ pub enum Resolved {
         exit_group: Option<Arc<str>>,
         udp: bool,
     },
+    Rematch(Arc<dyn Outbound>),
     Pass,
     PassRule,
     Rejected(Arc<str>),
@@ -574,6 +575,7 @@ impl Outbounds {
                     match leaf.info().kind {
                         OutboundKind::Pass => return Resolved::Pass,
                         OutboundKind::PassRule => return Resolved::PassRule,
+                        OutboundKind::Rematch => return Resolved::Rematch(leaf.outbound().clone()),
                         _ => {}
                     }
                     if !decided {
@@ -620,6 +622,9 @@ impl Outbounds {
     /// `"name" Type addr`, the identity a probe reports as the exit. A load
     /// balancer stands for its members, so it is the exit itself.
     pub fn exit_identity(&self, resolved: &Resolved) -> Option<String> {
+        if let Resolved::Rematch(leaf) = resolved {
+            return Some(node_exit(leaf.info()));
+        }
         let Resolved::Route {
             leaf,
             chain,
@@ -954,6 +959,10 @@ impl Outbounds {
                     return Err(CoreError::DialerLoop(leaf_name.to_string()).into());
                 }
                 Ok((leaf, chain, udp))
+            }
+            Resolved::Rematch(leaf) => {
+                let chain = vec![leaf.info().name.clone()].into();
+                Ok((leaf, chain, true))
             }
             Resolved::Pass | Resolved::PassRule => {
                 Err(io::Error::other(format!("{name} cannot be dialed")))

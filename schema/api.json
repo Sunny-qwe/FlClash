@@ -3197,6 +3197,12 @@
             "null"
           ]
         },
+        "rematchName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "specialRules": {
           "type": [
             "string",

@@ -266,7 +266,8 @@
       "SRC-IP-ASN",
       "DOMAIN-WILDCARD",
       "DSCP",
-      "IN-NAME"
+      "IN-NAME",
+      "REMATCH-NAME"
     ],
     "t2": []
   },
@@ -291,7 +292,9 @@
       "snell",
       "mieru",
       "ssh",
-      "shadowquic"
+      "shadowquic",
+      "dns",
+      "rematch"
     ],
     "t2": [
       "tailscale",
@@ -301,9 +304,7 @@
       "masque",
       "sudoku",
       "trusttunnel",
-      "gost-relay",
-      "rematch",
-      "dns"
+      "gost-relay"
     ]
   },
   "group-types": [

@@ -22,6 +22,9 @@ use tokio::time::timeout;
 #[path = "e2e/mitm.rs"]
 mod mitm;
 
+#[path = "e2e/rematch.rs"]
+mod rematch;
+
 const PATIENCE: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
@@ -1045,6 +1048,68 @@ async fn udp_through_socks_reaches_its_target_and_back() {
     assert_eq!(&buf[len - 8..len], b"datagram");
     assert_eq!(&buf[4..8], &echo_v4.ip().octets());
     assert!(eventually(|| rig.engine.connection_count() >= 1).await);
+    rig.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dns_node_answers_from_the_core_over_tcp_and_udp() {
+    let rig = Rig::new();
+    rig.apply(
+        "hosts:\n  a.test: 1.2.3.4\n\
+         dns:\n  enable: true\n  enhanced-mode: redir-host\n  nameserver:\n    - 127.0.0.1:1\n\
+         proxies:\n  - {name: dns-out, type: dns}\n\
+         rules:\n  - DST-PORT,53,dns-out\n  - MATCH,REJECT\n",
+    )
+    .await
+    .unwrap();
+    rig.engine.start_listeners().await.unwrap();
+    assert_eq!(rig.kind("dns-out"), "Dns");
+    let resolver = SocketAddr::from(([192, 0, 2, 1], 53));
+
+    let mut stream = socks_connect(rig.mixed, resolver).await.unwrap();
+    for _ in 0..2 {
+        let query = dns_query("a.test");
+        let mut framed = u16::try_from(query.len()).unwrap().to_be_bytes().to_vec();
+        framed.extend_from_slice(&query);
+        stream.write_all(&framed).await.unwrap();
+        let mut prefix = [0u8; 2];
+        timeout(PATIENCE, stream.read_exact(&mut prefix))
+            .await
+            .expect("no TCP answer")
+            .unwrap();
+        let mut answer = vec![0u8; usize::from(u16::from_be_bytes(prefix))];
+        stream.read_exact(&mut answer).await.unwrap();
+        assert_eq!(last_a_record(&answer), [1, 2, 3, 4]);
+    }
+
+    let mut control = TcpStream::connect((Ipv4Addr::LOCALHOST, rig.mixed))
+        .await
+        .unwrap();
+    control.write_all(&[5, 1, 0]).await.unwrap();
+    let mut method = [0u8; 2];
+    control.read_exact(&mut method).await.unwrap();
+    control
+        .write_all(&[5, 3, 0, 1, 0, 0, 0, 0, 0, 0])
+        .await
+        .unwrap();
+    let mut reply = [0u8; 10];
+    control.read_exact(&mut reply).await.unwrap();
+    assert_eq!(reply[1], 0);
+    let relay = SocketAddr::from((
+        Ipv4Addr::new(reply[4], reply[5], reply[6], reply[7]),
+        u16::from_be_bytes([reply[8], reply[9]]),
+    ));
+    let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let mut packet = vec![0, 0, 0, 1, 192, 0, 2, 1, 0, 53];
+    packet.extend_from_slice(&dns_query("a.test"));
+    socket.send_to(&packet, relay).await.unwrap();
+    let mut buf = [0u8; 512];
+    let (len, _) = timeout(PATIENCE, socket.recv_from(&mut buf))
+        .await
+        .expect("no UDP answer")
+        .unwrap();
+    assert_eq!(&buf[..10], &[0, 0, 0, 1, 192, 0, 2, 1, 0, 53]);
+    assert_eq!(last_a_record(&buf[10..len]), [1, 2, 3, 4]);
     rig.engine.shutdown().await;
 }
 

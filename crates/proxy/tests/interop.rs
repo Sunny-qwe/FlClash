@@ -383,6 +383,8 @@ fn cases(certs: &Certs) -> Vec<Case> {
             Udp::Many,
         ),
         ss_case("ss-cfb", "aes-256-cfb", "pw", "", json!({}), Udp::Many),
+        ss_case("ss-chacha20", "chacha20", "pw", "", json!({}), Udp::Many),
+        ss_case("ss-xchacha20", "xchacha20", "pw", "", json!({}), Udp::Many),
         ss_case("ss-ccm", "aes-128-ccm", "pw", "", json!({}), Udp::Many),
         ss_case(
             "ss-gcm-siv",
@@ -610,6 +612,20 @@ fn cases(certs: &Certs) -> Vec<Case> {
             "    ss-option:\n      enabled: true\n      method: AES-128-CFB\n      password: ss-pw\n",
             certs,
         ),
+        trojan_case(
+            "trojan-ss-chacha20",
+            json!({"ss-opts": {"enabled": true, "method": "CHACHA20", "password": "ss-pw"}}),
+            Udp::Many,
+            "    ss-option:\n      enabled: true\n      method: CHACHA20\n      password: ss-pw\n",
+            certs,
+        ),
+        trojan_case(
+            "trojan-ss-xchacha20",
+            json!({"ss-opts": {"enabled": true, "method": "XCHACHA20", "password": "ss-pw"}}),
+            Udp::Many,
+            "    ss-option:\n      enabled: true\n      method: XCHACHA20\n      password: ss-pw\n",
+            certs,
+        ),
     ];
     all.extend(quic_cases(certs));
     all.extend(t1::cases(certs));
@@ -730,6 +746,103 @@ fn shadowtls_case(name: &str, version: u8, certs: &Certs) -> Case {
     made
 }
 
+/// A node with `shadow-tls-opts` against a listener whose `shadow-tls` takes the place of its TLS:
+/// the listener's ShadowTLS block, the node's TLS keys and the decoy listener to prepend.
+fn shadowtls_layer(name: &str, version: u8, certs: &Certs) -> (String, Value, String) {
+    let decoy_port = free_port();
+    let decoy = listener(
+        &format!("{name}-decoy"),
+        "http",
+        decoy_port,
+        &tls_lines(certs),
+    );
+    let listener_extra = format!(
+        "    shadow-tls:\n      enable: true\n      version: {version}\n      password: st-pw\n      users:\n        - name: u\n          password: st-pw\n      handshake:\n        dest: 127.0.0.1:{decoy_port}\n"
+    );
+    let client = json!({"tls": true, "servername": "localhost", "sni": "localhost",
+        "skip-cert-verify": true, "shadow-tls-opts": {"password": "st-pw", "version": version}});
+    (listener_extra, client, decoy)
+}
+
+fn shadowtls_layer_cases(certs: &Certs) -> Vec<Case> {
+    let with_decoy = |mut made: Case, decoy: String| {
+        made.listener = format!("{decoy}{}", made.listener);
+        made
+    };
+    let (extra, client, decoy) = shadowtls_layer("vmess-shadowtls-v3", 3, certs);
+    let vmess = vmess_case("vmess-shadowtls-v3", client, Udp::OneDestination, 0, &extra);
+    let mut all = vec![with_decoy(vmess, decoy)];
+    let (extra, client, decoy) = shadowtls_layer("vmess-shadowtls-v2", 2, certs);
+    let vmess = vmess_case("vmess-shadowtls-v2", client, Udp::OneDestination, 0, &extra);
+    all.push(with_decoy(vmess, decoy));
+
+    let (extra, client, decoy) = shadowtls_layer("vless-ws-shadowtls-v3", 3, certs);
+    let client = merge(client, json!({"network": "ws", "ws-opts": {"path": "/vl"}}));
+    let listener = format!("    ws-path: /vl\n{extra}");
+    let vless = vless_case("vless-ws-shadowtls-v3", client, Udp::Many, "", &listener);
+    all.push(with_decoy(vless, decoy));
+
+    let (extra, client, decoy) = shadowtls_layer("vless-ws-shadowtls-v2", 2, certs);
+    let client = merge(client, json!({"network": "ws", "ws-opts": {"path": "/vl"}}));
+    let vless = vless_case(
+        "vless-ws-shadowtls-v2",
+        client,
+        Udp::Many,
+        "",
+        &format!("    ws-path: /vl\n{extra}"),
+    );
+    all.push(with_decoy(vless, decoy));
+
+    let (extra, client, decoy) = shadowtls_layer("vless-xhttp-shadowtls-v3", 3, certs);
+    let client = merge(
+        client,
+        json!({"network": "xhttp", "xhttp-opts": {"path": "/xh", "mode": "stream-one"}}),
+    );
+    let vless = vless_case(
+        "vless-xhttp-shadowtls-v3",
+        client,
+        Udp::Many,
+        "",
+        &format!("    xhttp-config:\n      path: /xh\n      mode: stream-one\n{extra}"),
+    );
+    all.push(with_decoy(vless, decoy));
+
+    // mihomo refuses a listener with both a certificate and shadow-tls.
+    let trojan = |name: &str, extra: &str, client: Value| {
+        let body = format!("    users:\n      - username: a\n        password: trojan-pw\n{extra}");
+        let client = merge(json!({"password": "trojan-pw"}), client);
+        case(name, "trojan", "trojan", &body, client, Udp::Many)
+    };
+    let (extra, client, decoy) = shadowtls_layer("trojan-shadowtls-v1", 1, certs);
+    all.push(with_decoy(
+        trojan("trojan-shadowtls-v1", &extra, client),
+        decoy,
+    ));
+
+    let (extra, client, decoy) = shadowtls_layer("trojan-grpc-shadowtls-v3", 3, certs);
+    let client = merge(
+        client,
+        json!({"network": "grpc", "grpc-opts": {"grpc-service-name": "gun"}}),
+    );
+    let extra = format!("    grpc-service-name: gun\n{extra}");
+    let made = trojan("trojan-grpc-shadowtls-v3", &extra, client);
+    all.push(with_decoy(made, decoy));
+
+    let (extra, client, decoy) = shadowtls_layer("anytls-shadowtls-v3", 3, certs);
+    let body = format!("    users:\n      user: anytls-pw\n{extra}");
+    let client = merge(json!({"password": "anytls-pw"}), client);
+    let anytls = case(
+        "anytls-shadowtls-v3",
+        "anytls",
+        "anytls",
+        &body,
+        client,
+        Udp::Many,
+    );
+    all.push(with_decoy(anytls, decoy));
+    all
+}
+
 fn anytls_case(name: &str, extra: Value, listener_extra: &str, certs: &Certs) -> Case {
     let body = format!(
         "    users:\n      user: anytls-pw\n{}{listener_extra}",
@@ -761,7 +874,8 @@ fn quic_cases(certs: &Certs) -> Vec<Case> {
             &format!("    xhttp-config:\n      path: /xh\n      mode: {mode}\n{tls}"),
         )
     };
-    vec![
+    let mut all = shadowtls_layer_cases(certs);
+    all.extend([
         shadowtls_case("ss-shadowtls-v3", 3, certs),
         shadowtls_case("ss-shadowtls-v2", 2, certs),
         shadowtls_case("ss-shadowtls-v1", 1, certs),
@@ -887,7 +1001,8 @@ fn quic_cases(certs: &Certs) -> Vec<Case> {
         ),
         hy2_case("hy2-bbr-cwnd", "", json!({"cwnd": 64}), certs),
         hy2_case("hy2-dialer-proxy", "", json!({"dialer-proxy": HOP}), certs),
-    ]
+    ]);
+    all
 }
 
 struct Mihomo {

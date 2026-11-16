@@ -1,5 +1,6 @@
 mod chunk;
 pub(crate) mod crypto;
+mod legacy;
 mod udp;
 mod window;
 
@@ -172,6 +173,9 @@ pub(crate) fn build(
     opts: &SsOpts,
     ctx: &BuildCtx,
 ) -> Result<Arc<dyn Outbound>, BuildError> {
+    if matches!(opts.cipher.as_str(), "chacha20" | "xchacha20") {
+        return legacy::build(def, opts, ctx);
+    }
     let kind = parse_method(&opts.cipher)?;
     let key = SsKey::new(kind, &opts.password)?;
     if !key.identity_keys().is_empty()
@@ -190,16 +194,7 @@ pub(crate) fn build(
         shadowsocks::relay::tcprelay::set_clock(Box::new(move || clock()));
     }
     let link = plugin_link(def, opts, ctx)?;
-    let version = match opts.udp_over_tcp_version {
-        0 | uot::LEGACY_VERSION => uot::LEGACY_VERSION,
-        2 => 2,
-        other => {
-            return Err(BuildError::invalid(format!(
-                "ss {} unknown udp over tcp protocol version: {other}",
-                opts.server
-            )));
-        }
-    };
+    let version = uot_version(opts)?;
     let uot = opts.udp_over_tcp.then_some(version);
     Ok(Arc::new(Shadowsocks {
         info: info_for(
@@ -215,4 +210,15 @@ pub(crate) fn build(
         uot,
         clock: ctx.clock.clone(),
     }))
+}
+
+fn uot_version(opts: &SsOpts) -> Result<u8, BuildError> {
+    match opts.udp_over_tcp_version {
+        0 | uot::LEGACY_VERSION => Ok(uot::LEGACY_VERSION),
+        2 => Ok(2),
+        other => Err(BuildError::invalid(format!(
+            "ss {} unknown udp over tcp protocol version: {other}",
+            opts.server
+        ))),
+    }
 }

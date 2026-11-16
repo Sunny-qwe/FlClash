@@ -329,7 +329,7 @@ fn nested_sub_rules_report_the_outermost_rule() {
         accepted(&kit, &program, &Flow::domain("b.org")),
         pick(0, "OUTER")
     );
-    let info = program.rule_at(crate::RuleRef(0));
+    let info = program.rule_at(crate::RuleRef(0, 0));
     assert_eq!(info.type_name, "SubRules");
 }
 
@@ -824,9 +824,9 @@ fn demands_and_rule_info() {
         }
     );
     assert_eq!(program.len(), 3);
-    let info = program.rule_at(crate::RuleRef(0));
+    let info = program.rule_at(crate::RuleRef(0, 0));
     assert_eq!((info.type_name, info.payload), ("IPCIDR", "10.0.0.0/8"));
-    let info = program.rule_at(crate::RuleRef(1));
+    let info = program.rule_at(crate::RuleRef(1, 0));
     assert_eq!((info.type_name, info.payload), ("ProcessName", "x"));
     assert!(program.memory_estimate() > 0);
 
@@ -863,4 +863,58 @@ fn inbound_conditions() {
     flow.user = None;
     flow.in_port = 9050;
     assert_eq!(accepted(&kit, &program, &flow), pick(3, "P"));
+}
+
+#[test]
+fn rematch_restarts_a_named_list_and_keeps_its_rule_identity() {
+    use crate::{MatchCtx, Step};
+    use concord_common::RouteState;
+    let kit = Kit::new();
+    let program = kit.compile_with(
+        &["REMATCH-NAME,Next,MAIN", "MATCH,FALLBACK"],
+        &[
+            ("inner", &["REMATCH-NAME,Next/Other,SUB", "MATCH,MISS"]),
+            ("outer", &["SUB-RULE,(NETWORK,tcp),inner"]),
+        ],
+        8,
+    );
+    let meta = Flow::domain("example.com").meta();
+    let mut state = RouteState::seed(&meta.dst);
+    let ctx = MatchCtx::new(&kit.geo);
+    let mut run = program.start();
+    assert!(matches!(
+        run.step(&meta, &state, &ctx),
+        Step::Candidate {
+            target: "FALLBACK",
+            ..
+        }
+    ));
+    state.rematch_name = Some("next".into());
+    run.restart(Some("inner"));
+    assert!(matches!(
+        run.step(&meta, &state, &ctx),
+        Step::Candidate { target: "MISS", .. }
+    ));
+    state.rematch_name = Some("Next".into());
+    run.restart(Some("inner"));
+    let Step::Candidate { target, rule } = run.step(&meta, &state, &ctx) else {
+        panic!("no sub-rule candidate")
+    };
+    assert_eq!(target, "SUB");
+    assert_eq!(program.rule_at(rule).type_name, "RematchName");
+    assert_eq!(program.rule_at(rule).payload, "Next/Other");
+    run.restart(Some("outer"));
+    let Step::Candidate { target, rule } = run.step(&meta, &state, &ctx) else {
+        panic!("no nested candidate")
+    };
+    assert_eq!(target, "SUB");
+    assert_eq!(program.rule_at(rule).type_name, "SubRules");
+    for name in [None, Some(""), Some("unknown")] {
+        run.restart(name);
+        let Step::Candidate { target, rule } = run.step(&meta, &state, &ctx) else {
+            panic!("no main candidate")
+        };
+        assert_eq!(target, "MAIN");
+        assert_eq!(program.rule_at(rule).payload, "Next");
+    }
 }

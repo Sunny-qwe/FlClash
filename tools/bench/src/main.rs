@@ -507,7 +507,7 @@ fn run(args: RunArgs) -> Result<bool, String> {
         && plan
             .cases
             .iter()
-            .any(|c| !matches!(c.name, "direct" | "hysteria-brutal"));
+            .any(|c| !matches!(c.name, "direct" | "rematch" | "hysteria-brutal"));
     let mihomo = match mihomo {
         Some(m) => m,
         None if !needs_server => cores

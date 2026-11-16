@@ -63,6 +63,16 @@ pub fn tls_dial(
     })
 }
 
+/// `dial` with the ShadowTLS handshake run on each new connection.
+pub fn shadow_tls_dial(dial: DialFn, client: Arc<ShadowTlsClient>, host: String) -> DialFn {
+    Arc::new(move || {
+        let dial = dial.clone();
+        let client = client.clone();
+        let host = host.clone();
+        Box::pin(async move { client.connect(dial().await?, &host).await })
+    })
+}
+
 #[derive(Clone)]
 pub enum Layer {
     Ws(WsOptions),
@@ -90,6 +100,14 @@ impl TransportStack {
 
     pub fn layers(&self) -> &[Layer] {
         &self.layers
+    }
+
+    /// The stack with `layer` first, under the others.
+    pub fn under(self, layer: Layer) -> Self {
+        let mut layers = Vec::with_capacity(self.layers.len() + 1);
+        layers.push(layer);
+        layers.extend(self.layers);
+        TransportStack { layers }
     }
 
     pub fn is_empty(&self) -> bool {

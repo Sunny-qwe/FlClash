@@ -157,6 +157,7 @@ fn compile_from<D: Borrow<RuleDef>>(
     progs.push(Default::default());
     Ok(RouteProgram {
         progs: progs.into_boxed_slice(),
+        sub_rule_names: sub_rules.keys().map(|name| name.as_str().into()).collect(),
         targets: cx.targets.into_boxed_slice(),
         rule_sets: cx.rule_sets.into_boxed_slice(),
         demands: cx.demands,
@@ -604,6 +605,9 @@ fn node_for_cond(
         Cond::InType(items) => Node::InType(in_type_mask(items)),
         Cond::InUser(items) => Node::InUser(items.iter().map(|i| i.as_str().into()).collect()),
         Cond::InName(items) => Node::InName(items.iter().map(|i| i.as_str().into()).collect()),
+        Cond::RematchName(items) => {
+            Node::RematchName(items.iter().map(|i| i.as_str().into()).collect())
+        }
         Cond::And(children) => Node::And(children_of(cx, children, loc)?),
         Cond::Or(children) => Node::Or(children_of(cx, children, loc)?),
         Cond::Not(child) => Node::Not(Box::new(node_for_cond(cx, child, false, true, loc)?)),

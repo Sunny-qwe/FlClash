@@ -406,7 +406,7 @@ pub fn connection(info: &ConnectionInfo) -> Value {
             "inboundPort": info.inbound_port.unwrap_or_default().to_string(),
             "inboundName": info.inbound_name.clone().unwrap_or_default(),
             "inboundUser": info.inbound_user.clone().unwrap_or_default(),
-            "rematchName": "",
+            "rematchName": info.rematch_name.clone().unwrap_or_default(),
             "host": info.host.clone().unwrap_or_default(),
             "dnsMode": info.dns_mode.clone().unwrap_or_else(|| "normal".to_string()),
             "uid": info.uid.unwrap_or_default(),
@@ -493,6 +493,20 @@ pub fn dns(result: &DnsQueryResult) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rematch_name_reaches_clash_connection_metadata() {
+        let mut info: ConnectionInfo = serde_json::from_value(json!({
+            "id": 1, "start": 0, "network": "tcp", "sourceIp": "127.0.0.1",
+            "sourcePort": 1, "destinationPort": 443, "inboundType": "socks5",
+            "chains": ["DIRECT"], "rule": "RematchName", "upload": 0, "download": 0,
+            "rematchName": "Next"
+        }))
+        .unwrap();
+        assert_eq!(connection(&info)["metadata"]["rematchName"], "Next");
+        info.rematch_name = None;
+        assert_eq!(connection(&info)["metadata"]["rematchName"], "");
+    }
 
     #[test]
     fn times_are_rfc3339_in_utc() {

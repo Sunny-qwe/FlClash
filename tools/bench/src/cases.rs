@@ -18,8 +18,21 @@ pub const ALL: &[Spec] = &[
         true,
         "no outbound protocol: the inbound, router and relay alone",
     ),
+    spec(
+        "rematch",
+        true,
+        "rematch name and sub-rule routing before DIRECT",
+    ),
     spec("ss-aes128", true, "shadowsocks aes-128-gcm"),
     spec("ss-chacha", true, "shadowsocks chacha20-ietf-poly1305"),
+    spec("ss-chacha20", true, "shadowsocks djb chacha20"),
+    spec("ss-xchacha20", true, "shadowsocks xchacha20 stream"),
+    spec(
+        "trojan-ss-chacha20",
+        true,
+        "trojan with djb chacha20 ss-opts",
+    ),
+    spec("trojan-ss-xchacha20", true, "trojan with xchacha20 ss-opts"),
     spec("ss2022", true, "shadowsocks 2022-blake3-aes-128-gcm"),
     spec(
         "ss2022-chacha8",
@@ -111,7 +124,7 @@ const KEY32: &str = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
 
 pub struct Case {
     pub spec: Spec,
-    /// The mihomo `listeners:` entry; absent for DIRECT and the sing-box-served Hysteria v1 case.
+    /// The mihomo `listeners:` entry; absent for DIRECT, rematch and sing-box-served Hysteria v1.
     pub listener: Option<String>,
     pub singbox_listener: Option<Value>,
     pub proxy: Option<Value>,
@@ -138,6 +151,16 @@ pub fn build(spec: Spec, host: &str, port: u16, certs: &Path) -> Case {
         certs.join("key.pem").display()
     );
     let insecure = json!({"sni": "localhost", "skip-cert-verify": true});
+    if spec.name == "rematch" {
+        return Case {
+            spec,
+            listener: None,
+            singbox_listener: None,
+            proxy: Some(
+                json!({"name": spec.name, "type": "rematch", "target-rematch-name": "bench", "target-sub-rule": "bench-rematch"}),
+            ),
+        };
+    }
     if spec.name == "hysteria-brutal" {
         return Case {
             spec,
@@ -175,6 +198,8 @@ pub fn build(spec: Spec, host: &str, port: u16, certs: &Path) -> Case {
     let (kind, listener_kind, body, extra) = match spec.name {
         "ss-aes128" => ss("aes-128-gcm", "pw"),
         "ss-chacha" => ss("chacha20-ietf-poly1305", "pw"),
+        "ss-chacha20" => ss("chacha20", "pw"),
+        "ss-xchacha20" => ss("xchacha20", "pw"),
         "ss2022" => ss("2022-blake3-aes-128-gcm", KEY16),
         "ss2022-chacha8" => ss("2022-blake3-chacha8-poly1305", KEY32),
         "vmess" | "vmess-chacha" | "vmess-none" => (
@@ -230,6 +255,18 @@ pub fn build(spec: Spec, host: &str, port: u16, certs: &Path) -> Case {
             )
         }
         "trojan-tls" => trojan(json!({})),
+        "trojan-ss-chacha20" | "trojan-ss-xchacha20" => {
+            let method = if spec.name == "trojan-ss-chacha20" {
+                "CHACHA20"
+            } else {
+                "XCHACHA20"
+            };
+            let (kind, listener, mut body, extra) = trojan(json!({"ss-opts": {
+                "enabled": true, "method": method, "password": "ss-pw"
+            }}));
+            body.push_str(&format!("    ss-option:\n      enabled: true\n      method: {method}\n      password: ss-pw\n"));
+            (kind, listener, body, extra)
+        }
         "trojan-chrome" => trojan(json!({"client-fingerprint": "chrome"})),
         "anytls" => (
             "anytls",
@@ -323,18 +360,22 @@ pub fn write_certs(dir: &Path) -> std::io::Result<()> {
     std::fs::write(dir.join("key.pem"), made.signing_key.serialize_pem())
 }
 
-/// Both clients get the same profile: one node, one rule, nothing that costs per
-/// connection besides the outbound itself.
+/// Both clients get the same profile, including rematch's second rule walk.
 pub fn client_profile(case: &Case, mixed: u16, tun: Option<&Value>) -> String {
     let proxies = match &case.proxy {
         Some(proxy) => format!("proxies:\n  - {proxy}\n"),
         None => String::new(),
     };
     let tun = tun.map(|t| format!("tun: {t}\n")).unwrap_or_default();
+    let sub_rules = if case.spec.name == "rematch" {
+        "sub-rules:\n  bench-rematch:\n    - REMATCH-NAME,bench,DIRECT\n    - MATCH,REJECT\n"
+    } else {
+        ""
+    };
     format!(
         "mixed-port: {mixed}\nallow-lan: false\nmode: rule\nlog-level: error\nipv6: false\n\
          find-process-mode: off\ngeo-auto-update: false\nunified-delay: false\n\
-         dns:\n  enable: false\n{tun}{proxies}rules:\n  - MATCH,{}\n",
+         dns:\n  enable: false\n{tun}{proxies}rules:\n  - MATCH,{}\n{sub_rules}",
         case.rule_target()
     )
 }

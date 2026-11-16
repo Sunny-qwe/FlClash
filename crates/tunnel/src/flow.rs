@@ -22,6 +22,8 @@ pub(crate) struct FlowState {
     pub dns_mode: Option<DnsMode>,
     pub sniff_host: Option<Host>,
     pub special_proxy: Option<Arc<str>>,
+    pub special_rules: Option<Arc<str>>,
+    pub rematch_name: Option<Arc<str>>,
     pub process: Option<Arc<ProcessInfo>>,
     pub process_looked_up: bool,
     pub ip_resolved: bool,
@@ -82,6 +84,8 @@ impl FlowState {
             dns_mode: None,
             sniff_host: None,
             special_proxy: None,
+            special_rules: None,
+            rematch_name: None,
             process: inner.then(|| {
                 Arc::new(ProcessInfo {
                     uid: None,
@@ -122,7 +126,8 @@ impl FlowState {
             ip_resolved: self.ip_resolved,
             process: self.process.clone(),
             process_looked_up: self.process_looked_up,
-            special_rules: None,
+            special_rules: self.special_rules.clone(),
+            rematch_name: self.rematch_name.clone(),
         }
     }
 
@@ -219,7 +224,12 @@ impl FlowState {
             dst_geoip: self.observed.dst_geoip.clone(),
             src_asn: self.observed.src_asn.clone(),
             dst_asn: self.observed.dst_asn.clone(),
-            special_rules: String::new(),
+            rematch_name: self.rematch_name.as_deref().unwrap_or_default().to_string(),
+            special_rules: self
+                .special_rules
+                .as_deref()
+                .unwrap_or_default()
+                .to_string(),
             special_proxy: self
                 .special_proxy
                 .as_deref()

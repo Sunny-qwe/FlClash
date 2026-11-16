@@ -35,6 +35,7 @@ mod tests {
     fn minimal(kind: &str) -> Value {
         let base = json!({"name": "n", "type": kind, "server": "127.0.0.1", "port": 1});
         let extra = match kind {
+            "rematch" => json!({"target-rematch-name": "next"}),
             "ss" => json!({"cipher": "aes-128-gcm", "password": "p"}),
             "vmess" => {
                 json!({"uuid": "b831381d-6324-4d53-ad4f-8cda48b30811", "cipher": "auto", "alterId": 0})

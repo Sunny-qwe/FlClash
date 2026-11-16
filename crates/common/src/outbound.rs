@@ -7,6 +7,7 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::Instant;
 
 use crate::addr::{Address, IpVersion};
+use crate::dns_relay::DnsHijack;
 use crate::error::CoreError;
 use crate::event::{EventSink, Initiator};
 use crate::packet::PacketSession;
@@ -21,6 +22,8 @@ pub enum OutboundKind {
     Compatible,
     Pass,
     PassRule,
+    Dns,
+    Rematch,
     Shadowsocks,
     ShadowsocksR,
     Snell,
@@ -48,6 +51,8 @@ impl OutboundKind {
             OutboundKind::Compatible => "Compatible",
             OutboundKind::Pass => "Pass",
             OutboundKind::PassRule => "PassRule",
+            OutboundKind::Dns => "Dns",
+            OutboundKind::Rematch => "Rematch",
             OutboundKind::Shadowsocks => "Shadowsocks",
             OutboundKind::ShadowsocksR => "ShadowsocksR",
             OutboundKind::Snell => "Snell",
@@ -84,9 +89,19 @@ pub struct OutboundInfo {
     pub ip_version: IpVersion,
 }
 
+#[derive(Clone, Debug)]
+pub struct Rematch {
+    pub name: Option<Arc<str>>,
+    pub sub_rule: Option<Arc<str>>,
+}
+
 #[async_trait]
 pub trait Outbound: Send + Sync + 'static {
     fn info(&self) -> &OutboundInfo;
+
+    fn rematch(&self) -> Option<&Rematch> {
+        None
+    }
 
     async fn connect(&self, cx: &DialCx<'_>, dst: &Address) -> io::Result<BoxStream>;
 
@@ -176,6 +191,10 @@ pub trait HostResolver: Send + Sync {
             io::ErrorKind::Unsupported,
             "this resolver does not look up ECH configs",
         ))
+    }
+    /// The core's own DNS server answers, mihomo's `resolver.ServeMsg`, for the `dns` outbound.
+    fn dns_server(&self) -> Option<&dyn DnsHijack> {
+        None
     }
 }
 

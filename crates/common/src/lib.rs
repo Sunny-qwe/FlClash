@@ -11,6 +11,8 @@ pub mod sync;
 #[cfg(feature = "io")]
 pub mod conn;
 #[cfg(feature = "io")]
+pub mod dns_relay;
+#[cfg(feature = "io")]
 pub mod error;
 #[cfg(feature = "io")]
 pub mod event;

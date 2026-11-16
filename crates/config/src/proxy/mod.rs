@@ -1,4 +1,5 @@
 mod parse;
+mod rematch;
 mod types;
 mod warn;
 

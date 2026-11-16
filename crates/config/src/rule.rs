@@ -64,6 +64,7 @@ pub enum Cond {
     InType(Vec<String>),
     InUser(Vec<String>),
     InName(Vec<String>),
+    RematchName(Vec<String>),
     And(Vec<Cond>),
     Or(Vec<Cond>),
     Not(Box<Cond>),
@@ -111,6 +112,7 @@ impl Cond {
             Cond::InType(_) => "IN-TYPE",
             Cond::InUser(_) => "IN-USER",
             Cond::InName(_) => "IN-NAME",
+            Cond::RematchName(_) => "REMATCH-NAME",
             Cond::And(_) => "AND",
             Cond::Or(_) => "OR",
             Cond::Not(_) => "NOT",
@@ -250,6 +252,7 @@ pub const T1_RULE_TYPES: &[&str] = &[
     "DOMAIN-WILDCARD",
     "DSCP",
     "IN-NAME",
+    "REMATCH-NAME",
 ];
 
 pub fn rule_type_names() -> impl Iterator<Item = &'static str> {
@@ -484,6 +487,7 @@ fn build_cond(parts: &Parts) -> Result<(Cond, bool, bool)> {
         }
         "IN-USER" => Cond::InUser(slash_list(payload, "in user")?),
         "IN-NAME" => Cond::InName(slash_list(payload, "in name")?),
+        "REMATCH-NAME" => Cond::RematchName(slash_list(payload, "rematch name")?),
         "AND" => Cond::And(parse_logic(payload)?),
         "OR" => Cond::Or(parse_logic(payload)?),
         "NOT" => {
@@ -595,6 +599,21 @@ mod tests {
 
     fn err(line: &str) -> String {
         parse_rule(line).expect_err(line).message
+    }
+
+    #[test]
+    fn rematch_names_are_trimmed_and_empty_members_are_rejected() {
+        assert_eq!(
+            ok("REMATCH-NAME,First / second,DIRECT").cond,
+            Cond::RematchName(vec!["First".into(), "second".into()])
+        );
+        assert!(
+            err("REMATCH-NAME,first//second,DIRECT").contains("rematch name couldn't be empty")
+        );
+        assert!(matches!(
+            ok("AND,((REMATCH-NAME,first),(NETWORK,tcp)),DIRECT").cond,
+            Cond::And(_)
+        ));
     }
 
     #[test]
@@ -781,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn thirty_six_types_are_known() {
-        assert_eq!(rule_type_names().count(), 36);
+    fn thirty_seven_types_are_known() {
+        assert_eq!(rule_type_names().count(), 37);
     }
 }
