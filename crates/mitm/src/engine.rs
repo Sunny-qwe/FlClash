@@ -98,6 +98,8 @@ pub(crate) struct Core {
     trust: Arc<TrustStore>,
     client_h2: OnceLock<Result<Arc<ClientConfig>, Arc<TlsError>>>,
     client_h1: OnceLock<Result<Arc<ClientConfig>, Arc<TlsError>>>,
+    unverified_h2: OnceLock<Result<Arc<ClientConfig>, Arc<TlsError>>>,
+    unverified_h1: OnceLock<Result<Arc<ClientConfig>, Arc<TlsError>>>,
 }
 
 pub(crate) struct SessionSlot {
@@ -152,19 +154,24 @@ impl Core {
         }
     }
 
-    pub fn client_config(&self, protocols: &[&str]) -> io::Result<Arc<ClientConfig>> {
-        let slot = if protocols.contains(&ALPN_H2) {
-            &self.client_h2
-        } else {
-            &self.client_h1
+    /// The TLS client for a server, which checks its certificate unless the switch or the
+    /// list of hosts it is skipped for says otherwise.
+    pub fn client_config(
+        &self,
+        protocols: &[&str],
+        host: &str,
+        port: u16,
+    ) -> io::Result<Arc<ClientConfig>> {
+        let skip = self.config.skip_server_cert_verify
+            || self.config.skip_verify_hosts.matches(host, port);
+        let slot = match (protocols.contains(&ALPN_H2), skip) {
+            (true, false) => &self.client_h2,
+            (false, false) => &self.client_h1,
+            (true, true) => &self.unverified_h2,
+            (false, true) => &self.unverified_h1,
         };
         slot.get_or_init(|| {
-            concord_tls::http_client_config(
-                self.trust.clone(),
-                self.config.skip_server_cert_verify,
-                protocols,
-            )
-            .map_err(Arc::new)
+            concord_tls::http_client_config(self.trust.clone(), skip, protocols).map_err(Arc::new)
         })
         .clone()
         .map_err(io::Error::other)
@@ -187,7 +194,10 @@ impl Core {
     /// Runs for every TCP connection, so it has to be cheap. Without TLS
     /// decryption only plain HTTP is offered, which never runs on 443.
     pub fn match_tcp(&self, flow: &InterceptFlow) -> bool {
-        if flow.is_inner() || self.shared.pressure.level() >= PRESSURE_RELAY {
+        if flow.is_inner()
+            || self.shared.pressure.level() >= PRESSURE_RELAY
+            || !self.config.sources.allows(flow.meta.src.ip())
+        {
             return false;
         }
         let hosts = &self.config.hosts;
@@ -219,6 +229,7 @@ impl Core {
         if !self.config.auto_quic_block
             || self.shared.pressure.level() >= PRESSURE_RELAY
             || self.authority().is_none()
+            || !self.config.sources.allows(flow.meta.src.ip())
         {
             return false;
         }
@@ -331,6 +342,8 @@ impl MitmEngine {
             quic: Mutex::default(),
             client_h2: OnceLock::new(),
             client_h1: OnceLock::new(),
+            unverified_h2: OnceLock::new(),
+            unverified_h1: OnceLock::new(),
         });
         MitmEngine {
             core,

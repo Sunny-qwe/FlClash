@@ -14,7 +14,7 @@ use concord_common::{
     ResourceUpdate,
 };
 use concord_config::geox::GeoConfig;
-use concord_config::provider::{RuleBehavior, RuleFormat, RuleProviderDef, RuleSource};
+use concord_config::provider::{RuleBehavior, RuleProviderDef, RuleSource};
 use concord_group::http::{HttpError, Target, TlsSettings, connect};
 use concord_group::{FetchError, FetchErrorKind, FetchRequest, FetchResponse, Fetcher};
 use concord_platform::HomeDir;
@@ -192,14 +192,6 @@ pub(crate) fn behavior_of(behavior: RuleBehavior) -> Behavior {
     }
 }
 
-pub(crate) fn format_of(format: RuleFormat) -> Format {
-    match format {
-        RuleFormat::Yaml => Format::Yaml,
-        RuleFormat::Text => Format::Text,
-        RuleFormat::Mrs => Format::Mrs,
-    }
-}
-
 impl RuleProvider {
     pub fn vehicle(&self) -> &'static str {
         match self.def.source {
@@ -351,7 +343,7 @@ impl RuleProviders {
         bytes: Vec<u8>,
     ) -> Result<Vec<u8>, RuleLoadError> {
         let behavior = behavior_of(provider.def.behavior);
-        let format = format_of(provider.def.format);
+        let format = Format::from(provider.def.format);
         let mut bytes = bytes;
         let mut rounds = 0;
         let parsed = loop {

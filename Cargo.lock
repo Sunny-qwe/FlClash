@@ -1285,6 +1285,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "ipnetwork",
  "jaq-core",
  "jaq-json",
  "jaq-std",

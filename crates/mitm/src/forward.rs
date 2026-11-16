@@ -16,9 +16,10 @@ use crate::exchange::{OutRequest, ReplyError, Sent, Target, has_response_body, s
 use crate::headers::{
     head_text, is_grpc, parse_head, remove_hop_by_hop, response_head, text, version_text, with_host,
 };
+use crate::heads::Heads;
 use crate::limits::{BODY_WAIT, PRESSURE_NO_BODIES};
 use crate::pattern::Pattern;
-use crate::rules::{BodyRewrite, Heads};
+use crate::rules::BodyRewrite;
 use crate::script::DEFAULT_SCRIPT_TIMEOUT;
 use crate::session::{PoolKey, Sender, Session};
 use crate::target::TargetUrl;
@@ -58,11 +59,12 @@ impl Session {
         let rules = &self.core.config.rules;
         let max_body = self.core.config.limits.max_body_size;
         let address = out.url.raw.clone();
-        let (header_rules, body_rules) = {
+        let (header_rules, mock, body_rules) = {
             let request = || request_text(out, target.version);
             let heads = Heads::new(Some(&request), None);
             (
                 rules.header_rewrites_for(&address, false, &heads),
+                rules.request_mock(&address, &heads),
                 rules.body_rewrites_for(&address, false, &heads),
             )
         };
@@ -76,6 +78,11 @@ impl Session {
         if rewritten {
             target.cap.note("header-rewrite", PHASE_REQUEST, "");
             tracing::info!("[MITM] rewrite request headers of {address}");
+        }
+        if let Some(mock) = mock {
+            mock_body(out, &mock.header, &mock.body);
+            target.cap.note("request-body-mock", PHASE_REQUEST, "");
+            tracing::info!("[MITM] mock the request body of {address}");
         }
         let grpc = is_grpc(&out.headers);
         if !body_rules.is_empty()
@@ -271,6 +278,23 @@ impl Session {
             }
         }
     }
+}
+
+/// Sends `body` in place of the request's own, a request that had none included.
+fn mock_body(out: &mut OutRequest, header: &HeaderMap, body: &[u8]) {
+    for name in header.keys() {
+        out.headers.remove(name);
+    }
+    for (name, value) in header {
+        out.headers.append(name.clone(), value.clone());
+    }
+    out.headers.remove(CONTENT_ENCODING);
+    out.headers.remove(TRANSFER_ENCODING);
+    out.set_body(
+        full(Bytes::copy_from_slice(body)),
+        u64::try_from(body.len()).ok(),
+    );
+    out.has_body = true;
 }
 
 fn request_text(out: &OutRequest, version: &str) -> String {

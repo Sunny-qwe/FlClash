@@ -241,7 +241,7 @@ pub fn rule_provider(info: &ProviderInfo) -> Value {
     };
     let format = match info.format.as_deref() {
         Some("yaml") => "YamlRule",
-        Some("text") => "TextRule",
+        Some("text" | "domain-set") => "TextRule",
         Some("mrs") => "MrsRule",
         _ => "Unknown",
     };

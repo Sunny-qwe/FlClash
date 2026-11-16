@@ -302,6 +302,94 @@ async fn a_whole_head_rewrite_changes_the_head_but_not_the_host() {
 }
 
 #[tokio::test]
+async fn map_local_and_request_body_mocks_read_the_request_head() {
+    let (_server, rig) = rig(echo(), true, &["http/1.1"]).await;
+    let errors = rig.config(json!({
+        "enable": true,
+        "hostname": ["example.test"],
+        "skip-server-cert-verify": true,
+        "map-local": [r#"^https://example\.test/m$ request-head ^POST\s data-type=text data="{}""#],
+        "request-body-mock": [
+            r#"^https://example\.test/mock data-type=text data="mocked" header="Content-Type:application/json""#,
+            r#"^https://example\.test/only request-head (\r\n)X-Want:\sit\r\n data-type=base64 data="aGk=""#,
+        ],
+        "body-rewrite": [r"http-request ^https://example\.test/mock mocked changed"],
+    }));
+    assert!(errors.is_empty(), "{errors:?}");
+    let mut client = Client::tls(&rig, "example.test", 443, &["http/1.1"])
+        .await
+        .unwrap();
+    let request = client.request("POST", "/m", &[], "x");
+    assert_eq!(client.send(request).await.unwrap().text(), "{}");
+    assert_eq!(client.get("/m").await.text(), "example.test|/m||");
+    assert_eq!(
+        client.get("/mock").await.text(),
+        "example.test|/mock||changed",
+        "a request without a body goes with the mock, which later rules see"
+    );
+    let request = client.request("POST", "/mock", &[], "original");
+    assert_eq!(
+        client.send(request).await.unwrap().text(),
+        "example.test|/mock||changed"
+    );
+    let request = client.request("POST", "/only", &[("X-Want", "it")], "original");
+    assert_eq!(
+        client.send(request).await.unwrap().text(),
+        "example.test|/only||hi"
+    );
+    let request = client.request("POST", "/only", &[], "original");
+    assert_eq!(
+        client.send(request).await.unwrap().text(),
+        "example.test|/only||original"
+    );
+}
+
+#[tokio::test]
+async fn skips_verifying_only_the_hosts_listed_for_it() {
+    let wire = hello("example.test", &["http/1.1"]);
+    for (listed, decrypted) in [("example.test", true), ("other.test", false)] {
+        let (_server, rig) = rig(echo(), true, &["http/1.1"]).await;
+        let errors = rig.config(json!({
+            "enable": true,
+            "hostname": ["example.test", "other.test"],
+            "skip-server-cert-verify-hostname": [listed],
+        }));
+        assert!(errors.is_empty(), "{errors:?}");
+        if decrypted {
+            let mut client = Client::tls(&rig, "example.test", 443, &["http/1.1"])
+                .await
+                .unwrap();
+            assert_eq!(client.get("/p").await.text(), "example.test|/p||");
+        } else {
+            assert_eq!(
+                declined(&rig, flow("example.test", 443), &wire).await,
+                wire,
+                "the self-signed server of a host not listed still fails verification"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn decrypts_only_for_the_clients_listed() {
+    let (_server, rig) = rig(echo(), true, &["http/1.1"]).await;
+    rig.config(json!({
+        "enable": true,
+        "hostname": ["example.test"],
+        "url-rewrite": [r"^http://example\.test/ad _ reject"],
+        "client-source-address": ["-127.0.0.1, 0.0.0.0/0"],
+    }));
+    let engine = rig.mitm.engine().unwrap();
+    assert!(!engine.match_tcp(&flow("example.test", 443)));
+    assert!(!engine.match_tcp(&flow("example.test", 80)));
+    let mut lan = flow("example.test", 443);
+    lan.meta.src = "192.168.1.9:50000".parse().unwrap();
+    assert!(engine.match_tcp(&lan));
+    let errors = rig.config(json!({"enable": true, "client-source-address": ["lan"]}));
+    assert_eq!(errors.len(), 1, "{errors:?}");
+}
+
+#[tokio::test]
 async fn dials_the_host_a_rewrite_moves_to() {
     let (_server, rig) = rig(echo(), true, &["http/1.1"]).await;
     rig.config(json!({

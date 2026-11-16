@@ -91,6 +91,8 @@ pub enum RuleFormat {
     Yaml,
     Text,
     Mrs,
+    /// Surge's DOMAIN-SET, text in which `.example.com` covers `example.com` too; Concord's own.
+    DomainSet,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -395,6 +397,12 @@ pub fn parse_rule_provider(name: &str, map: &Map) -> Result<RuleProviderDef> {
         "" | "yaml" => RuleFormat::Yaml,
         "text" => RuleFormat::Text,
         "mrs" => RuleFormat::Mrs,
+        "domain-set" if behavior == RuleBehavior::Domain => RuleFormat::DomainSet,
+        "domain-set" => {
+            return Err(ConfigError::new(
+                "the domain-set format needs the domain behavior",
+            ));
+        }
         other => {
             return Err(ConfigError::new(format!(
                 "unsupported format type: {other}"
@@ -633,6 +641,19 @@ mod tests {
         assert_eq!(
             (def.behavior, def.format),
             (RuleBehavior::Domain, RuleFormat::Mrs)
+        );
+        let set = parse_rule_provider(
+            "s",
+            &map(json!({"type": "http", "url": "https://x", "behavior": "domain", "format": "domain-set"})),
+        )
+        .unwrap();
+        assert_eq!(set.format, RuleFormat::DomainSet);
+        assert!(
+            parse_rule_provider(
+                "s",
+                &map(json!({"type": "http", "url": "https://x", "behavior": "classical", "format": "domain-set"})),
+            )
+            .is_err()
         );
         let inline = parse_rule_provider(
             "i",

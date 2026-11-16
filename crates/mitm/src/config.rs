@@ -10,6 +10,7 @@ use crate::rules::{
     Rules, parse_body_rewrite, parse_header_rewrite, parse_map_local, parse_url_rewrite,
 };
 use crate::script::{ScriptHost, parse_script};
+use crate::sources::SourceList;
 use crate::text::quote;
 
 fn null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
@@ -30,6 +31,13 @@ pub struct RawConfig {
     pub hostname: Vec<String>,
     #[serde(deserialize_with = "null_default")]
     pub skip_server_cert_verify: bool,
+    /// Hosts whose servers' certificates go unchecked while the switch above is off, as a
+    /// module that skips verifying asks for its own hostnames only.
+    #[serde(deserialize_with = "null_default")]
+    pub skip_server_cert_verify_hostname: Vec<String>,
+    /// The clients decrypted for, in Surge's syntax; all of them while it is empty.
+    #[serde(deserialize_with = "null_default")]
+    pub client_source_address: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_quic_block: Option<bool>,
     #[serde(deserialize_with = "null_default")]
@@ -40,6 +48,8 @@ pub struct RawConfig {
     pub body_rewrite: Vec<String>,
     #[serde(deserialize_with = "null_default")]
     pub map_local: Vec<String>,
+    #[serde(deserialize_with = "null_default")]
+    pub request_body_mock: Vec<String>,
     #[serde(deserialize_with = "null_default")]
     pub script: Vec<String>,
     /// Off while the device does not trust the CA: HTTPS is then relayed as
@@ -77,6 +87,8 @@ pub struct Config {
     pub ca_fingerprint: String,
     pub hosts: HostList,
     pub skip_server_cert_verify: bool,
+    pub skip_verify_hosts: HostList,
+    pub(crate) sources: SourceList,
     pub auto_quic_block: bool,
     pub h2: bool,
     pub limits: Limits,
@@ -95,7 +107,7 @@ struct ListSpec {
     add: AddLine,
 }
 
-const LISTS: [ListSpec; 6] = [
+const LISTS: [ListSpec; 9] = [
     ListSpec {
         key: "hostname",
         lines: |raw| &raw.hostname,
@@ -108,6 +120,24 @@ const LISTS: [ListSpec; 6] = [
                 Err(errors.join("\n"))
             }
         },
+    },
+    ListSpec {
+        key: "skip-server-cert-verify-hostname",
+        lines: |raw| &raw.skip_server_cert_verify_hostname,
+        add: |config, _, line| {
+            let (hosts, errors) = parse_host_line(line);
+            config.skip_verify_hosts.extend(hosts);
+            if errors.is_empty() {
+                Ok(())
+            } else {
+                Err(errors.join("\n"))
+            }
+        },
+    },
+    ListSpec {
+        key: "client-source-address",
+        lines: |raw| &raw.client_source_address,
+        add: |config, _, line| config.sources.add_line(line).map_err(|err| err.to_string()),
     },
     ListSpec {
         key: "url-rewrite",
@@ -146,7 +176,18 @@ const LISTS: [ListSpec; 6] = [
             config
                 .rules
                 .map_locals
-                .push(parse_map_local(line, &env.resources)?);
+                .push(parse_map_local(line, &env.resources, false)?);
+            Ok(())
+        },
+    },
+    ListSpec {
+        key: "request-body-mock",
+        lines: |raw| &raw.request_body_mock,
+        add: |config, env, line| {
+            config
+                .rules
+                .request_mocks
+                .push(parse_map_local(line, &env.resources, true)?);
             Ok(())
         },
     },
@@ -178,6 +219,8 @@ impl Config {
             ca_fingerprint: normalize_fingerprint(&raw.ca_fingerprint),
             hosts: HostList::default(),
             skip_server_cert_verify: raw.skip_server_cert_verify,
+            skip_verify_hosts: HostList::default(),
+            sources: SourceList::default(),
             auto_quic_block: raw.auto_quic_block.unwrap_or(true),
             h2: raw.h2,
             limits: raw.limits.resolve(),

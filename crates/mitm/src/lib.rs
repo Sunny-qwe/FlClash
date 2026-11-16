@@ -14,6 +14,7 @@ mod exchange;
 mod facade;
 mod forward;
 mod headers;
+mod heads;
 mod hostlist;
 mod jq;
 mod limits;
@@ -26,6 +27,7 @@ mod script;
 mod script_tests;
 mod session;
 mod session_script;
+mod sources;
 mod target;
 mod task;
 #[cfg(test)]
