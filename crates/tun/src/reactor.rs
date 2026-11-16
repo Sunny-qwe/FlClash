@@ -721,6 +721,44 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_reader_parked_on_the_queue_is_woken_when_its_socket_moves_to_tokio() {
+        struct Woken(std::sync::atomic::AtomicBool);
+        impl std::task::Wake for Woken {
+            fn wake(self: Arc<Self>) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        let reactor = Reactor::new().unwrap();
+        let (near, mut far) = UnixStream::pair().unwrap();
+        near.set_nonblocking(true).unwrap();
+        let near = Arc::new(near);
+        let ready = Arc::new(SocketReady::default());
+        let _lease = reactor
+            .register(Arc::clone(&near), Arc::clone(&ready))
+            .unwrap();
+        assert!(reactor.set_busy(true).unwrap());
+        let woken = Arc::new(Woken(std::sync::atomic::AtomicBool::new(false)));
+        let waker = std::task::Waker::from(Arc::clone(&woken));
+        assert!(
+            ready
+                .poll_read_ready(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+
+        assert!(reactor.set_busy(false).unwrap());
+        far.write_all(b"reply").unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !woken.0.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the reader parked on the queue poller was never woken");
+        receive(&reactor, &ready, near.as_ref(), b"reply").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_quiet_queue_returns_to_tokio_once_waiting_has_cost_the_move() {
         use concord_common::SocketWatcher;
 

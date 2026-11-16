@@ -42,6 +42,10 @@ impl SocketReady {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     pub fn set_native(&self, native: Option<tokio::io::unix::AsyncFd<SocketSource>>) {
         *lock(&self.native) = native;
+        // A waiter parked with the old observer hears nothing from the new one until it polls
+        // again, and its connection may have no other event coming.
+        self.reader.wake();
+        self.writer.wake();
     }
 
     pub fn set(&self, readable: bool, writable: bool) {
@@ -85,6 +89,7 @@ impl SocketReady {
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         if let Some(native) = lock(&self.native).as_ref() {
+            self.reader.register(cx.waker());
             return native.poll_read_ready(cx).map(|result| result.map(|_| ()));
         }
         self.poll_ready(cx, READ, &self.reader)
@@ -93,6 +98,7 @@ impl SocketReady {
     pub fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         if let Some(native) = lock(&self.native).as_ref() {
+            self.writer.register(cx.waker());
             return native.poll_write_ready(cx).map(|result| result.map(|_| ()));
         }
         self.poll_ready(cx, WRITE, &self.writer)
