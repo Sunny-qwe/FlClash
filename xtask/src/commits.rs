@@ -1,7 +1,11 @@
 //! `xtask check-commits <git log revisions>`: holds commit messages to `rules.md`, Commits: a Conventional
-//! Commits subject with a scope, and no trailer or line that credits or links a coding agent.
+//! Commits subject with a scope, and no trailer or line that credits or links a coding agent. Commits older
+//! than the one that added this file are skipped: published history, which other repositories pin, cannot be
+//! reworded.
 
 use std::process::Command;
+
+const SELF: &str = "xtask/src/commits.rs";
 
 const TYPES: &[&str] = &[
     "build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test",
@@ -26,11 +30,18 @@ pub fn check(revisions: &[String]) -> Result<(), String> {
     if revisions.is_empty() {
         return Err("usage: xtask check-commits <git log revisions, e.g. origin/dev..HEAD>".into());
     }
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .args(["log", "--no-merges", "--format=%H%x00%B%x1e"])
-        .args(revisions)
-        .output()
-        .map_err(|err| format!("git: {err}"))?;
+        .args(revisions);
+    if let Some(start) = baseline()? {
+        println!(
+            "skipping commits older than {}",
+            &start[..start.len().min(12)]
+        );
+        command.arg("--not").arg(format!("{start}^@"));
+    }
+    let output = command.output().map_err(|err| format!("git: {err}"))?;
     if !output.status.success() {
         return Err(format!(
             "git log: {}",
@@ -57,6 +68,25 @@ pub fn check(revisions: &[String]) -> Result<(), String> {
         ));
         Err(problems.join("\n"))
     }
+}
+
+/// The oldest commit reachable from HEAD that added this file.
+fn baseline() -> Result<Option<String>, String> {
+    let output = Command::new("git")
+        .args(["log", "--diff-filter=A", "--format=%H", "HEAD", "--"])
+        .arg(format!(":(top){SELF}"))
+        .output()
+        .map_err(|err| format!("git: {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git log: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .last()
+        .map(str::to_owned))
 }
 
 fn message_problems(message: &str) -> Vec<String> {
@@ -114,6 +144,18 @@ fn credits_an_agent(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_baseline_is_a_commit_that_has_this_file() {
+        let start = baseline()
+            .unwrap()
+            .expect("HEAD has this file, so some commit added it");
+        let shown = Command::new("git")
+            .args(["cat-file", "-e", &format!("{start}:{SELF}")])
+            .status()
+            .unwrap();
+        assert!(shown.success());
+    }
 
     #[test]
     fn scoped_subjects_pass() {

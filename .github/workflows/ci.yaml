@@ -19,12 +19,6 @@ env:
   CARGO_TERM_COLOR: always
   # The release budget in bytes for the desktop binary, `concord`. The design target is 15 MB.
   CORE_MAX_BYTES: 30000000
-  # Pinned by hash, so a new bundle from https://curl.se/docs/caextract.html is a reviewed bump.
-  CA_BUNDLE: cacert-2026-09-25.pem
-  CA_BUNDLE_SHA256: a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
-  # FlClash's `cargoCore` builds `libconcord.so` with this NDK and API level.
-  ANDROID_NDK_VERSION: 28.2.13676358
-  ANDROID_API: 24
 
 jobs:
   lint:
@@ -139,23 +133,8 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Cache CA certificates
-        id: ca-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/ca
-          key: ca-${{ env.CA_BUNDLE_SHA256 }}
-
-      - name: Fetch CA certificates
-        if: steps.ca-cache.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p "$RUNNER_TEMP/ca"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/ca/$CA_BUNDLE" "https://curl.se/ca/$CA_BUNDLE"
-
       - name: Install CA certificates
-        run: |
-          echo "$CA_BUNDLE_SHA256  $RUNNER_TEMP/ca/$CA_BUNDLE" | sha256sum -c -
-          cp "$RUNNER_TEMP/ca/$CA_BUNDLE" assets/ca-certificates.crt
+        uses: ./.github/actions/ca-bundle
 
       - name: Build release core
         run: cargo build --release --locked -p concord-desktop
@@ -222,7 +201,7 @@ jobs:
         run: cargo test --workspace --locked
 
   android:
-    name: Android clippy (${{ matrix.target }})
+    name: Android (${{ matrix.target }})
     if: github.event_name == 'workflow_dispatch' || !github.event.repository.private
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -234,6 +213,8 @@ jobs:
           - target: aarch64-linux-android
             clang: aarch64-linux-android
             abi: arm64-v8a
+            # The release `libconcord.so` budget in bytes: about 20% above its size when it was set.
+            budget: 31000000
           - target: armv7-linux-androideabi
             clang: armv7a-linux-androideabi
             abi: armeabi-v7a
@@ -250,41 +231,33 @@ jobs:
           key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Install the NDK
-        run: |
-          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ANDROID_NDK_VERSION" > /dev/null
-          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
-
-      # The variables FlClash's `cargoCore` sets for each target.
-      - name: Point cargo at the NDK
-        env:
-          TARGET: ${{ matrix.target }}
-          CLANG: ${{ matrix.clang }}
-          ABI: ${{ matrix.abi }}
-        run: |
-          ndk=$ANDROID_NDK_ROOT
-          host=$(ls -d "$ndk"/toolchains/llvm/prebuilt/*/)
-          clang=${host}bin/$CLANG$ANDROID_API-clang
-          under=${TARGET//-/_}
-          upper=${under^^}
-          toolchain=$RUNNER_TEMP/android.toolchain.cmake
-          printf 'set(ANDROID_ABI "%s")\nset(ANDROID_PLATFORM "android-%s")\ninclude("%s")\n' \
-            "$ABI" "$ANDROID_API" "$ndk/build/cmake/android.toolchain.cmake" > "$toolchain"
-          {
-            echo "ANDROID_NDK_HOME=$ndk"
-            echo "CC_$under=$clang"
-            echo "CXX_$under=$clang++"
-            echo "AR_$under=${host}bin/llvm-ar"
-            echo "CARGO_TARGET_${upper}_LINKER=$clang"
-            echo "CMAKE_TOOLCHAIN_FILE_$under=$toolchain"
-            echo "BINDGEN_EXTRA_CLANG_ARGS_$under=--sysroot=${host}sysroot --target=$CLANG$ANDROID_API"
-            echo "BORING_BSSL_RUST_CPPLIB=c++_static"
-          } >> "$GITHUB_ENV"
+      - name: Set up the NDK
+        uses: ./.github/actions/android-ndk
+        with:
+          target: ${{ matrix.target }}
+          clang: ${{ matrix.clang }}
+          abi: ${{ matrix.abi }}
 
       - name: Clippy
         run: >-
           cargo clippy --workspace --all-targets --locked --target ${{ matrix.target }} --
           -D warnings -A clippy::missing_const_for_thread_local
+
+      # The fat-LTO release build takes minutes, so only the main ABI checks its budget on every change;
+      # `platforms.yaml` checks the other two weekly.
+      - name: Install CA certificates
+        if: matrix.budget
+        uses: ./.github/actions/ca-bundle
+
+      - name: Build release libconcord.so
+        if: matrix.budget
+        run: cargo build --release --locked --target ${{ matrix.target }} -p concord-android
+
+      - name: Check library size
+        if: matrix.budget
+        run: >-
+          cargo run --locked -p xtask --
+          check-size target/${{ matrix.target }}/release/libconcord.so ${{ matrix.budget }}
 
   windows:
     name: Windows clippy

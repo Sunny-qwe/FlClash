@@ -24,8 +24,9 @@ drops `/EHsc`.
 
 A change is done when all of these pass. `.github/workflows/ci.yaml` runs them on Linux with `--locked`, split into
 parallel jobs, and fails if they changed a tracked file; it also runs clippy and the tests on macOS, clippy for the
-three Android ABIs FlClash ships and for Windows (the Windows job does not fail the run yet), and the interop tests
-that need only mihomo or OpenSSH. Run the clippy of every platform whose code the change touches.
+three Android ABIs FlClash ships and for Windows (the Windows job does not fail the run yet), the arm64-v8a release
+`libconcord.so` against its size budget, and the interop tests that need only mihomo or OpenSSH. Run the clippy of
+every platform whose code the change touches.
 
 ```sh
 cargo fmt --check
@@ -46,7 +47,8 @@ Weekly workflows run what is too slow or too noisy for every change; each can al
 floating stable; a failure means bump `rust-toolchain.toml`), `feature-powerset.yaml` (`cargo hack check
 --feature-powerset`), `fuzz-smoke.yaml` (each fuzz target for two minutes), `coverage.yaml` (an lcov artifact, no
 threshold), `bench-smoke.yaml` (one short quick-tier round to show the harness runs; its numbers are not read) and
-`platforms.yaml` (the Windows tests, clippy for Windows on Arm and Intel macOS, the tests on Linux arm64).
+`platforms.yaml` (the Windows tests, clippy for Windows on Arm and Intel macOS, the tests on Linux arm64, and the
+release `libconcord.so` of the other two Android ABIs against their budgets).
 
 - `cargo test --workspace` also runs xtask's source checks: `stream_policy` holds every `Stream` wrapper to its
   declared capability policy (`rules.md`, Layering And Ownership); `vendor_patches` holds `vendor/` to the files
