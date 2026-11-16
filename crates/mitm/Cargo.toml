@@ -33,6 +33,9 @@ http = { workspace = true }
 http-body-util = { workspace = true }
 futures-util = { workspace = true }
 fancy-regex = { workspace = true }
+jaq-core = { workspace = true }
+jaq-std = { workspace = true }
+jaq-json = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rcgen = { workspace = true, features = ["x509-parser"] }

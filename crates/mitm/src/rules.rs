@@ -3,6 +3,7 @@ use std::path::{Component, Path};
 use http::StatusCode;
 use http::header::{HeaderMap, HeaderName, HeaderValue};
 
+use crate::jq::{Jq, JqOutcome};
 use crate::pattern::Pattern;
 use crate::script::Script;
 use crate::text::{Field, canonical_header, decode_base64, quote, remainder, split_fields, texts};
@@ -94,10 +95,16 @@ struct BodyReplacement {
 }
 
 #[derive(Debug)]
+enum BodyAction {
+    Replace(Vec<BodyReplacement>),
+    Jq(Jq),
+}
+
+#[derive(Debug)]
 pub struct BodyRewrite {
     response: bool,
     pattern: Pattern,
-    replacements: Vec<BodyReplacement>,
+    action: BodyAction,
 }
 
 #[derive(Debug)]
@@ -293,6 +300,25 @@ impl HeaderRewrite {
 }
 
 pub(crate) fn parse_body_rewrite(line: &str) -> Result<BodyRewrite, String> {
+    let kind = line.split_whitespace().next().unwrap_or_default();
+    let jq_response = match kind.to_ascii_lowercase().as_str() {
+        "http-request-jq" => Some(false),
+        "http-response-jq" => Some(true),
+        _ => None,
+    };
+    if let Some(response) = jq_response {
+        let rest = line.trim_start().get(kind.len()..).unwrap_or_default();
+        let (pattern, expression) = leading_field(rest).ok_or("unclosed quote")?;
+        let expression = unwrap_quotes(expression.trim());
+        if pattern.is_empty() || expression.is_empty() {
+            return Err("expected a pattern and a jq expression".to_string());
+        }
+        return Ok(BodyRewrite {
+            response,
+            pattern: Pattern::new(&pattern)?,
+            action: BodyAction::Jq(Jq::compile(expression).map_err(|err| err.to_string())?),
+        });
+    }
     let fields = split_fields(line)?;
     if fields.len() < 4 {
         return Err("expected a type, a pattern and a regex with its replacement".to_string());
@@ -301,9 +327,6 @@ pub(crate) fn parse_body_rewrite(line: &str) -> Result<BodyRewrite, String> {
     let response = match first.to_ascii_lowercase().as_str() {
         "http-request" => false,
         "http-response" => true,
-        "http-request-jq" | "http-response-jq" => {
-            return Err("jq rewrites are not supported".to_string());
-        }
         _ => return Err(format!("unknown type {}", quote(&first))),
     };
     let pairs = fields.get(2..).unwrap_or_default();
@@ -321,18 +344,66 @@ pub(crate) fn parse_body_rewrite(line: &str) -> Result<BodyRewrite, String> {
     Ok(BodyRewrite {
         response,
         pattern: Pattern::new(&field_text(&fields, 1))?,
-        replacements,
+        action: BodyAction::Replace(replacements),
     })
+}
+
+/// The pattern of a jq line, and the expression after it as written: its own quotes and
+/// spaces are jq's, not the line's.
+fn leading_field(text: &str) -> Option<(String, &str)> {
+    let text = text.trim_start();
+    let Some(quoted) = text.strip_prefix('"') else {
+        let end = text.find([' ', '\t']).unwrap_or(text.len());
+        return Some((text[..end].to_string(), &text[end..]));
+    };
+    let mut out = String::new();
+    let mut chars = quoted.char_indices();
+    while let Some((at, c)) = chars.next() {
+        match c {
+            '\\' if quoted[at + 1..].starts_with('"') => {
+                out.push('"');
+                chars.next();
+            }
+            '"' => return Some((out, &quoted[at + 1..])),
+            c => out.push(c),
+        }
+    }
+    None
+}
+
+fn unwrap_quotes(text: &str) -> &str {
+    for mark in ['\'', '"'] {
+        if text.len() >= 2 && text.starts_with(mark) && text.ends_with(mark) {
+            return &text[1..text.len() - 1];
+        }
+    }
+    text
 }
 
 impl BodyRewrite {
     pub(crate) fn apply(&self, body: String) -> String {
-        self.replacements.iter().fold(body, |body, replacement| {
-            replacement
-                .pattern
-                .replace(&body, &replacement.with, true)
-                .unwrap_or(body)
-        })
+        match &self.action {
+            BodyAction::Replace(replacements) => {
+                replacements.iter().fold(body, |body, replacement| {
+                    replacement
+                        .pattern
+                        .replace(&body, &replacement.with, true)
+                        .unwrap_or(body)
+                })
+            }
+            BodyAction::Jq(jq) => match jq.run(&body) {
+                JqOutcome::Rewritten(rewritten) => rewritten,
+                JqOutcome::NotJson => {
+                    tracing::debug!("[MITM] jq rewrite skipped: the body is not JSON");
+                    body
+                }
+                JqOutcome::Empty => body,
+                JqOutcome::Failed(err) => {
+                    tracing::warn!("[MITM] jq rewrite failed: {err}");
+                    body
+                }
+            },
+        }
     }
 }
 
@@ -698,7 +769,8 @@ mod tests {
         assert_eq!(got, "{\"ad\":false}\nreplaced\nkeep line");
         for line in [
             "http-response ^a only",
-            "http-response-jq ^a '.a'",
+            "http-response-jq ^a '.a ='",
+            "http-response-jq ^a",
             "sideways ^a b c",
         ] {
             assert!(parse_body_rewrite(line).is_err(), "{line}");

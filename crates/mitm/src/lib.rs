@@ -15,6 +15,7 @@ mod facade;
 mod forward;
 mod headers;
 mod hostlist;
+mod jq;
 mod limits;
 mod pattern;
 #[cfg(feature = "script")]

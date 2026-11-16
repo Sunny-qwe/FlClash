@@ -111,6 +111,39 @@ async fn rewrites_decrypted_requests() {
 }
 
 #[tokio::test]
+async fn rewrites_json_bodies_with_jq() {
+    let (_server, rig) = rig(echo(), true, &["http/1.1"]).await;
+    let errors = rig.config(json!({
+        "enable": true,
+        "hostname": ["example.test"],
+        "skip-server-cert-verify": true,
+        "body-rewrite": [
+            r"http-response-jq ^https://example\.test/api '.ad = false | del(.items)'",
+            r"http-request-jq ^https://example\.test/echo '.a = 2'",
+            r"http-response-jq ^https://example\.test/echo '.x = 1'",
+            r"http-response-jq ^https://example\.test/bad '.a = '",
+        ],
+    }));
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("invalid jq expression"), "{errors:?}");
+    let mut client = Client::tls(&rig, "example.test", 443, &["http/1.1"])
+        .await
+        .unwrap();
+    let answer = client.get("/api").await;
+    assert_eq!(answer.text(), r#"{"ad":false}"#);
+    assert_eq!(
+        answer.header("content-length"),
+        answer.body.len().to_string()
+    );
+    let request = client.request("POST", "/echo", &[], r#"{"a":1}"#);
+    assert_eq!(
+        client.send(request).await.unwrap().text(),
+        r#"example.test|/echo||{"a":2}"#,
+        "the request body is rewritten, the echo that is not JSON is kept"
+    );
+}
+
+#[tokio::test]
 async fn dials_the_host_a_rewrite_moves_to() {
     let (_server, rig) = rig(echo(), true, &["http/1.1"]).await;
     rig.config(json!({
