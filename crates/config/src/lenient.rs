@@ -1,4 +1,7 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fmt;
+use std::rc::Rc;
 
 use base64::Engine;
 use indexmap::IndexMap;
@@ -94,12 +97,25 @@ enum Lookup<'a> {
     Folded(HashMap<String, &'a Value>),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ignored {
+    pub key: String,
+    pub why: String,
+}
+
+impl fmt::Display for Ignored {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} is ignored: {}", self.key, self.why)
+    }
+}
+
 pub struct Fields<'a> {
     lookup: Lookup<'a>,
     path: String,
     missing: Vec<String>,
     replace_underscore: bool,
-    ignored: Vec<String>,
+    /// Shared with the fields of every sub-map, so a note from one reaches the caller.
+    ignored: Rc<RefCell<Vec<Ignored>>>,
 }
 
 impl<'a> Fields<'a> {
@@ -126,7 +142,7 @@ impl<'a> Fields<'a> {
             path: path.to_string(),
             missing: Vec::new(),
             replace_underscore,
-            ignored: Vec::new(),
+            ignored: Rc::default(),
         }
     }
 
@@ -243,6 +259,18 @@ impl<'a> Fields<'a> {
         self.u16(key)
     }
 
+    /// A number mihomo keeps as a Go `int` and does not check: one this type cannot hold is
+    /// noted and read as `fallback`, as is an absent one.
+    pub fn loose<T: TryFrom<i128>>(&mut self, key: &str, fallback: T) -> Result<T> {
+        let Some(number) = self.integer(key, "int", i128::MIN, i128::MAX)? else {
+            return Ok(fallback);
+        };
+        Ok(T::try_from(number).unwrap_or_else(|_| {
+            self.note(key, format!("{number} is out of range"));
+            fallback
+        }))
+    }
+
     pub fn u32(&mut self, key: &str) -> Result<u32> {
         Ok(self
             .integer(key, "uint32", 0, i128::from(u32::MAX))?
@@ -340,11 +368,11 @@ impl<'a> Fields<'a> {
     pub fn sub(&mut self, key: &str) -> Result<Option<Fields<'a>>> {
         match self.lookup(key) {
             None => Ok(None),
-            Some(Value::Object(map)) => Ok(Some(Fields::new(
-                map,
-                &self.name(key),
-                self.replace_underscore,
-            ))),
+            Some(Value::Object(map)) => {
+                let mut sub = Fields::new(map, &self.name(key), self.replace_underscore);
+                sub.ignored = self.ignored.clone();
+                Ok(Some(sub))
+            }
             Some(other) => Err(ConfigError::new(format!(
                 "'{}' expected a map, got '{}'",
                 self.name(key),
@@ -397,13 +425,19 @@ impl<'a> Fields<'a> {
     /// Notes a key this core reads past when it asks for something, for the load report.
     pub fn ignore(&mut self, key: &str, why: &str) {
         if self.lookup(key).is_some_and(crate::raw::asks_for_something) {
-            self.ignored
-                .push(format!("{} is ignored: {why}", self.name(key)));
+            self.note(key, why.to_string());
         }
     }
 
-    pub fn take_ignored(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.ignored)
+    fn note(&self, key: &str, why: String) {
+        self.ignored.borrow_mut().push(Ignored {
+            key: self.name(key),
+            why,
+        });
+    }
+
+    pub fn take_ignored(&mut self) -> Vec<Ignored> {
+        std::mem::take(&mut *self.ignored.borrow_mut())
     }
 
     pub fn finish(self) -> Result<()> {

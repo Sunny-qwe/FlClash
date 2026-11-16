@@ -100,7 +100,11 @@ fn options_follow_the_go_adapter() {
     assert!(build(json!({"version": 5, "udp": true})).is_ok());
     assert!(build(json!({"version": 1, "udp": true})).is_err());
     assert!(build(json!({"version": 2, "udp": true})).is_err());
-    assert!(build(json!({"version": 6})).is_err());
+    assert!(matches!(
+        build(json!({"version": 6})),
+        Err(crate::ctx::BuildError::Unsupported(message)) if message.contains("not implemented")
+    ));
+    assert!(build(json!({"version": 7})).is_err());
     for mode in ["restls", "jls"] {
         let unsupported = build(json!({"obfs-opts": {"mode": mode}})).err().unwrap();
         assert!(unsupported.is_unsupported(), "{mode}");

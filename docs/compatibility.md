@@ -12,7 +12,11 @@ deliberate differences, what is left out, and what is supported only in part.
 | The key is ignored with a warning | It does not change where traffic goes |
 
 A key that a node's type does not have in mihomo, such as `reality-opts` on `hysteria2` or `alpn` on `socks5`, is
-ignored with a warning, as is a `smux` that is not a map. Warnings carry a stable `code` and are returned by
+ignored with a warning, as is a `smux` that is not a map. A number mihomo keeps without checking its range, such as
+`mixed-port: 70000`, `dns.fake-ip-ttl: -1` or a negative `heartbeat-interval` on a node, is ignored with a warning
+(`out_of_range` for the general, `dns` and `ntp` settings): a port leaves its listener closed and any other number takes
+its default. A number that picks a protocol version, such as `version` on `snell`, is still refused. Warnings carry a
+stable `code` and are returned by
 `config.warnings`. Settings whose loss would change routing or
 widen exposure are never ignored silently, and keys that name a server's identity (`fingerprint`, `certificate`,
 `reality-opts`) are never dropped while the node keeps working.
@@ -74,12 +78,13 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
   with a warning.
 - The `relay` group type, which mihomo also removed; use `dialer-proxy`.
 - ShadowsocksR `chacha20` and `xchacha20` (obsolete unauthenticated ciphers); VLESS `encryption`; xhttp over HTTP/3;
-  Hysteria `faketcp`; ShadowQUIC over QUIC v2.
+  Hysteria `faketcp`; ShadowQUIC over QUIC v2; Snell version 6, whose node is set aside with a warning.
 - sing-mux brutal on the client's own socket, which needs a Linux kernel module. The sing-mux exchange is done, so
   the server still paces its sends.
 - A node's `tfo` on macOS and Windows, where it does nothing.
 - SSH RSA host keys. Modern servers offer ed25519; RSA client keys are supported.
-- `global-client-fingerprint`, which mihomo also removed.
+- `global-client-fingerprint`, which mihomo also removed, and a node's `ws-path` and `ws-headers`, which it removed
+  in favour of `ws-opts`; a node that writes them gets a warning.
 
 ## Partial Support
 
@@ -105,6 +110,9 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
   the interface's forwarding, router-discovery, DAD and DNS-registration options are not set. `tun.dns-mode` is not
   read: with `auto-route` the TUN becomes the system resolver on every desktop platform, macOS included, where mihomo
   leaves it off unless `dns-mode` asks; the macOS entry lives in the dynamic store and goes away with the process.
+  The keys that narrow what the TUN captures by package, Android user, uid range, port range, MAC address or route
+  set are ignored, so the TUN captures other traffic than they say; the warning says so. An app that embeds Concord
+  picks the apps that go through its TUN itself.
 - **DNS:** a `dhcp://<interface>` upstream runs as `system://` with a warning.
 - **Accepted without effect:** `skip-auth-prefixes` and `inbound-tfo` (a non-empty value gets a warning).
 - **Deprecated fingerprint names:** `chrome_psk`, the other `chrome_*` variants and `randomized` are read as `chrome`

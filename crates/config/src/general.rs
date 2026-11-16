@@ -3,7 +3,7 @@ use concord_common::{FindProcessMode, LogLevel, TunnelMode};
 use crate::Map;
 use crate::error::{ConfigError, Result};
 use crate::keys::DEFAULT_GLOBAL_UA;
-use crate::lenient::Fields;
+use crate::lenient::{Fields, Ignored};
 use crate::net::IpCidr;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -121,13 +121,19 @@ fn choice<T>(text: String, parse: impl Fn(&str) -> Option<T>, what: &str) -> Res
 
 impl General {
     pub fn from_map(map: &Map) -> Result<General> {
+        Ok(General::read(map)?.0)
+    }
+
+    /// A port out of range leaves its listener closed; another number out of range takes its
+    /// default. Both are returned as notes.
+    pub fn read(map: &Map) -> Result<(General, Vec<Ignored>)> {
         let mut f = Fields::new(map, "", false);
         let mut general = General {
-            port: f.u16("port")?,
-            socks_port: f.u16("socks-port")?,
-            mixed_port: f.u16("mixed-port")?,
-            redir_port: f.u16("redir-port")?,
-            tproxy_port: f.u16("tproxy-port")?,
+            port: f.loose("port", 0)?,
+            socks_port: f.loose("socks-port", 0)?,
+            mixed_port: f.loose("mixed-port", 0)?,
+            redir_port: f.loose("redir-port", 0)?,
+            tproxy_port: f.loose("tproxy-port", 0)?,
             allow_lan: f.boolean("allow-lan")?,
             ..General::default()
         };
@@ -159,16 +165,15 @@ impl General {
         general.unified_delay = f.boolean("unified-delay")?;
         general.interface_name = f.string("interface-name")?;
         general.routing_mark = f.mark("routing-mark")?;
-        general.keep_alive_idle = f.u32("keep-alive-idle")?;
-        general.keep_alive_interval = f.u32("keep-alive-interval")?;
+        general.keep_alive_idle = f.loose("keep-alive-idle", 0)?;
+        general.keep_alive_interval = f.loose("keep-alive-interval", 0)?;
         general.disable_keep_alive = f.boolean("disable-keep-alive")?;
         if let Some(ua) = f.opt_string("global-ua")? {
             general.global_ua = ua;
         }
         general.geo_auto_update = f.boolean("geo-auto-update")?;
-        if f.has("geo-update-interval") {
-            general.geo_update_interval = f.u32("geo-update-interval")?;
-        }
+        general.geo_update_interval =
+            f.loose("geo-update-interval", general.geo_update_interval)?;
         general.geodata_loader = match f.string("geodata-loader")?.to_ascii_lowercase().as_str() {
             "standard" => GeodataLoader::Standard,
             _ => GeodataLoader::MemConservative,
@@ -184,8 +189,9 @@ impl General {
                 general.external_controller_cors.allow_private_network = allow;
             }
         }
+        let notes = f.take_ignored();
         f.finish()?;
-        Ok(general)
+        Ok((general, notes))
     }
 }
 

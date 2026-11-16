@@ -74,6 +74,8 @@ pub struct ProxyProviderDef {
     pub age_secret_key: String,
     pub health_check: HealthCheckDef,
     pub override_: OverrideDef,
+    /// `payload` of a file or http provider: its nodes until a load succeeds.
+    pub fallback: Vec<Map>,
     pub raw: Map,
 }
 
@@ -152,18 +154,21 @@ fn parse_override(f: &mut Fields<'_>) -> Result<OverrideDef> {
         additional_suffix: opt_override(&mut o, "additional-suffix")?,
         proxy_name: Vec::new(),
     };
-    if let Some(Value::Array(items)) = o.raw("proxy-name") {
-        for item in items {
-            let Value::Object(entry) = item else {
-                return Err(ConfigError::new("override.proxy-name entries must be maps"));
-            };
-            let mut e = Fields::new(entry, "override.proxy-name", false);
-            let pattern = e.req_string("pattern")?;
-            let target = e.req_string("target")?;
-            e.finish()?;
-            filter::compile_pattern(&pattern, false)?;
-            def.proxy_name.push(NameRewrite { pattern, target });
-        }
+    let rewrites = match o.raw("proxy-name") {
+        Some(Value::Array(items)) => items.as_slice(),
+        None | Some(Value::Null) => &[],
+        Some(_) => return Err(ConfigError::new("'override.proxy-name' is not a slice")),
+    };
+    for item in rewrites {
+        let Value::Object(entry) = item else {
+            return Err(ConfigError::new("override.proxy-name entries must be maps"));
+        };
+        let mut e = Fields::new(entry, "override.proxy-name", false);
+        let pattern = e.req_string("pattern")?;
+        let target = e.req_string("target")?;
+        e.finish()?;
+        filter::compile_pattern(&pattern, false)?;
+        def.proxy_name.push(NameRewrite { pattern, target });
     }
     Ok(def)
 }
@@ -205,23 +210,23 @@ pub fn parse_proxy_provider(name: &str, map: &Map) -> Result<ProxyProviderDef> {
     let dialer_proxy = f.string("dialer-proxy")?;
     let age_secret_key = f.string("age-secret-key")?;
     let override_ = parse_override(&mut f)?;
+    let mut fallback = Vec::new();
+    if let Some(Value::Array(items)) = f.raw("payload") {
+        for item in items {
+            match item {
+                Value::Object(entry) => fallback.push(entry.clone()),
+                _ => return Err(ConfigError::new("payload entries must be maps")),
+            }
+        }
+    }
     let source = match type_name.as_str() {
         "file" => ProxySource::File {
             path: f.string("path")?,
         },
         "http" => ProxySource::Http(http_source(&mut f)?),
-        "inline" => {
-            let mut payload = Vec::new();
-            if let Some(Value::Array(items)) = f.raw("payload") {
-                for item in items {
-                    match item {
-                        Value::Object(entry) => payload.push(entry.clone()),
-                        _ => return Err(ConfigError::new("payload entries must be maps")),
-                    }
-                }
-            }
-            ProxySource::Inline { payload }
-        }
+        "inline" => ProxySource::Inline {
+            payload: std::mem::take(&mut fallback),
+        },
         other => {
             return Err(ConfigError::new(format!("unsupport vehicle type: {other}")));
         }
@@ -249,6 +254,7 @@ pub fn parse_proxy_provider(name: &str, map: &Map) -> Result<ProxyProviderDef> {
         age_secret_key,
         health_check,
         override_,
+        fallback,
         raw: map.clone(),
     })
 }
@@ -521,6 +527,13 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(&inline.source, ProxySource::Inline { payload } if payload.len() == 1));
+        assert!(inline.fallback.is_empty());
+        let spare = parse_proxy_provider(
+            "s",
+            &map(json!({"type": "file", "path": "a.yaml", "payload": [{"name": "a", "type": "direct"}]})),
+        )
+        .unwrap();
+        assert_eq!(spare.fallback.len(), 1);
         assert!(parse_proxy_provider("x", &map(json!({"type": "ftp"}))).is_err());
         assert!(parse_proxy_provider("x", &map(json!({}))).is_err());
         assert!(
@@ -530,6 +543,21 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_proxy_name_rewrite_that_is_not_a_list_is_refused() {
+        let parsed = |rewrite: Value| {
+            parse_proxy_provider(
+                "p",
+                &map(json!({"type": "file", "path": "a", "override": {"proxy-name": rewrite}})),
+            )
+        };
+        let err = parsed(json!({"pattern": "a", "target": "b"})).unwrap_err();
+        assert_eq!(err.message, "'override.proxy-name' is not a slice");
+        assert!(parsed(Value::Null).unwrap().override_.proxy_name.is_empty());
+        let listed = parsed(json!([{"pattern": "a", "target": "b"}])).unwrap();
+        assert_eq!(listed.override_.proxy_name.len(), 1);
     }
 
     #[test]

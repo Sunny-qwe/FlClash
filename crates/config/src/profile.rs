@@ -6,7 +6,6 @@ use serde_json::Value;
 use crate::Map;
 use crate::dns::DnsConfig;
 use crate::error::{ConfigError, Result};
-use crate::filter::CompiledFilter;
 use crate::general::General;
 use crate::geox::GeoConfig;
 use crate::group::{GroupDef, GroupKind, find_group_cycle, parse_group};
@@ -34,7 +33,7 @@ const BUILTIN_TARGETS: [&str; 7] = [
     "COMPATIBLE",
     "GLOBAL",
 ];
-const RESERVED_PROVIDER: &str = "COMPATIBLE";
+const RESERVED_PROVIDER: &str = "default";
 const DEFAULT_TEST_URL: &str = "https://www.gstatic.com/generate_204";
 
 #[derive(Clone, Debug, Default)]
@@ -187,10 +186,11 @@ fn parse_provider_proxies(
     report: &mut LoadReport,
 ) -> Result<()> {
     for provider in providers {
-        let ProxySource::Inline { payload } = &provider.source else {
-            continue;
+        let payload = match &provider.source {
+            ProxySource::Inline { payload } => payload,
+            _ => &provider.fallback,
         };
-        if provider.override_.expr {
+        if provider.override_.expr || payload.is_empty() {
             continue;
         }
         let selected = provider.select_proxies(payload.clone()).map_err(|err| {
@@ -327,6 +327,8 @@ fn resolve_groups(
             ))
             .with_line(line));
         }
+        let prefix = format!("proxy-groups.{}.", group.name);
+        report.warn_ignored("not_applied", &prefix, &group.ignored);
         names.groups.insert(group.name.clone());
         groups.push(group);
     }
@@ -364,21 +366,11 @@ fn resolve_groups(
         if group.include_all_providers {
             group.use_providers = sorted_providers.iter().map(|s| (*s).to_string()).collect();
         }
+        let mut dropped = Vec::new();
         if group.include_all_proxies {
-            if group.filter.is_empty() {
-                group
-                    .proxies
-                    .extend(sorted_proxies.iter().map(|s| (*s).to_string()));
-            } else {
-                let filter =
-                    CompiledFilter::compile(&group.filter).map_err(|err| fail(err.message))?;
-                group.proxies.extend(
-                    sorted_proxies
-                        .iter()
-                        .filter(|name| filter.is_match(name))
-                        .map(|s| (*s).to_string()),
-                );
-            }
+            dropped = group
+                .take_all_proxies(&sorted_proxies, &names.quarantined)
+                .map_err(|err| fail(err.message))?;
             if group.proxies.is_empty() && group.use_providers.is_empty() {
                 group.proxies = vec![fallback.clone()];
             }
@@ -398,7 +390,6 @@ fn resolve_groups(
         }
         let had_proxies = !group.proxies.is_empty();
         let mut kept = Vec::with_capacity(group.proxies.len());
-        let mut dropped = Vec::new();
         for proxy in std::mem::take(&mut group.proxies) {
             if names.known.contains(&proxy) || BUILTIN_TARGETS.contains(&proxy.as_str()) {
                 kept.push(proxy);
@@ -482,6 +473,7 @@ fn global_group(proxies: &[ProxyDef], groups: &[GroupDef]) -> GroupDef {
         default_selected: String::new(),
         strategy: Default::default(),
         hash_key: String::new(),
+        ignored: Vec::new(),
         raw: Map::new(),
     }
 }
@@ -702,11 +694,14 @@ fn warn_ignored_sections(raw: &RawConfig, report: &mut LoadReport) {
 
 pub fn load_raw(mut raw: RawConfig, options: &LoadOptions) -> Result<Profile> {
     let mut report = std::mem::take(&mut raw.report);
-    let general = General::from_map(&raw.general)?;
-    let dns = DnsConfig::from_map(&raw.dns, general.ipv6).map_err(|err| err.prefixed("dns: "))?;
+    let (general, general_notes) = General::read(&raw.general)?;
+    let (dns, dns_notes) =
+        DnsConfig::read(&raw.dns, general.ipv6).map_err(|err| err.prefixed("dns: "))?;
     let tun = TunConfig::from_map(&raw.tun).map_err(|err| err.prefixed("tun: "))?;
     let sniffer = SnifferConfig::from_map(&raw.sniffer).map_err(|err| err.prefixed("sniffer: "))?;
-    let ntp = NtpConfig::from_map(&raw.ntp)?;
+    let (ntp, ntp_notes) = NtpConfig::read(&raw.ntp)?;
+    let notes = [general_notes, dns_notes, ntp_notes].concat();
+    report.warn_ignored("out_of_range", "", &notes);
     let geo = GeoConfig::from_maps(&general, &raw.geox_url)?;
     let hosts = parse_hosts(&raw.hosts, &mut report)?;
 
@@ -1117,6 +1112,112 @@ proxy-groups:
     }
 
     #[test]
+    fn a_number_out_of_range_falls_back_with_a_warning() {
+        let text = "mixed-port: 70000\nport: -1\nkeep-alive-idle: -1\ngeo-update-interval: -1\n\
+                    ntp: {enable: true, port: 70000, interval: -5}\n\
+                    dns: {fake-ip-ttl: -1, cache-max-size: 3000000000, listen-routing-mark: -1, ipv6-timeout: 5000000000}\n";
+        let profile = load_text(text).unwrap();
+        let general = &profile.general;
+        assert_eq!((general.mixed_port, general.port), (0, 0));
+        assert_eq!(
+            (general.keep_alive_idle, general.geo_update_interval),
+            (0, 24)
+        );
+        assert_eq!((profile.ntp.port, profile.ntp.interval), (123, 30));
+        let dns = &profile.dns;
+        assert_eq!(
+            (dns.fake_ip_ttl, dns.ipv6_timeout, dns.cache_max_size),
+            (1, 100, 0)
+        );
+        assert_eq!(dns.listen_routing_mark, u32::MAX);
+        let warned: Vec<(&str, &str)> = profile
+            .report
+            .warnings
+            .iter()
+            .map(|warning| (warning.code, warning.path.as_str()))
+            .collect();
+        for path in [
+            "port",
+            "mixed-port",
+            "keep-alive-idle",
+            "geo-update-interval",
+            "dns.ipv6-timeout",
+            "dns.fake-ip-ttl",
+            "dns.cache-max-size",
+            "ntp.port",
+            "ntp.interval",
+        ] {
+            assert!(
+                warned.contains(&("out_of_range", path)),
+                "{path}: {warned:?}"
+            );
+        }
+        let message = &profile
+            .report
+            .warnings
+            .iter()
+            .find(|w| w.path == "mixed-port")
+            .unwrap()
+            .message;
+        assert_eq!(message, "mixed-port is ignored: 70000 is out of range");
+    }
+
+    #[test]
+    fn an_include_all_group_names_the_set_aside_nodes_it_lost() {
+        let profile = load_text(
+            "proxies:\n  - {name: hk-a, type: socks5, server: 127.0.0.1, port: 1}\n  - {name: hk-b, type: tailscale}\n\
+             proxy-groups:\n  - {name: HK, type: select, include-all-proxies: true, filter: hk}\n  \
+             - {name: TS, type: select, include-all-proxies: true, filter: hk-b, empty-fallback: DIRECT}\n",
+        )
+        .unwrap();
+        let dropped: Vec<(&str, &str)> = profile
+            .report
+            .warnings
+            .iter()
+            .filter(|w| w.code == "group_members_dropped")
+            .map(|w| (w.path.as_str(), w.message.as_str()))
+            .collect();
+        assert_eq!(
+            dropped,
+            [
+                ("proxy-groups.HK", "dropped quarantined members: hk-b"),
+                ("proxy-groups.TS", "dropped quarantined members: hk-b"),
+            ]
+        );
+        let ts = profile.groups.iter().find(|g| g.name == "TS").unwrap();
+        assert_eq!(ts.proxies, ["DIRECT"]);
+    }
+
+    #[test]
+    fn a_dialing_key_on_a_group_is_ignored_with_a_warning() {
+        let profile = load_text(
+            "proxy-groups:\n  - {name: g, type: select, proxies: [DIRECT], routing-mark: 7, dialer-proxy: x, interface-name: ''}\n",
+        )
+        .unwrap();
+        let warned: Vec<(&str, &str, &str)> = profile
+            .report
+            .warnings
+            .iter()
+            .map(|w| (w.code, w.path.as_str(), w.message.as_str()))
+            .collect();
+        assert_eq!(
+            warned,
+            [
+                (
+                    "not_applied",
+                    "proxy-groups.g.routing-mark",
+                    "routing-mark is ignored: a group does not dial, so set it on the nodes"
+                ),
+                (
+                    "not_applied",
+                    "proxy-groups.g.dialer-proxy",
+                    "dialer-proxy is ignored: a group does not dial, so set it on the nodes"
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn inbound_tfo_asks_for_something_the_core_does_not_do() {
         assert!(
             warned_paths(
@@ -1311,12 +1412,28 @@ proxy-groups:
         assert_eq!(profile.proxy_providers.len(), 2);
         assert_eq!(profile.quarantined[0].provider.as_deref(), Some("inline"));
         assert!(
-            error("proxy-providers:\n  COMPATIBLE: {type: file, path: a}\n").contains("COMPATIBLE")
-        );
-        assert!(
             error("proxy-groups:\n  - {name: g, type: select, use: [none]}\n")
                 .contains("'none' not found")
         );
+    }
+
+    #[test]
+    fn default_is_the_reserved_provider_name_as_in_mihomo() {
+        assert!(
+            error("proxy-providers:\n  default: {type: file, path: a}\n")
+                .contains("can not defined a provider called `default`")
+        );
+        assert!(
+            error("proxy-groups:\n  - {name: g, type: select, use: [default]}\n")
+                .contains("proxy group default can't contains in `use`")
+        );
+        let profile = load_text(
+            "proxy-providers:\n  COMPATIBLE:\n    type: inline\n    payload:\n      \
+             - {name: c, type: socks5, server: 127.0.0.3, port: 1080}\n\
+             proxy-groups:\n  - {name: g, type: select, use: [COMPATIBLE]}\n",
+        )
+        .unwrap();
+        assert_eq!(profile.proxy_providers[0].name, "COMPATIBLE");
     }
 
     #[test]

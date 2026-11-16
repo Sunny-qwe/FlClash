@@ -120,6 +120,11 @@ pub(crate) fn build(
             }
         }
         3 | 4 => {}
+        6 => {
+            return Err(BuildError::unsupported(
+                "snell version 6 is not implemented by this core",
+            ));
+        }
         other => {
             return Err(BuildError::invalid(format!("snell version error: {other}")));
         }

@@ -322,6 +322,23 @@ async fn an_http_error_status_carries_its_code() {
 }
 
 #[tokio::test]
+async fn a_providers_payload_stands_in_until_a_load_succeeds() {
+    let text = HTTP_PROVIDER.replace(
+        "    interval: 3600\n",
+        "    interval: 3600\n    payload:\n      - {name: spare, type: direct}\n",
+    );
+    let rig = Rig::new(&text);
+    let provider = rig.out.provider("p").unwrap();
+    assert_eq!(names(&rig, "g"), ["spare"]);
+    assert!(provider.initial().await.is_err());
+    assert_eq!(names(&rig, "g"), ["spare"]);
+    rig.fetcher
+        .serve_with("http://sub.test/list", 200, &[], &list(&["n1"]));
+    provider.update().await.unwrap();
+    assert_eq!(names(&rig, "g"), ["n1"]);
+}
+
+#[tokio::test]
 async fn a_network_error_is_a_fetch_error() {
     let rig = Rig::new(HTTP_PROVIDER);
     let err = rig.out.provider("p").unwrap().update().await.unwrap_err();

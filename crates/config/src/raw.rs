@@ -148,10 +148,24 @@ fn section_user_keys(
             Some(Tier::T2) => report.warn(
                 "unsupported_key",
                 format!("{name}.{key}"),
-                "key is not supported by this core and is ignored",
+                unsupported_message(name, key),
             ),
             None => report.warn("unknown_key", format!("{name}.{key}"), "unknown key"),
             _ => {}
+        }
+    }
+}
+
+fn unsupported_message(section: &str, key: &str) -> &'static str {
+    match key {
+        _ if section != "tun" || !keys::TUN_SCOPE.contains(&key) => {
+            "key is not supported by this core and is ignored"
+        }
+        "include-package" | "exclude-package" | "include-android-user" => {
+            "key is not supported by this core and is ignored, so the TUN captures other apps than the profile says; an app that embeds the core picks the apps itself"
+        }
+        _ => {
+            "key is not supported by this core and is ignored, so the TUN captures other traffic than the profile says"
         }
     }
 }
@@ -601,6 +615,38 @@ mod tests {
         assert!(raw.report.warnings.is_empty());
         let raw = parse_raw_str("external-ui: ui\ntun:\n  dns-mode: fake\n").unwrap();
         assert_eq!(raw.report.warnings.len(), 2);
+    }
+
+    #[test]
+    fn a_tun_key_that_changes_what_is_captured_says_so() {
+        let raw = parse_raw_str(
+            "iptables: {enable: true}\ntun:\n  include-package: [a.b]\n  exclude-uid-range: ['1:2']\n  dns-mode: fake\n",
+        )
+        .unwrap();
+        let warned: Vec<(&str, &str, &str)> = raw
+            .report
+            .warnings
+            .iter()
+            .map(|w| (w.code, w.path.as_str(), w.message.as_str()))
+            .collect();
+        let plain = "key is not supported by this core and is ignored";
+        assert_eq!(
+            warned,
+            [
+                ("unsupported_key", "iptables", plain),
+                (
+                    "unsupported_key",
+                    "tun.include-package",
+                    "key is not supported by this core and is ignored, so the TUN captures other apps than the profile says; an app that embeds the core picks the apps itself"
+                ),
+                (
+                    "unsupported_key",
+                    "tun.exclude-uid-range",
+                    "key is not supported by this core and is ignored, so the TUN captures other traffic than the profile says"
+                ),
+                ("unsupported_key", "tun.dns-mode", plain),
+            ]
+        );
     }
 
     #[test]

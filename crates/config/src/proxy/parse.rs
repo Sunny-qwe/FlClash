@@ -122,7 +122,7 @@ pub fn parse_proxy(map: &Map, caps: &Capabilities) -> Result<ProxyParse> {
     let name = f.string("name")?;
     match parse_typed(&mut f, type_name, caps) {
         Ok((kind, common, smux)) => {
-            let ignored = f.take_ignored();
+            let ignored = f.take_ignored().iter().map(ToString::to_string).collect();
             f.finish()?;
             Ok(ProxyParse::Ok(Box::new(ProxyDef {
                 name,
@@ -211,9 +211,9 @@ fn smux_opts(f: &mut Fields<'_>, caps: &Capabilities) -> R<Option<SmuxOpts>> {
     let mut out = SmuxOpts {
         enabled: s.boolean("enabled")?,
         protocol: s.string("protocol")?,
-        max_connections: s.u32("max-connections")?,
-        min_streams: s.u32("min-streams")?,
-        max_streams: s.u32("max-streams")?,
+        max_connections: s.loose("max-connections", 0)?,
+        min_streams: s.loose("min-streams", 0)?,
+        max_streams: s.loose("max-streams", 0)?,
         padding: s.boolean("padding")?,
         statistic: s.boolean("statistic")?,
         only_tcp: s.boolean("only-tcp")?,
@@ -325,7 +325,7 @@ fn ws_opts(f: &mut Fields<'_>, upgrade: bool) -> R<WsOpts> {
     if let Some(mut o) = f.sub("ws-opts")? {
         out.path = o.string("path")?;
         out.headers = headers(&mut o, "headers")?;
-        out.max_early_data = o.u32("max-early-data")?;
+        out.max_early_data = o.loose("max-early-data", 0)?;
         out.early_data_header_name = o.string("early-data-header-name")?;
         out.v2ray_http_upgrade = o.boolean("v2ray-http-upgrade")?;
         out.v2ray_http_upgrade_fast_open = o.boolean("v2ray-http-upgrade-fast-open")?;
@@ -344,7 +344,7 @@ fn reuse_settings(f: &mut Fields<'_>, key: &str) -> R<Option<XhttpReuse>> {
         c_max_reuse_times: r.string("c-max-reuse-times")?,
         h_max_request_times: r.string("h-max-request-times")?,
         h_max_reusable_secs: r.string("h-max-reusable-secs")?,
-        h_keep_alive_period: r.u32("h-keep-alive-period")?,
+        h_keep_alive_period: r.loose("h-keep-alive-period", 0)?,
     }))
 }
 
@@ -429,6 +429,8 @@ fn xhttp_opts(f: &mut Fields<'_>, caps: &Capabilities) -> R<XhttpOpts> {
 }
 
 fn transport(f: &mut Fields<'_>, network: &str, caps: &Capabilities) -> R<Transport> {
+    f.ignore("ws-path", "it was removed; write ws-opts.path");
+    f.ignore("ws-headers", "it was removed; write ws-opts.headers");
     let network = network.to_ascii_lowercase();
     if T2_NETWORKS.contains(&network.as_str()) {
         return quarantine(format!("network '{network}' is not supported by this core"));
@@ -448,10 +450,10 @@ fn transport(f: &mut Fields<'_>, network: &str, caps: &Capabilities) -> R<Transp
             if let Some(mut o) = f.sub("grpc-opts")? {
                 out.service_name = o.string("grpc-service-name")?;
                 out.user_agent = o.string("grpc-user-agent")?;
-                out.ping_interval = o.u32("ping-interval")?;
-                out.max_connections = o.u32("max-connections")?;
-                out.min_streams = o.u32("min-streams")?;
-                out.max_streams = o.u32("max-streams")?;
+                out.ping_interval = o.loose("ping-interval", 0)?;
+                out.max_connections = o.loose("max-connections", 0)?;
+                out.min_streams = o.loose("min-streams", 0)?;
+                out.max_streams = o.loose("max-streams", 0)?;
             }
             Transport::Grpc(out)
         }
@@ -614,7 +616,7 @@ fn parse_vmess(f: &mut Fields<'_>, caps: &Capabilities) -> R<VmessOpts> {
         server,
         port,
         uuid,
-        alter_id: f.u32("alterid")?,
+        alter_id: f.loose("alterid", 0)?,
         cipher,
         tls,
         transport,
@@ -731,13 +733,13 @@ fn parse_hysteria2(f: &mut Fields<'_>, caps: &Capabilities) -> R<Hysteria2Opts> 
         password: f.string("password")?,
         obfs: f.string("obfs")?,
         obfs_password: f.string("obfs-password")?,
-        obfs_min_packet_size: f.u32("obfs-min-packet-size")?,
-        obfs_max_packet_size: f.u32("obfs-max-packet-size")?,
+        obfs_min_packet_size: f.loose("obfs-min-packet-size", 0)?,
+        obfs_max_packet_size: f.loose("obfs-max-packet-size", 0)?,
         tls,
-        cwnd: f.u32("cwnd")?,
+        cwnd: f.loose("cwnd", 0)?,
         bbr_profile: f.string("bbr-profile")?,
-        udp_mtu: f.u32("udp-mtu")?,
-        handshake_timeout: f.u32("handshake-timeout")?,
+        udp_mtu: f.loose("udp-mtu", 0)?,
+        handshake_timeout: f.loose("handshake-timeout", 0)?,
         realm,
         initial_stream_receive_window: f.u64("initial-stream-receive-window")?,
         max_stream_receive_window: f.u64("max-stream-receive-window")?,
@@ -757,22 +759,22 @@ fn parse_tuic(f: &mut Fields<'_>, caps: &Capabilities) -> R<TuicOpts> {
         uuid: f.string("uuid")?,
         password: f.string("password")?,
         ip: f.string("ip")?,
-        heartbeat_interval: f.u32("heartbeat-interval")?,
+        heartbeat_interval: f.loose("heartbeat-interval", 0)?,
         tls,
         reduce_rtt: f.boolean("reduce-rtt")?,
-        request_timeout: f.u32("request-timeout")?,
+        request_timeout: f.loose("request-timeout", 0)?,
         udp_relay_mode: f.string("udp-relay-mode")?,
         congestion_controller: f.string("congestion-controller")?,
         disable_sni: f.boolean("disable-sni")?,
-        max_udp_relay_packet_size: f.u32("max-udp-relay-packet-size")?,
+        max_udp_relay_packet_size: f.loose("max-udp-relay-packet-size", 0)?,
         fast_open: f.boolean("fast-open")?,
-        max_open_streams: f.u32("max-open-streams")?,
-        cwnd: f.u32("cwnd")?,
+        max_open_streams: f.loose("max-open-streams", 0)?,
+        cwnd: f.loose("cwnd", 0)?,
         bbr_profile: f.string("bbr-profile")?,
-        recv_window_conn: f.u32("recv-window-conn")?,
-        recv_window: f.u32("recv-window")?,
+        recv_window_conn: f.loose("recv-window-conn", 0)?,
+        recv_window: f.loose("recv-window", 0)?,
         disable_mtu_discovery: f.boolean("disable-mtu-discovery")?,
-        max_datagram_frame_size: f.u32("max-datagram-frame-size")?,
+        max_datagram_frame_size: f.loose("max-datagram-frame-size", 0)?,
         udp_over_stream: f.boolean("udp-over-stream")?,
         udp_over_stream_version: u8::try_from(f.u32("udp-over-stream-version")?).unwrap_or(0),
     };
@@ -854,12 +856,12 @@ fn parse_wireguard(f: &mut Fields<'_>) -> R<WireGuardOpts> {
         ip: f.string("ip")?,
         ipv6: f.string("ipv6")?,
         private_key,
-        workers: f.u32("workers")?,
-        mtu: f.u32("mtu")?,
-        persistent_keepalive: f.u32("persistent-keepalive")?,
+        workers: f.loose("workers", 0)?,
+        mtu: f.loose("mtu", 0)?,
+        persistent_keepalive: f.loose("persistent-keepalive", 0)?,
         remote_dns_resolve: f.boolean("remote-dns-resolve")?,
         dns: f.strings("dns")?,
-        refresh_server_ip_interval: f.u32("refresh-server-ip-interval")?,
+        refresh_server_ip_interval: f.loose("refresh-server-ip-interval", 0)?,
         ..WireGuardOpts::default()
     };
     if let Some(mut stack) = f.sub("ip-stack")? {
@@ -869,13 +871,13 @@ fn parse_wireguard(f: &mut Fields<'_>) -> R<WireGuardOpts> {
     if let Some(mut a) = f.sub("amnezia-wg-option")? {
         out.amnezia = Some(AmneziaWgOpts {
             version: a.u32("version")?,
-            jc: a.u32("jc")?,
-            jmin: a.u32("jmin")?,
-            jmax: a.u32("jmax")?,
-            s1: a.u32("s1")?,
-            s2: a.u32("s2")?,
-            s3: a.u32("s3")?,
-            s4: a.u32("s4")?,
+            jc: a.loose("jc", 0)?,
+            jmin: a.loose("jmin", 0)?,
+            jmax: a.loose("jmax", 0)?,
+            s1: a.loose("s1", 0)?,
+            s2: a.loose("s2", 0)?,
+            s3: a.loose("s3", 0)?,
+            s4: a.loose("s4", 0)?,
             h: [
                 a.string("h1")?,
                 a.string("h2")?,
@@ -965,18 +967,18 @@ fn parse_hysteria(f: &mut Fields<'_>, caps: &Capabilities) -> R<HysteriaOpts> {
         protocol: f.string("protocol")?,
         obfs_protocol: f.string("obfs-protocol")?,
         up: f.req_string("up")?,
-        up_speed: f.u32("up-speed")?,
+        up_speed: f.loose("up-speed", 0)?,
         down: f.req_string("down")?,
-        down_speed: f.u32("down-speed")?,
+        down_speed: f.loose("down-speed", 0)?,
         auth: f.string("auth")?,
         auth_str: f.string("auth-str")?,
         obfs: f.string("obfs")?,
         tls,
-        recv_window_conn: f.u32("recv-window-conn")?,
-        recv_window: f.u32("recv-window")?,
+        recv_window_conn: f.loose("recv-window-conn", 0)?,
+        recv_window: f.loose("recv-window", 0)?,
         disable_mtu_discovery: f.boolean("disable-mtu-discovery")?,
         fast_open: f.boolean("fast-open")?,
-        hop_interval: f.u32("hop-interval")?,
+        hop_interval: f.loose("hop-interval", 0)?,
     })
 }
 
@@ -1006,6 +1008,10 @@ fn parse_snell(f: &mut Fields<'_>) -> R<SnellOpts> {
         client_fingerprint: f.string("client-fingerprint")?,
         ..SnellOpts::default()
     };
+    if out.version != 6 {
+        f.ignore("userkey", "only snell version 6 reads it");
+        f.ignore("mode", "only snell version 6 reads it");
+    }
     if let Some(mut o) = f.sub("obfs-opts")? {
         out.obfs_mode = o.string("mode")?;
         if out.obfs_mode == "shadow-tls" {
@@ -1063,17 +1069,17 @@ fn parse_shadowquic(f: &mut Fields<'_>) -> R<ShadowQuicOpts> {
         quic_versions: f.strings("quic-versions")?,
         udp_over_stream: f.boolean("udp-over-stream")?,
         zero_rtt: f.boolean("zero-rtt")?,
-        keep_alive_interval: f.u32("keep-alive-interval")?,
+        keep_alive_interval: f.loose("keep-alive-interval", 0)?,
         congestion_controller: f.string("congestion-controller")?,
         up: f.string("up")?,
         down: f.string("down")?,
-        cwnd: f.u32("cwnd")?,
+        cwnd: f.loose("cwnd", 0)?,
         bbr_profile: f.string("bbr-profile")?,
-        recv_window_conn: f.u32("recv-window-conn")?,
-        recv_window: f.u32("recv-window")?,
+        recv_window_conn: f.loose("recv-window-conn", 0)?,
+        recv_window: f.loose("recv-window", 0)?,
         disable_mtu_discovery: f.boolean("disable-mtu-discovery")?,
-        max_datagram_frame_size: f.u32("max-datagram-frame-size")?,
-        max_open_streams: f.u32("max-open-streams")?,
+        max_datagram_frame_size: f.loose("max-datagram-frame-size", 0)?,
+        max_open_streams: f.loose("max-open-streams", 0)?,
     })
 }
 
@@ -1182,6 +1188,43 @@ mod tests {
     }
 
     #[test]
+    fn a_negative_tuning_number_reads_as_unset_with_a_warning() {
+        let tuic = def(
+            json!({"name": "t", "type": "tuic", "server": "x", "port": 1, "token": "k",
+                              "heartbeat-interval": -1, "cwnd": 4294967296_u64}),
+        );
+        let ProxyKind::Tuic(opts) = &tuic.kind else {
+            panic!()
+        };
+        assert_eq!((opts.heartbeat_interval, opts.cwnd), (0, 0));
+        assert_eq!(
+            crate::proxy::proxy_warnings(&tuic),
+            [
+                "heartbeat-interval is ignored: -1 is out of range",
+                "cwnd is ignored: 4294967296 is out of range"
+            ]
+        );
+        let vmess = def(
+            json!({"name": "v", "type": "vmess", "server": "x", "port": 1, "uuid": "u",
+                               "cipher": "auto", "alterId": -1, "network": "grpc",
+                               "grpc-opts": {"ping-interval": -5}, "smux": {"enabled": true, "max-streams": -1}}),
+        );
+        assert_eq!(
+            crate::proxy::proxy_warnings(&vmess),
+            [
+                "smux.max-streams is ignored: -1 is out of range",
+                "grpc-opts.ping-interval is ignored: -5 is out of range",
+                "alterid is ignored: -1 is out of range"
+            ]
+        );
+        let snell = json!({"name": "s", "type": "snell", "server": "x", "port": 1, "psk": "k", "version": -1});
+        assert!(
+            parse(snell).is_err(),
+            "a version picks the protocol, so it is not read past"
+        );
+    }
+
+    #[test]
     fn keys_a_type_does_not_have_are_ignored_with_a_warning() {
         let key = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
         let cases = [
@@ -1206,6 +1249,27 @@ mod tests {
         for (node, expected) in cases {
             let parsed = def(node);
             assert_eq!(crate::proxy::proxy_warnings(&parsed), expected);
+        }
+        let removed = [
+            (
+                json!({"name": "w", "type": "vmess", "server": "x", "port": 1, "uuid": "u", "cipher": "auto",
+                       "network": "ws", "ws-path": "/p", "ws-headers": {"Host": "h"}}),
+                vec![
+                    "ws-path is ignored: it was removed; write ws-opts.path",
+                    "ws-headers is ignored: it was removed; write ws-opts.headers",
+                ],
+            ),
+            (
+                json!({"name": "s", "type": "snell", "server": "x", "port": 1, "psk": "k", "version": 4,
+                       "userkey": "u", "mode": "unshaped"}),
+                vec![
+                    "userkey is ignored: only snell version 6 reads it",
+                    "mode is ignored: only snell version 6 reads it",
+                ],
+            ),
+        ];
+        for (node, expected) in removed {
+            assert_eq!(crate::proxy::proxy_warnings(&def(node)), expected);
         }
         let reality_kept = def(
             json!({"name": "d", "type": "vless", "server": "x", "port": 1, "uuid": "u",

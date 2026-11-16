@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 use crate::Map;
 use crate::error::{ConfigError, Result};
 use crate::filter;
-use crate::lenient::Fields;
+use crate::lenient::{Fields, Ignored};
 use crate::net::parse_unsigned_ranges;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,6 +71,8 @@ pub struct GroupDef {
     pub default_selected: String,
     pub strategy: LbStrategy,
     pub hash_key: String,
+    /// Keys a group does not have, which mihomo logs and drops.
+    pub ignored: Vec<Ignored>,
     pub raw: Map,
 }
 
@@ -125,6 +127,7 @@ pub fn parse_group(map: &Map) -> Result<GroupDef> {
         default_selected: String::new(),
         strategy: LbStrategy::default(),
         hash_key: String::new(),
+        ignored: Vec::new(),
         raw: map.clone(),
     };
     def.kind = match type_name.as_str() {
@@ -184,7 +187,34 @@ pub fn parse_group(map: &Map) -> Result<GroupDef> {
     } else {
         def.expected_status = def.expected_status.trim().to_string();
     }
+    for key in ["routing-mark", "interface-name", "dialer-proxy"] {
+        f.ignore(key, "a group does not dial, so set it on the nodes");
+    }
+    def.ignored = f.take_ignored();
     Ok(def)
+}
+
+impl GroupDef {
+    /// Adds the nodes `include-all` takes and returns the set-aside ones it matched, which mihomo would hold.
+    pub fn take_all_proxies(
+        &mut self,
+        sorted: &[&str],
+        set_aside: &HashSet<String>,
+    ) -> Result<Vec<String>> {
+        let filter = (!self.filter.is_empty())
+            .then(|| filter::CompiledFilter::compile(&self.filter))
+            .transpose()?;
+        let matches = |name: &str| filter.as_ref().is_none_or(|f| f.is_match(name));
+        let taken = sorted.iter().filter(|name| matches(name));
+        self.proxies.extend(taken.map(|name| (*name).to_string()));
+        let mut aside: Vec<String> = set_aside
+            .iter()
+            .filter(|name| matches(name))
+            .cloned()
+            .collect();
+        aside.sort_unstable();
+        Ok(aside)
+    }
 }
 
 pub fn find_group_cycle(groups: &[GroupDef]) -> Option<Vec<String>> {

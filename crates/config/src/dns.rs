@@ -5,7 +5,8 @@ use percent_encoding::percent_decode_str;
 
 use crate::Map;
 use crate::error::{ConfigError, Result};
-use crate::lenient::Fields;
+use crate::keys::{default_number, dns_defaults};
+use crate::lenient::{Fields, Ignored};
 use crate::net::IpCidr;
 use crate::rule::{self, Cond, RuleDef};
 
@@ -465,8 +466,14 @@ impl DnsConfig {
         found
     }
 
-    /// With `ipv6` off mihomo drops `fake-ip-range6` before reading it (`parseIPV6`).
     pub fn from_map(map: &Map, ipv6: bool) -> Result<DnsConfig> {
+        Ok(DnsConfig::read(map, ipv6)?.0)
+    }
+
+    /// With `ipv6` off mihomo drops `fake-ip-range6` before reading it (`parseIPV6`). A number
+    /// out of range takes its default, returned as a note.
+    pub fn read(map: &Map, ipv6: bool) -> Result<(DnsConfig, Vec<Ignored>)> {
+        let defaults = dns_defaults();
         let mut f = Fields::new(map, "dns", false);
         let enable = f.boolean("enable")?;
         let respect_rules = f.boolean("respect-rules")?;
@@ -490,15 +497,15 @@ impl DnsConfig {
             use_system_hosts: f.boolean("use-system-hosts")?,
             ipv6: f.boolean("ipv6")?,
             prefer_h3: f.boolean("prefer-h3")?,
-            ipv6_timeout: f.u32("ipv6-timeout")?,
-            fake_ip_ttl: f.u32("fake-ip-ttl")?,
+            ipv6_timeout: f.loose("ipv6-timeout", default_number(&defaults, "ipv6-timeout"))?,
+            fake_ip_ttl: f.loose("fake-ip-ttl", default_number(&defaults, "fake-ip-ttl"))?,
             fake_ip_filter_mode: parse_filter_mode(&f.string("fake-ip-filter-mode")?)?,
             fallback_lazy_query: f.boolean("fallback-lazy-query")?,
             direct_nameserver_follow_policy: f.boolean("direct-nameserver-follow-policy")?,
             cache_algorithm: f.string("cache-algorithm")?,
-            cache_max_size: f.i32("cache-max-size")?,
+            cache_max_size: f.loose("cache-max-size", 0)?,
             listen: f.string("listen")?,
-            listen_routing_mark: f.u32("listen-routing-mark")?,
+            listen_routing_mark: f.mark("listen-routing-mark")?,
             ..DnsConfig::default()
         };
         dns.nameserver = parse_upstreams(&nameserver_text, "dns.nameserver")?;
@@ -575,7 +582,7 @@ impl DnsConfig {
                     })?);
             }
         }
-        Ok(dns)
+        Ok((dns, f.take_ignored()))
     }
 
     pub fn upstream_proxy_names(&self) -> impl Iterator<Item = &str> {

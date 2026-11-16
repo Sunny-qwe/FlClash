@@ -179,6 +179,21 @@ pub const TUN_T2: &[&str] = &[
     "processors-per-channel",
 ];
 
+/// TUN_T2 keys that narrow or widen what the TUN captures.
+pub const TUN_SCOPE: &[&str] = &[
+    "route-address-set",
+    "route-exclude-address-set",
+    "include-uid-range",
+    "exclude-uid-range",
+    "exclude-src-port-range",
+    "exclude-dst-port-range",
+    "include-android-user",
+    "include-package",
+    "exclude-package",
+    "include-mac-address",
+    "exclude-mac-address",
+];
+
 pub const SNIFFER_T0: &[&str] = &[
     "enable",
     "sniff",
@@ -336,6 +351,14 @@ pub fn sniffer_defaults() -> Map {
         "parse-pure-ip": true,
         "sniff": {},
     }))
+}
+
+pub fn default_number<T: TryFrom<i128> + Default>(defaults: &Map, key: &str) -> T {
+    defaults
+        .get(key)
+        .and_then(crate::lenient::to_i128)
+        .and_then(|number| T::try_from(number).ok())
+        .unwrap_or_default()
 }
 
 pub fn ntp_defaults() -> Map {

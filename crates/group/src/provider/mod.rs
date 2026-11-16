@@ -195,14 +195,15 @@ impl ProxyProvider {
                 payload: payload.clone(),
             },
         };
-        let initial = match &vehicle {
-            // Loading emptied it with a warning: its nodes must not run without the expressions.
-            Vehicle::Inline { .. } if def.override_.expr => Vec::new(),
-            Vehicle::Inline { payload } => {
-                items_from_maps(def, shared.factory.as_ref(), &name, payload.clone())
-                    .map_err(fail)?
-            }
-            _ => Vec::new(),
+        let payload = match &vehicle {
+            Vehicle::Inline { payload } => payload,
+            _ => &def.fallback,
+        };
+        let initial = if def.override_.expr || payload.is_empty() {
+            // Loading emptied an inline one with a warning: its nodes must not run without the expressions.
+            Vec::new()
+        } else {
+            items_from_maps(def, shared.factory.as_ref(), &name, payload.clone()).map_err(fail)?
         };
         let health = &def.health_check;
         let params = CheckParams {
@@ -588,7 +589,9 @@ impl ProxyProvider {
                 let (home, path) = (self.shared.home.clone(), path.clone());
                 match blocking(move || home.read(&path)).await? {
                     Ok(bytes) => Ok(bytes),
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        Err(self.def.fallback.clone())
+                    }
                     Err(err) => return Err(ProviderError::Io(err.to_string())),
                 }
             }
