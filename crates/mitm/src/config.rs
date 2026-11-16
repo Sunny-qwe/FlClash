@@ -81,6 +81,9 @@ pub struct Config {
     pub h2: bool,
     pub limits: Limits,
     pub(crate) rules: Rules,
+    /// Plain HTTP on port 80 is read whatever its host while a rule can act on a request, as
+    /// Surge's HTTP engine reads it without a hostname entry.
+    pub(crate) plain_http: bool,
     raw: RawConfig,
 }
 
@@ -179,6 +182,7 @@ impl Config {
             h2: raw.h2,
             limits: raw.limits.resolve(),
             rules: Rules::default(),
+            plain_http: false,
             raw,
         }
     }
@@ -195,6 +199,7 @@ impl Config {
             });
         }
         env.scripts.keep(&config.rules.scripts);
+        config.plain_http = config.rules.acts_on_requests();
         (config, errors)
     }
 

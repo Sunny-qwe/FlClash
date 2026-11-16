@@ -25,7 +25,7 @@ use crate::cron::LocalClock;
 use crate::limits::{PRESSURE_RELAY, Pressure, ScriptGate};
 use crate::script::{Script, ScriptDial, ScriptError, ScriptHost, ScriptInvocation, ScriptResult};
 use crate::session::{Scheme, Session};
-use crate::target::HTTPS_PORT;
+use crate::target::{HTTP_PORT, HTTPS_PORT};
 use crate::task::Tasks;
 
 /// mihomo's sniffer waits this long for a connection's first byte, then gives the rest of
@@ -192,6 +192,9 @@ impl Core {
         }
         let hosts = &self.config.hosts;
         let port = flow.port;
+        if port == HTTP_PORT && self.config.plain_http {
+            return true;
+        }
         if port == HTTPS_PORT && self.authority().is_none() {
             return false;
         }

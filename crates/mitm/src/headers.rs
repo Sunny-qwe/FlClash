@@ -50,6 +50,27 @@ pub(crate) fn script_header(list: &HeaderList) -> HeaderMap {
     map
 }
 
+/// The head of a request as Quantumult X's `url-and-header` reads it: the request line, the
+/// host, then every header as `Name: value`, each line ending in CRLF, and the blank line.
+pub(crate) fn request_head(parts: &http::request::Parts, host: &str, version: &str) -> String {
+    let target = parts.uri.path_and_query().map_or("/", |pq| pq.as_str());
+    let mut head = format!("{} {target} {version}\r\n", parts.method);
+    if !host.is_empty() {
+        head.push_str(&format!("Host: {host}\r\n"));
+    }
+    for (name, value) in &parts.headers {
+        if name == http::header::HOST {
+            continue;
+        }
+        head.push_str(&canonical_header(name.as_str()));
+        head.push_str(": ");
+        head.push_str(&String::from_utf8_lossy(value.as_bytes()));
+        head.push_str("\r\n");
+    }
+    head.push_str("\r\n");
+    head
+}
+
 pub(crate) fn text(map: &HeaderMap, name: impl http::header::AsHeaderName) -> &str {
     map.get(name)
         .and_then(|value| value.to_str().ok())

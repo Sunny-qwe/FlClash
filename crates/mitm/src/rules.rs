@@ -5,7 +5,7 @@ use http::header::{HeaderMap, HeaderName, HeaderValue};
 
 use crate::jq::{Jq, JqOutcome};
 use crate::pattern::Pattern;
-use crate::script::Script;
+use crate::script::{Script, ScriptKind};
 use crate::text::{Field, canonical_header, decode_base64, quote, remainder, split_fields, texts};
 
 const TINY_GIF_BASE64: &str = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
@@ -65,6 +65,8 @@ impl UrlAction {
 #[derive(Debug)]
 pub struct UrlRewrite {
     pattern: Pattern,
+    /// Quantumult X's `url-and-header`: matched against the request head once the URL matches.
+    head: Option<Pattern>,
     pub replacement: String,
     pub action: UrlAction,
 }
@@ -133,7 +135,18 @@ pub(crate) fn parse_url_rewrite(line: &str) -> Result<UrlRewrite, String> {
     if fields.len() < 2 {
         return Err("expected a pattern and a replacement or type".to_string());
     }
-    let args = texts(fields.get(1..).unwrap_or_default());
+    let conditional = fields
+        .get(2)
+        .is_some_and(|field| field.text.eq_ignore_ascii_case("url-and-header"));
+    let (head, first_arg) = if conditional {
+        (Some(Pattern::new(&field_text(&fields, 1))?), 3)
+    } else {
+        (None, 1)
+    };
+    let args = texts(fields.get(first_arg..).unwrap_or_default());
+    if args.is_empty() {
+        return Err("url-and-header needs a type".to_string());
+    }
     let first = args.first().copied().unwrap_or_default();
     let mut action = UrlAction::Header;
     let mut replacement = String::new();
@@ -168,6 +181,7 @@ pub(crate) fn parse_url_rewrite(line: &str) -> Result<UrlRewrite, String> {
     let pattern = Pattern::new(&field_text(&fields, 0))?;
     Ok(UrlRewrite {
         pattern,
+        head,
         replacement,
         action,
     })
@@ -557,9 +571,33 @@ fn parse_map_local_header(text: &str, header: &mut HeaderMap) -> Result<(), Stri
 }
 
 impl Rules {
-    pub(crate) fn rewrite_url(&self, url: &str) -> Option<(&UrlRewrite, String)> {
+    pub(crate) fn acts_on_requests(&self) -> bool {
+        !self.url_rewrites.is_empty()
+            || !self.header_rewrites.is_empty()
+            || !self.body_rewrites.is_empty()
+            || !self.map_locals.is_empty()
+            || self.scripts.iter().any(|script| {
+                matches!(
+                    script.kind,
+                    ScriptKind::HttpRequest | ScriptKind::HttpResponse
+                )
+            })
+    }
+
+    /// `head` is built only when a rule with a header condition matches the URL.
+    pub(crate) fn rewrite_url(
+        &self,
+        url: &str,
+        head: impl Fn() -> String,
+    ) -> Option<(&UrlRewrite, String)> {
+        let text = std::cell::OnceCell::new();
         for rule in &self.url_rewrites {
             if !rule.pattern.is_match(url) {
+                continue;
+            }
+            if let Some(condition) = &rule.head
+                && !condition.is_match(text.get_or_init(&head))
+            {
                 continue;
             }
             if rule.action.rejects() {
@@ -689,13 +727,56 @@ mod tests {
             r"^https://a\.com/(\w+)/(\d+) https://b.com/$2/$1 302",
         ]);
         let (rule, replaced) = rules
-            .rewrite_url("http://www.google.cn/search?q=x")
+            .rewrite_url("http://www.google.cn/search?q=x", String::new)
             .unwrap();
         assert_eq!(rule.action, UrlAction::Header);
         assert_eq!(replaced, "http://www.google.com/search?q=x");
-        let (_, replaced) = rules.rewrite_url("https://a.com/item/42").unwrap();
+        let (_, replaced) = rules
+            .rewrite_url("https://a.com/item/42", String::new)
+            .unwrap();
         assert_eq!(replaced, "https://b.com/42/item");
-        assert!(rules.rewrite_url("https://c.com/").is_none());
+        assert!(rules.rewrite_url("https://c.com/", String::new).is_none());
+    }
+
+    #[test]
+    fn url_and_header_checks_the_head_after_the_url() {
+        let rules = rules_with(&[
+            r"^http:\/\/.+\/amdc\/mobileDispatch %E8%8F%9C%E9%B8%9F%E8%A3%B9%E8%A3%B9* url-and-header reject",
+            r#"^http://example\.com/resource1/1/ "\r\nUser-Agent: example-agent" url-and-header reject-dict"#,
+            r"^http://example\.com/resource1/1/ ^POST url-and-header 302 http://example.com/post",
+        ]);
+        let head = |method: &str, agent: &str| {
+            let text = format!(
+                "{method} /amdc/mobileDispatch HTTP/1.1\r\nHost: a.test\r\nUser-Agent: {agent}\r\n\r\n"
+            );
+            move || text.clone()
+        };
+        let cainiao = "%E8%8F%9C%E9%B8%9F%E8%A3%B9%E8%A3%B9/8.8.1 CFNetwork/1410";
+        let (rule, _) = rules
+            .rewrite_url("http://1.2.3.4/amdc/mobileDispatch", head("GET", cainiao))
+            .unwrap();
+        assert_eq!(rule.action, UrlAction::Reject);
+        assert!(
+            rules
+                .rewrite_url("http://1.2.3.4/amdc/mobileDispatch", head("GET", "Other/1"))
+                .is_none()
+        );
+        let url = "http://example.com/resource1/1/x";
+        let (rule, _) = rules
+            .rewrite_url(url, head("GET", "example-agent"))
+            .unwrap();
+        assert_eq!(rule.action, UrlAction::RejectDict);
+        let (rule, replaced) = rules.rewrite_url(url, head("POST", "curl")).unwrap();
+        assert_eq!(
+            (rule.action, replaced.as_str()),
+            (UrlAction::Redirect302, "http://example.com/postx")
+        );
+        assert!(rules.rewrite_url(url, head("GET", "curl")).is_none());
+        let unbuilt = || -> String { panic!("the head is built only after the URL matches") };
+        assert!(rules.rewrite_url("https://other.test/", unbuilt).is_none());
+        for line in [r"^a ^POST url-and-header", r"^a (bad url-and-header reject"] {
+            assert!(parse_url_rewrite(line).is_err(), "{line}");
+        }
     }
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {

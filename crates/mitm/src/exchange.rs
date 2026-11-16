@@ -11,7 +11,7 @@ use tokio::sync::OwnedSemaphorePermit;
 
 use crate::body::{Body, Tap, empty, from_incoming, full};
 use crate::capture::Cap;
-use crate::headers::{remove_hop_by_hop, text, to_list, with_host};
+use crate::headers::{remove_hop_by_hop, request_head, text, to_list, with_host};
 use crate::rules::{UrlAction, tiny_gif};
 use crate::session::{ActivityGuard, Session};
 use crate::target::{TargetUrl, default_port};
@@ -250,7 +250,8 @@ impl Session {
             cap: cap.clone(),
         };
         let rules = &self.core.config.rules;
-        if let Some((rule, replaced)) = rules.rewrite_url(&target.url.raw) {
+        let head = || request_head(&parts, &in_host, version_text(parts.version));
+        if let Some((rule, replaced)) = rules.rewrite_url(&target.url.raw, head) {
             match rule.action {
                 UrlAction::Redirect302 | UrlAction::Redirect307 => {
                     cap.note("url-rewrite", "", rule.action.name());

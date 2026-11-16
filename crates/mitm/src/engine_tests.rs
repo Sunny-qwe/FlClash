@@ -144,6 +144,48 @@ async fn rewrites_json_bodies_with_jq() {
 }
 
 #[tokio::test]
+async fn url_and_header_rejects_by_the_request_head() {
+    let config = json!({
+        "enable": true,
+        "hostname": ["example.test"],
+        "skip-server-cert-verify": true,
+        "h2": true,
+        "url-rewrite": [
+            r#"^https?://example\.test/d "\r\nUser-Agent: httpdns[^\r\n]*\r\n" url-and-header reject-dict"#,
+            r"^https?://example\.test/d ^POST\s url-and-header reject",
+            r"^https?://example\.test/d \r\nHost:\sexample\.test\r\n url-and-header reject-array",
+        ],
+    });
+    let (_plain, plain) = rig(echo(), false, &[]).await;
+    assert!(plain.config(config.clone()).is_empty());
+    let mut client = Client::plain(&plain, "example.test", 80).await;
+    let request = client.request("GET", "/d", &[("User-Agent", "httpdns/2.1")], "");
+    assert_eq!(client.send(request).await.unwrap().text(), "{}");
+    let request = client.request("POST", "/d", &[("User-Agent", "app/1")], "x");
+    assert_eq!(client.send(request).await.unwrap().status.as_u16(), 404);
+    let request = client.request("GET", "/d?x", &[("User-Agent", "Httpdns/2.1")], "");
+    assert_eq!(
+        client.send(request).await.unwrap().text(),
+        "[]",
+        "matching is case-sensitive, so only the Host line matches"
+    );
+
+    let (_tls, tls) = rig(echo(), true, &["h2"]).await;
+    assert!(tls.config(config).is_empty());
+    let mut client = Client::tls(&tls, "example.test", 443, &["h2"])
+        .await
+        .unwrap();
+    let request = client.request("GET", "/d", &[("User-Agent", "httpdns/2.1")], "");
+    assert_eq!(client.send(request).await.unwrap().text(), "{}");
+    let request = client.request("GET", "/d", &[("User-Agent", "app/1")], "");
+    assert_eq!(
+        client.send(request).await.unwrap().text(),
+        "[]",
+        "an HTTP/2 request's authority is its Host line"
+    );
+}
+
+#[tokio::test]
 async fn dials_the_host_a_rewrite_moves_to() {
     let (_server, rig) = rig(echo(), true, &["http/1.1"]).await;
     rig.config(json!({
@@ -618,6 +660,54 @@ async fn rewrites_plain_http_without_decrypting_tls() {
 }
 
 #[tokio::test]
+async fn reads_plain_http_to_any_host_while_a_rule_acts_on_requests() {
+    let server = start_server(false, &[], echo()).await;
+    let rig = rig_for(&server, None);
+    rig.config(json!({"enable": true, "hostname": ["listed.test"]}));
+    let engine = rig.mitm.engine().unwrap();
+    let ip = flow_of(InboundKind::Tun, Address::new("203.107.1.33", 80));
+    assert!(!engine.match_tcp(&ip), "no rule, no reason to read it");
+    assert!(!engine.match_tcp(&flow("other.test", 80)));
+
+    rig.config(json!({
+        "enable": true,
+        "hostname": ["listed.test"],
+        "url-rewrite": [
+            r#"^http://203\.107\.1\.33/d "\r\nUser-Agent: httpdns[^\r\n]*\r\n" url-and-header reject-dict"#,
+        ],
+    }));
+    let engine = rig.mitm.engine().unwrap();
+    assert!(engine.match_tcp(&ip));
+    assert!(engine.match_tcp(&flow("other.test", 80)));
+    assert!(!engine.match_tcp(&flow("other.test", 443)));
+    assert!(!engine.match_tcp(&flow("other.test", 8080)));
+    let wire = b"SSH-2.0-OpenSSH_9.9\r\n".to_vec();
+    assert_eq!(declined(&rig, ip.clone(), &wire).await, wire);
+}
+
+#[tokio::test]
+async fn plain_http_to_an_unlisted_host_is_not_peeked_without_a_rule() {
+    let server = start_server(false, &[], echo()).await;
+    let rig = rig_for(&server, None);
+    rig.config(json!({"enable": true, "hostname": ["listed.test"]}));
+    tokio::time::pause();
+    let started = tokio::time::Instant::now();
+    let (_near, offer) = offer_on(
+        rig.mitm.interceptor(),
+        flow_of(InboundKind::Tun, Address::new("203.107.1.33", 80)),
+    );
+    let Offer::Declined { head, .. } = offer.await.unwrap() else {
+        panic!("taken")
+    };
+    assert!(head.is_empty());
+    assert_eq!(
+        started.elapsed(),
+        Duration::ZERO,
+        "a peek waits for the first byte, so the clock would have moved"
+    );
+}
+
+#[tokio::test]
 async fn the_certificate_cache_follows_the_limit() {
     let (_server, rig) = rig(echo(), true, &["http/1.1"]).await;
     rig.config(
@@ -930,4 +1020,98 @@ async fn leaves_grpc_as_it_is() {
     assert_eq!(&collected.to_bytes()[..], MESSAGE);
     assert_eq!(lock(&received).as_slice(), MESSAGE);
     assert_eq!(trailers.get("grpc-status").unwrap(), "0");
+}
+
+/// What reading plain HTTP on port 80 costs once a rule acts on requests, run on the Linux VM:
+/// `cargo test -p concord-mitm --release plain_http_cost -- --ignored --nocapture`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "a measurement, run by hand on the Linux VM"]
+async fn plain_http_cost() {
+    fn cpu_us() -> u64 {
+        let stat = std::fs::read_to_string("/proc/self/stat").expect("Linux only");
+        let fields: Vec<&str> = stat
+            .rsplit(')')
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .collect();
+        let ticks: u64 = fields[11].parse::<u64>().unwrap() + fields[12].parse::<u64>().unwrap();
+        ticks * 10_000
+    }
+    let rounds: usize = std::env::var("MM_ROUNDS").map_or(5000, |n| n.parse().unwrap());
+    let server = start_server(false, &[], echo()).await;
+    let plain = rig_for(&server, None);
+    plain.config(json!({"enable": true, "hostname": ["listed.test"]}));
+    let ruled = rig_for(&server, None);
+    ruled.config(json!({
+        "enable": true,
+        "hostname": ["listed.test"],
+        "url-rewrite": [r"^http://other\.test/never _ reject"],
+    }));
+    let ssh = b"SSH-2.0-OpenSSH_9.9\r\n";
+
+    let peek = |rig: &Rig| {
+        let interceptor = rig.mitm.interceptor();
+        async move {
+            let (mut near, offer) = offer_on(interceptor, flow("other.test", 80));
+            near.write_all(ssh).await.unwrap();
+            assert!(matches!(offer.await.unwrap(), Offer::Declined { .. }));
+        }
+    };
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "a loopback relay standing in for the core's, not a proxied socket"
+    )]
+    async fn relayed_get(rig: &Rig, server: std::net::SocketAddr) {
+        let (near, offer) = offer_on(rig.mitm.interceptor(), flow("other.test", 80));
+        let relay = tokio::spawn(async move {
+            let Offer::Declined { stream, head } = offer.await.unwrap() else {
+                panic!("taken")
+            };
+            let mut stream = concord_common::PeekedStream::new(head, stream);
+            let mut upstream = tokio::net::TcpStream::connect(server).await.unwrap();
+            let _ = tokio::io::copy_bidirectional(&mut stream, &mut upstream).await;
+        });
+        let (mut sender, conn) =
+            hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(near))
+                .await
+                .unwrap();
+        let conn = tokio::spawn(conn);
+        let request = http::Request::get("/x")
+            .header("Host", "other.test")
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+        let response = sender.send_request(request).await.unwrap();
+        use http_body_util::BodyExt;
+        response.into_body().collect().await.unwrap();
+        drop(sender);
+        let _ = conn.await;
+        let _ = relay.await;
+    }
+    async fn engine_get(rig: &Rig) {
+        let mut client = Client::plain(rig, "other.test", 80).await;
+        assert_eq!(client.get("/x").await.status.as_u16(), 200);
+    }
+
+    for (name, per) in [("connection, not HTTP", true), ("HTTP request", false)] {
+        let mut arms = Vec::new();
+        for (arm, rig) in [("no rule", &plain), ("a rule", &ruled)] {
+            let started = cpu_us();
+            let wall = std::time::Instant::now();
+            for _ in 0..rounds {
+                match (per, arm) {
+                    (true, _) => peek(rig).await,
+                    (false, "no rule") => relayed_get(rig, server.addr).await,
+                    (false, _) => engine_get(rig).await,
+                }
+            }
+            let us = (cpu_us() - started) as f64 / rounds as f64;
+            println!(
+                "MM-COST {name} | {arm}: {us:.1} CPU-us each, {:.1} us wall",
+                wall.elapsed().as_micros() as f64 / rounds as f64
+            );
+            arms.push(us);
+        }
+        println!("MM-COST {name} | added: {:.1} CPU-us", arms[1] - arms[0]);
+    }
 }
