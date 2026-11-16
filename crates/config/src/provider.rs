@@ -7,6 +7,7 @@ use crate::error::{ConfigError, Result};
 use crate::filter::{self, CompiledFilter};
 use crate::lenient::{Fields, scalar_text};
 use crate::net::parse_unsigned_ranges;
+use crate::report::LoadReport;
 use crate::{share_link, yaml};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,6 +107,8 @@ pub struct RuleProviderDef {
     pub interval: u32,
     /// `payload` of a file or http provider: its rules until a load succeeds.
     pub fallback: Vec<String>,
+    /// Where mihomo finds the provider in `BundleMRS.7z` when its local file is missing; never read.
+    pub path_in_bundle: String,
     pub raw: Map,
 }
 
@@ -366,11 +369,7 @@ pub fn parse_rule_provider(name: &str, map: &Map) -> Result<RuleProviderDef> {
     let behavior_text = f.string("behavior")?;
     let format_text = f.string("format")?;
     let interval = f.u32("interval")?;
-    if f.has("path-in-bundle") && !f.string("path-in-bundle")?.is_empty() {
-        return Err(ConfigError::new(
-            "path-in-bundle is not supported by this core",
-        ));
-    }
+    let path_in_bundle = f.string("path-in-bundle")?;
     let behavior = match behavior_text.as_str() {
         "domain" => RuleBehavior::Domain,
         "ipcidr" => RuleBehavior::IpCidr,
@@ -419,8 +418,31 @@ pub fn parse_rule_provider(name: &str, map: &Map) -> Result<RuleProviderDef> {
         format,
         interval,
         fallback,
+        path_in_bundle,
         raw: map.clone(),
     })
+}
+
+pub fn parse_rule_providers(
+    maps: &IndexMap<String, Map>,
+    report: &mut LoadReport,
+) -> Result<Vec<RuleProviderDef>> {
+    let mut providers = Vec::with_capacity(maps.len());
+    for (name, map) in maps {
+        let provider = parse_rule_provider(name, map)
+            .map_err(|err| err.prefixed(&format!("parse rule provider {name} error: ")))?;
+        if !provider.path_in_bundle.is_empty()
+            && !matches!(provider.source, RuleSource::Inline { .. })
+        {
+            report.warn(
+                "not_applied",
+                format!("rule-providers.{name}.path-in-bundle"),
+                "BundleMRS.7z is not read by this core; the provider loads from its path or url",
+            );
+        }
+        providers.push(provider);
+    }
+    Ok(providers)
 }
 
 pub fn parse_provider_content(bytes: &[u8], age_secret_key: Option<&str>) -> Result<Vec<Map>> {
@@ -565,7 +587,12 @@ mod tests {
             )
             .is_err()
         );
-        assert!(parse_rule_provider("x", &map(json!({"type": "file", "behavior": "domain", "path": "a", "path-in-bundle": "x"}))).is_err());
+        let bundled = parse_rule_provider(
+            "b",
+            &map(json!({"type": "file", "behavior": "domain", "path": "a", "path-in-bundle": "geo/cn.mrs"})),
+        )
+        .unwrap();
+        assert_eq!(bundled.path_in_bundle, "geo/cn.mrs");
     }
 
     #[test]

@@ -15,7 +15,7 @@ use crate::lenient::Fields;
 use crate::net::IpCidr;
 use crate::ntp::NtpConfig;
 use crate::provider::{
-    ProxyProviderDef, ProxySource, RuleProviderDef, parse_proxy_provider, parse_rule_provider,
+    ProxyProviderDef, ProxySource, RuleProviderDef, parse_proxy_provider, parse_rule_providers,
 };
 use crate::proxy::{Capabilities, ProxyDef, ProxyParse, Quarantined, parse_proxy, proxy_warnings};
 use crate::raw::{RawConfig, parse_raw_with_key};
@@ -811,13 +811,7 @@ pub fn load_raw(mut raw: RawConfig, options: &LoadOptions) -> Result<Profile> {
         proxy_providers.push(provider);
     }
     parse_provider_proxies(&proxy_providers, options, &mut quarantined, &mut report)?;
-    let mut rule_providers = Vec::with_capacity(raw.rule_providers.len());
-    for (name, map) in &raw.rule_providers {
-        rule_providers.push(
-            parse_rule_provider(name, map)
-                .map_err(|err| err.prefixed(&format!("parse rule provider {name} error: ")))?,
-        );
-    }
+    let rule_providers = parse_rule_providers(&raw.rule_providers, &mut report)?;
 
     let proxy_names: Vec<String> = proxies.iter().map(|p| p.name.clone()).collect();
     let mut referenced_quarantined = HashSet::new();
@@ -1075,6 +1069,25 @@ proxy-groups:
         assert_eq!(
             warned_paths("tun:\n  enable: true\n  gso: true\n", false),
             ["tun.gso"]
+        );
+    }
+
+    #[test]
+    fn a_rule_provider_path_in_bundle_is_warned_and_the_provider_kept() {
+        let text = "rule-providers:\n  cn: {type: http, behavior: domain, format: mrs, url: \"https://a.test/cn.mrs\", path: ./cn.mrs, path-in-bundle: geo/geosite/cn.mrs}\n  \
+                    own: {type: inline, behavior: domain, payload: [a.test], path-in-bundle: x}\n\
+                    rules:\n  - RULE-SET,cn,DIRECT\n  - RULE-SET,own,DIRECT\n  - MATCH,DIRECT\n";
+        let profile = load_text(text).unwrap();
+        assert_eq!(profile.rule_providers.len(), 2);
+        let warned: Vec<_> = profile
+            .report
+            .warnings
+            .iter()
+            .map(|w| (w.code, w.path.as_str()))
+            .collect();
+        assert_eq!(
+            warned,
+            [("not_applied", "rule-providers.cn.path-in-bundle")]
         );
     }
 

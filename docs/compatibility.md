@@ -66,6 +66,9 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
   The full lists are the `T2_*` constants in `crates/config/src/proxy/parse.rs`.
 - A provider's `override.override-expr`: the provider gets no proxies and a warning, because its nodes must not run
   without the expressions.
+- A rule provider's `path-in-bundle`: `BundleMRS.7z` is not read, so a provider whose local file is missing loads
+  from its `url` or fails to load, as in mihomo when the home directory has no `BundleMRS.7z`. The key is ignored
+  with a warning.
 - The `relay` group type, which mihomo also removed; use `dialer-proxy`.
 - ShadowsocksR `chacha20` and `xchacha20` (obsolete unauthenticated ciphers); VLESS `encryption`; xhttp over HTTP/3;
   Hysteria `faketcp`; ShadowQUIC over QUIC v2.
