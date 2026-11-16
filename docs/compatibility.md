@@ -177,6 +177,16 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
   give up after 5 s (the Surge script default), leaving the body as it came; a jq filter that never ends, such as
   `until(false; .)`, keeps its blocking thread busy until the process exits, as jaq cannot be interrupted.
 
+MITM header and body rewrites take two conditions of Concord's own after the URL, beyond Surge's form:
+`request-head <re>`, and on an `http-response` rule `response-head <re>`. Each is matched against a head as Quantumult
+X's `url-and-header` reads it: the request or status line, then every header as `Name: value`, each line ending in CRLF.
+The rules of a phase are picked as it begins, so a rewrite earlier in the phase does not change what a condition sees.
+`header-text-replace <re> <replacement>` rewrites that whole head, as Quantumult X's `request-header` and
+`response-header` do. It may change a request's method, path and headers and a response's status and headers, but not
+the host a request goes to (a `Host` line naming another host is put back), `Content-Length` or `Transfer-Encoding`; a
+result that is not a head leaves the head as it was. A body rewrite whose first regex is literally `request-head` or
+`response-head` reads as a condition; write it another way, such as `request-hea[d]`.
+
 Shadowsocks supports `gost-plugin` in WebSocket mode, including TLS and its default per-connection smux v1 stream.
 Gost relay supports TCP, destination-bound UDP, forward mode, TLS and per-connection smux v1.
 As with mihomo, its relay server needs `nodelay: true` so CONNECT is answered before application data,

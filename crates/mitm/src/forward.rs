@@ -3,19 +3,25 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
-use http::header::{ACCEPT_ENCODING, CONNECTION, CONTENT_ENCODING, HOST, UPGRADE};
-use http::{HeaderMap, HeaderValue, Request, Response, StatusCode, Uri, Version};
+use http::header::{
+    ACCEPT_ENCODING, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, HOST, TRANSFER_ENCODING, UPGRADE,
+};
+use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, Uri, Version};
 use hyper::body::Incoming;
 use hyper::upgrade::OnUpgrade;
 
 use crate::body::{Body, Buffered, Tap, buffer_body, empty, failing, full};
 use crate::capture::{PHASE_REQUEST, PHASE_RESPONSE};
 use crate::exchange::{OutRequest, ReplyError, Sent, Target, has_response_body, set_length};
-use crate::headers::{is_grpc, remove_hop_by_hop, text, with_host};
+use crate::headers::{
+    head_text, is_grpc, parse_head, remove_hop_by_hop, response_head, text, version_text, with_host,
+};
 use crate::limits::{BODY_WAIT, PRESSURE_NO_BODIES};
-use crate::rules::BodyRewrite;
+use crate::pattern::Pattern;
+use crate::rules::{BodyRewrite, Heads};
 use crate::script::DEFAULT_SCRIPT_TIMEOUT;
 use crate::session::{PoolKey, Sender, Session};
+use crate::target::TargetUrl;
 use http_body_util::BodyExt;
 
 impl Session {
@@ -52,12 +58,26 @@ impl Session {
         let rules = &self.core.config.rules;
         let max_body = self.core.config.limits.max_body_size;
         let address = out.url.raw.clone();
-        if rules.rewrite_headers(&address, &mut out.headers, false) > 0 {
+        let (header_rules, body_rules) = {
+            let request = || request_text(out, target.version);
+            let heads = Heads::new(Some(&request), None);
+            (
+                rules.header_rewrites_for(&address, false, &heads),
+                rules.body_rewrites_for(&address, false, &heads),
+            )
+        };
+        let mut rewritten = false;
+        for rule in header_rules {
+            rewritten |= match rule.whole_head() {
+                Some((pattern, with)) => replace_request_head(out, target.version, pattern, with),
+                None => rule.apply(&mut out.headers),
+            };
+        }
+        if rewritten {
             target.cap.note("header-rewrite", PHASE_REQUEST, "");
             tracing::info!("[MITM] rewrite request headers of {address}");
         }
         let grpc = is_grpc(&out.headers);
-        let body_rules = rules.body_rewrites_for(&address, false);
         if !body_rules.is_empty()
             && !grpc
             && out.has_body
@@ -90,7 +110,9 @@ impl Session {
 
     fn rewrites_response_body(&self, address: &str) -> bool {
         let rules = &self.core.config.rules;
-        !rules.body_rewrites_for(address, true).is_empty()
+        !rules
+            .body_rewrites_for(address, true, &Heads::new(None, None))
+            .is_empty()
             || rules
                 .script_for(address, true)
                 .is_some_and(|script| script.requires_body)
@@ -149,14 +171,35 @@ impl Session {
         let rules = &self.core.config.rules;
         let max_body = self.core.config.limits.max_body_size;
         let address = sent.url.raw.clone();
-        if rules.rewrite_headers(&address, &mut head.headers, true) > 0 {
+        let (header_rules, body_rules) = {
+            let request = || {
+                let line = format!(
+                    "{} {} {}",
+                    sent.method, sent.url.path_and_query, target.version
+                );
+                head_text(&line, &sent.host, &sent.headers)
+            };
+            let response = || response_head(head.status, version_text(head.version), &head.headers);
+            let heads = Heads::new(Some(&request), Some(&response));
+            (
+                rules.header_rewrites_for(&address, true, &heads),
+                rules.body_rewrites_for(&address, true, &heads),
+            )
+        };
+        let mut rewritten = false;
+        for rule in header_rules {
+            rewritten |= match rule.whole_head() {
+                Some((pattern, with)) => replace_response_head(head, pattern, with),
+                None => rule.apply(&mut head.headers),
+            };
+        }
+        if rewritten {
             target.cap.note("header-rewrite", PHASE_RESPONSE, "");
             tracing::info!("[MITM] rewrite response headers of {address}");
         }
         if head.status == StatusCode::SWITCHING_PROTOCOLS {
             return Ok(());
         }
-        let body_rules = rules.body_rewrites_for(&address, true);
         let length = hyper::body::Body::size_hint(body).exact();
         if !body_rules.is_empty()
             && has_response_body(&sent.method, head.status)
@@ -226,6 +269,91 @@ impl Session {
                     _ => return Err(io::Error::other(err.into_error())),
                 },
             }
+        }
+    }
+}
+
+fn request_text(out: &OutRequest, version: &str) -> String {
+    let line = format!("{} {} {version}", out.method, out.url.path_and_query);
+    head_text(&line, &out.host_header(), &out.headers)
+}
+
+/// The rewritten request line moves the request to another method and path on the same
+/// host, which a `Host` line cannot change: one that names another host is put back.
+fn replace_request_head(
+    out: &mut OutRequest,
+    version: &str,
+    pattern: &Pattern,
+    with: &str,
+) -> bool {
+    let Some((line, mut headers)) = rewritten_head(&request_text(out, version), pattern, with)
+    else {
+        return false;
+    };
+    let mut words = line.split(' ');
+    let method = words
+        .next()
+        .and_then(|word| Method::from_bytes(word.as_bytes()).ok());
+    let url = words
+        .next()
+        .filter(|path| path.starts_with('/'))
+        .and_then(|path| TargetUrl::from_request(out.url.https, &out.url.authority, path));
+    let (Some(method), Some(url)) = (method, url) else {
+        tracing::debug!("[MITM] the rewritten request line {line:?} is not one; the head is kept");
+        return false;
+    };
+    let host = out.host_header();
+    if let Some(named) = headers.remove(HOST)
+        && named.as_bytes() != host.as_bytes()
+    {
+        tracing::debug!(
+            "[MITM] a head rewrite named the host {named:?}; the request keeps going to {host}"
+        );
+    }
+    keep_framing(&out.headers, &mut headers);
+    out.method = method;
+    out.url = url;
+    out.headers = headers;
+    true
+}
+
+fn replace_response_head(head: &mut http::response::Parts, pattern: &Pattern, with: &str) -> bool {
+    let text = response_head(head.status, version_text(head.version), &head.headers);
+    let Some((line, mut headers)) = rewritten_head(&text, pattern, with) else {
+        return false;
+    };
+    let Some(status) = line
+        .split(' ')
+        .nth(1)
+        .and_then(|code| StatusCode::from_bytes(code.as_bytes()).ok())
+    else {
+        tracing::debug!("[MITM] the rewritten status line {line:?} is not one; the head is kept");
+        return false;
+    };
+    keep_framing(&head.headers, &mut headers);
+    head.status = status;
+    head.headers = headers;
+    true
+}
+
+/// `None` when the rule changes nothing or leaves what is not a head.
+fn rewritten_head(text: &str, pattern: &Pattern, with: &str) -> Option<(String, HeaderMap)> {
+    let replaced = pattern
+        .replace(text, with, true)
+        .filter(|replaced| replaced != text)?;
+    let parsed = parse_head(&replaced);
+    if parsed.is_none() {
+        tracing::debug!("[MITM] a head rewrite gave {replaced:?}, which is not a head; it is kept");
+    }
+    parsed
+}
+
+/// What frames the message stays the body's, as a header rewrite cannot change it.
+fn keep_framing(from: &HeaderMap, to: &mut HeaderMap) {
+    for name in [CONTENT_LENGTH, TRANSFER_ENCODING] {
+        to.remove(&name);
+        for value in from.get_all(&name) {
+            to.append(name.clone(), value.clone());
         }
     }
 }

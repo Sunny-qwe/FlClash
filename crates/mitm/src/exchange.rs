@@ -11,7 +11,7 @@ use tokio::sync::OwnedSemaphorePermit;
 
 use crate::body::{Body, Tap, empty, from_incoming, full};
 use crate::capture::Cap;
-use crate::headers::{remove_hop_by_hop, request_head, text, to_list, with_host};
+use crate::headers::{remove_hop_by_hop, request_head, text, to_list, version_text, with_host};
 use crate::rules::{UrlAction, tiny_gif};
 use crate::session::{ActivityGuard, Session};
 use crate::target::{TargetUrl, default_port};
@@ -56,6 +56,8 @@ pub(crate) struct Target {
     pub rewritten: bool,
     /// An upgrade, a WebSocket, which HTTP/2 cannot carry upstream.
     pub http1: bool,
+    /// The version the client spoke, as a head's first line writes it.
+    pub version: &'static str,
     pub id: String,
     pub answer: Option<Answer>,
     pub abort: bool,
@@ -114,16 +116,6 @@ pub(crate) fn new_request_id() -> String {
     let mut id = [0u8; 8];
     rand::rng().fill_bytes(&mut id);
     hex::encode(id)
-}
-
-fn version_text(version: Version) -> &'static str {
-    match version {
-        Version::HTTP_09 => "HTTP/0.9",
-        Version::HTTP_10 => "HTTP/1.0",
-        Version::HTTP_2 => "HTTP/2.0",
-        Version::HTTP_3 => "HTTP/3.0",
-        _ => "HTTP/1.1",
-    }
 }
 
 pub(crate) fn has_response_body(method: &Method, status: StatusCode) -> bool {
@@ -243,6 +235,7 @@ impl Session {
             url,
             rewritten: false,
             http1: upgrading,
+            version: version_text(parts.version),
             id: String::new(),
             answer: None,
             abort: false,

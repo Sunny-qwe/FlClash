@@ -186,6 +186,122 @@ async fn url_and_header_rejects_by_the_request_head() {
 }
 
 #[tokio::test]
+async fn rewrites_follow_the_status_and_both_heads() {
+    let handler: Handler = Arc::new(|seen| {
+        let reply = match seen.path.as_str() {
+            "/gone" => Reply {
+                status: 404,
+                ..Reply::ok("")
+            },
+            _ => Reply::ok(r#"{"ad":true}"#),
+        };
+        reply.with("X-Upstream", "yes")
+    });
+    let (_server, rig) = rig(handler, true, &["http/1.1"]).await;
+    let errors = rig.config(json!({
+        "enable": true,
+        "hostname": ["example.test"],
+        "skip-server-cert-verify": true,
+        "header-rewrite": [
+            r"http-response ^https://example\.test/ response-head ^HTTP/\S+\s200\s header-add X-Ok yes",
+            r"http-response ^https://example\.test/ request-head (\r\n)X-Want:\sit\r\n header-add X-Wanted yes",
+        ],
+        "body-rewrite": [r"http-response-jq ^https://example\.test/ request-head ^POST\s '.ad = false'"],
+    }));
+    assert!(errors.is_empty(), "{errors:?}");
+    let mut client = Client::tls(&rig, "example.test", 443, &["http/1.1"])
+        .await
+        .unwrap();
+    let answer = client.get("/api").await;
+    assert_eq!(
+        (
+            answer.header("x-ok"),
+            answer.header("x-wanted"),
+            answer.text()
+        ),
+        (
+            "yes".to_string(),
+            String::new(),
+            r#"{"ad":true}"#.to_string()
+        )
+    );
+    let answer = client.get("/gone").await;
+    assert_eq!(
+        (answer.status.as_u16(), answer.header("x-ok")),
+        (404, String::new())
+    );
+    let request = client.request("POST", "/api", &[("X-Want", "it")], "x");
+    let answer = client.send(request).await.unwrap();
+    assert_eq!(
+        (answer.header("x-wanted"), answer.text()),
+        ("yes".to_string(), r#"{"ad":false}"#.to_string())
+    );
+    assert_eq!(
+        answer.header("content-length"),
+        answer.body.len().to_string()
+    );
+}
+
+#[tokio::test]
+async fn a_whole_head_rewrite_changes_the_head_but_not_the_host() {
+    let (_server, rig) = rig(echo(), true, &["http/1.1"]).await;
+    let errors = rig.config(json!({
+        "enable": true,
+        "hostname": ["example.test"],
+        "skip-server-cert-verify": true,
+        "header-rewrite": [
+            r#"http-request ^https://example\.test/old/ header-text-replace "^GET /old/(\S*) " "GET /new/${1} ""#,
+            r#"http-request ^https://example\.test/ header-text-replace "(\r\n)User-Agent:[^\r]*(\r\n)" "${1}X-Added: from-ua${2}""#,
+            r#"http-request ^https://example\.test/host header-text-replace "Host: example\.test" "Host: other.test""#,
+            r#"http-response ^https://example\.test/r header-text-replace "(\r\n)X-Upstream: yes(\r\n)" "${1}Cache-Control: no-store${2}""#,
+            r#"http-response ^https://example\.test/teapot header-text-replace "^(\S+) 200 OK" "${1} 418 I'm a teapot""#,
+            r#"http-response ^https://example\.test/broken header-text-replace "(\r\n)X-Upstream" "${1}Bad Name""#,
+        ],
+    }));
+    assert!(errors.is_empty(), "{errors:?}");
+    let mut client = Client::tls(&rig, "example.test", 443, &["http/1.1"])
+        .await
+        .unwrap();
+    assert_eq!(
+        client.get("/old/x?y=1").await.text(),
+        "example.test|/new/x?y=1||"
+    );
+    let request = client.request("GET", "/ua", &[("User-Agent", "app/1")], "");
+    assert_eq!(
+        client.send(request).await.unwrap().text(),
+        "example.test|/ua|from-ua|"
+    );
+    assert_eq!(
+        client.get("/host").await.text(),
+        "example.test|/host||",
+        "the request keeps going to its host"
+    );
+    let answer = client.get("/r").await;
+    assert_eq!(
+        (
+            answer.header("x-upstream"),
+            answer.header("cache-control"),
+            answer.text()
+        ),
+        (
+            String::new(),
+            "no-store".to_string(),
+            "example.test|/r||".to_string()
+        )
+    );
+    let answer = client.get("/teapot").await;
+    assert_eq!(
+        (answer.status.as_u16(), answer.text()),
+        (418, "example.test|/teapot||".to_string())
+    );
+    assert_eq!(
+        client.get("/broken").await.header("x-upstream"),
+        "yes",
+        "a rewrite that leaves no head keeps the one it had"
+    );
+}
+
+#[tokio::test]
 async fn dials_the_host_a_rewrite_moves_to() {
     let (_server, rig) = rig(echo(), true, &["http/1.1"]).await;
     rig.config(json!({
@@ -1130,4 +1246,75 @@ async fn plain_http_cost() {
         }
         println!("MM-COST {name} | added: {:.1} CPU-us", arms[1] - arms[0]);
     }
+}
+
+/// What a head condition and a whole-head rewrite cost a request over a plain header rewrite,
+/// run on the Linux VM: `cargo test -p concord-mitm --release head_rewrite_cost -- --ignored --nocapture`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "a measurement, run by hand on the Linux VM"]
+async fn head_rewrite_cost() {
+    fn cpu_us() -> u64 {
+        let stat = std::fs::read_to_string("/proc/self/stat").expect("Linux only");
+        let fields: Vec<&str> = stat
+            .rsplit(')')
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .collect();
+        let ticks: u64 = fields[11].parse::<u64>().unwrap() + fields[12].parse::<u64>().unwrap();
+        ticks * 10_000
+    }
+    let rounds: usize = std::env::var("MM_ROUNDS").map_or(5000, |n| n.parse().unwrap());
+    let server = start_server(false, &[], echo()).await;
+    let arms = [
+        (
+            "plain",
+            vec![
+                r"http-request ^http://example\.test/ header-add X-Added yes",
+                r"http-response ^http://example\.test/ header-add X-Seen yes",
+            ],
+        ),
+        (
+            "request-head, response-head",
+            vec![
+                r"http-request ^http://example\.test/ request-head ^GET\s header-add X-Added yes",
+                r"http-response ^http://example\.test/ response-head ^HTTP/\S+\s200\s header-add X-Seen yes",
+            ],
+        ),
+        (
+            "header-text-replace",
+            vec![
+                r#"http-request ^http://example\.test/ header-text-replace "^GET /x " "GET /y ""#,
+                r#"http-response ^http://example\.test/ header-text-replace "(\r\n)X-Upstream: yes" "${1}X-Seen: yes""#,
+            ],
+        ),
+    ];
+    let mut costs = Vec::new();
+    for (name, lines) in arms {
+        let rig = rig_for(&server, None);
+        let errors = rig.config(json!({
+            "enable": true,
+            "hostname": ["example.test"],
+            "header-rewrite": lines,
+        }));
+        assert!(errors.is_empty(), "{errors:?}");
+        let mut client = Client::plain(&rig, "example.test", 80).await;
+        assert_eq!(client.get("/x").await.header("x-seen"), "yes");
+        let started = cpu_us();
+        let wall = std::time::Instant::now();
+        for _ in 0..rounds {
+            assert_eq!(client.get("/x").await.status.as_u16(), 200);
+        }
+        let us = (cpu_us() - started) as f64 / rounds as f64;
+        println!(
+            "MM-COST {name}: {us:.1} CPU-us each, {:.1} us wall",
+            wall.elapsed().as_micros() as f64 / rounds as f64
+        );
+        costs.push(us);
+    }
+    println!(
+        "MM-COST added: conditions {:.1}, whole head {:.1} CPU-us",
+        costs[1] - costs[0],
+        costs[2] - costs[0]
+    );
 }

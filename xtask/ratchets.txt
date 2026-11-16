@@ -20,7 +20,7 @@ fn-lines crates/config/src/share_link/decode.rs::decode_vmess 172
 fn-lines crates/config/src/share_link/decode.rs::v_share_link 148
 fn-lines crates/dns/src/build.rs::Resolver::new 157
 fn-lines crates/group/src/outbounds.rs::Builder::build_group 169
-fn-lines crates/mitm/src/exchange.rs::Session::handle 194 raised from 193: the head `url-and-header` reads is built here, where the request parts still are; back down when the URL rewrite branch moves into its own function
+fn-lines crates/mitm/src/exchange.rs::Session::handle 195 raised from 193: the head `url-and-header` reads is built here, where the request parts still are, and the version the client spoke is kept for the heads later rules read; back down when the URL rewrite branch moves into its own function
 fn-lines crates/net/src/relay.rs::Half::poll 175
 fn-lines crates/netstack/src/engine.rs::TcpStack::poll 123
 fn-lines crates/netstack/src/tcp/recovery.rs::Tcb::process_ack 126

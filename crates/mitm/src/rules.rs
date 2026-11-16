@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::path::{Component, Path};
 
 use http::StatusCode;
@@ -71,23 +72,129 @@ pub struct UrlRewrite {
     pub action: UrlAction,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum HeaderAction {
-    Add,
-    Del,
-    Replace,
-    ReplaceRegex,
+const REQUEST_HEAD: &str = "request-head";
+const RESPONSE_HEAD: &str = "response-head";
+
+/// Concord's `request-head <re>` and `response-head <re>` after a header or body rewrite's
+/// URL: patterns over a head as [crate::headers::head_text] writes it.
+#[derive(Debug, Default)]
+pub(crate) struct HeadConditions {
+    request: Option<Pattern>,
+    response: Option<Pattern>,
+}
+
+#[derive(Debug)]
+enum ConditionError {
+    ResponseOnly,
+    NoPattern(&'static str),
+    Twice(&'static str),
+    Pattern(String),
+}
+
+impl From<ConditionError> for String {
+    fn from(err: ConditionError) -> String {
+        match err {
+            ConditionError::ResponseOnly => format!("{RESPONSE_HEAD} needs an http-response rule"),
+            ConditionError::NoPattern(keyword) => format!("{keyword} needs a pattern"),
+            ConditionError::Twice(keyword) => format!("{keyword} is given twice"),
+            ConditionError::Pattern(err) => err,
+        }
+    }
+}
+
+impl HeadConditions {
+    /// `false` when `keyword` names no condition.
+    fn set(
+        &mut self,
+        keyword: &str,
+        pattern: Option<&str>,
+        response: bool,
+    ) -> Result<bool, ConditionError> {
+        let (keyword, slot) = match keyword.to_ascii_lowercase().as_str() {
+            REQUEST_HEAD => (REQUEST_HEAD, &mut self.request),
+            RESPONSE_HEAD if response => (RESPONSE_HEAD, &mut self.response),
+            RESPONSE_HEAD => return Err(ConditionError::ResponseOnly),
+            _ => return Ok(false),
+        };
+        let pattern = pattern.ok_or(ConditionError::NoPattern(keyword))?;
+        if slot.is_some() {
+            return Err(ConditionError::Twice(keyword));
+        }
+        *slot = Some(Pattern::new(pattern).map_err(ConditionError::Pattern)?);
+        Ok(true)
+    }
+
+    /// Reads the conditions from `at` on and returns where the fields after them start.
+    fn read(
+        fields: &[Field],
+        response: bool,
+        mut at: usize,
+    ) -> Result<(Self, usize), ConditionError> {
+        let mut conditions = HeadConditions::default();
+        while let Some(keyword) = fields.get(at)
+            && conditions.set(
+                &keyword.text,
+                fields.get(at + 1).map(|field| field.text.as_str()),
+                response,
+            )?
+        {
+            at += 2;
+        }
+        Ok((conditions, at))
+    }
+}
+
+/// The heads a rule's conditions read, each written at most once and only when a rule
+/// whose URL matched asks for it. A head that is not known yet lets its condition pass.
+pub(crate) struct Heads<'a> {
+    request: Option<&'a dyn Fn() -> String>,
+    response: Option<&'a dyn Fn() -> String>,
+    request_text: OnceCell<String>,
+    response_text: OnceCell<String>,
+}
+
+impl<'a> Heads<'a> {
+    pub(crate) fn new(
+        request: Option<&'a dyn Fn() -> String>,
+        response: Option<&'a dyn Fn() -> String>,
+    ) -> Self {
+        Heads {
+            request,
+            response,
+            request_text: OnceCell::new(),
+            response_text: OnceCell::new(),
+        }
+    }
+
+    fn allow(&self, conditions: &HeadConditions) -> bool {
+        let pass = |pattern: &Option<Pattern>,
+                    head: Option<&dyn Fn() -> String>,
+                    text: &OnceCell<String>| match (pattern, head) {
+            (Some(pattern), Some(head)) => pattern.is_match(text.get_or_init(head)),
+            _ => true,
+        };
+        pass(&conditions.request, self.request, &self.request_text)
+            && pass(&conditions.response, self.response, &self.response_text)
+    }
+}
+
+#[derive(Debug)]
+enum HeaderEdit {
+    Add(HeaderName, HeaderValue),
+    Del(HeaderName),
+    Replace(HeaderName, HeaderValue),
+    ReplaceRegex(HeaderName, Pattern, String),
+    /// Quantumult X's `request-header` and `response-header`: a replacement over the whole
+    /// head, its first line included.
+    Text(Pattern, String),
 }
 
 #[derive(Debug)]
 pub struct HeaderRewrite {
     response: bool,
     pattern: Pattern,
-    action: HeaderAction,
-    name: HeaderName,
-    value: HeaderValue,
-    value_regex: Option<Pattern>,
-    replacement: String,
+    conditions: HeadConditions,
+    edit: HeaderEdit,
 }
 
 #[derive(Debug)]
@@ -106,6 +213,7 @@ enum BodyAction {
 pub struct BodyRewrite {
     response: bool,
     pattern: Pattern,
+    conditions: HeadConditions,
     action: BodyAction,
 }
 
@@ -213,11 +321,24 @@ pub(crate) fn parse_header_rewrite(line: &str) -> Result<HeaderRewrite, String> 
             _ => {}
         }
     }
-    if fields.len() < 3 {
-        return Err("expected a pattern, an action and a header name".to_string());
+    let (conditions, at) = HeadConditions::read(&fields, response, 1)?;
+    let action_text = field_text(&fields, at).to_ascii_lowercase();
+    let rest = fields.get(at + 1..).unwrap_or_default();
+    if action_text == "header-text-replace" {
+        if rest.len() != 2 {
+            return Err("header-text-replace needs a pattern and a replacement".to_string());
+        }
+        return Ok(HeaderRewrite {
+            response,
+            pattern: Pattern::new(&field_text(&fields, 0))?,
+            conditions,
+            edit: HeaderEdit::Text(Pattern::new(&field_text(rest, 0))?, field_text(rest, 1)),
+        });
     }
-    let action_text = field_text(&fields, 1).to_ascii_lowercase();
-    let name_text = canonical_header(&field_text(&fields, 2));
+    let Some(name_field) = rest.first() else {
+        return Err("expected a pattern, an action and a header name".to_string());
+    };
+    let name_text = canonical_header(&name_field.text);
     if matches!(name_text.as_str(), "Content-Length" | "Transfer-Encoding") {
         return Err(format!(
             "{name_text} frames the message and cannot be rewritten"
@@ -225,89 +346,84 @@ pub(crate) fn parse_header_rewrite(line: &str) -> Result<HeaderRewrite, String> 
     }
     let name = HeaderName::from_bytes(name_text.as_bytes())
         .map_err(|_| format!("invalid header name {}", quote(&name_text)))?;
-    let rest = fields.get(3..).unwrap_or_default();
-    let mut value = HeaderValue::from_static("");
-    let mut value_regex = None;
-    let mut replacement = String::new();
-    let action = match action_text.as_str() {
-        "header-add" | "header-replace" => {
-            let text = fields
-                .get(2)
-                .map(|name_field| remainder(line, name_field))
-                .unwrap_or_default();
-            value = HeaderValue::from_str(&text)
-                .map_err(|_| format!("invalid header value {}", quote(&text)))?;
-            if action_text == "header-add" {
-                HeaderAction::Add
-            } else {
-                HeaderAction::Replace
-            }
-        }
-        "header-del" => HeaderAction::Del,
+    let args = rest.get(1..).unwrap_or_default();
+    let value = || {
+        let text = remainder(line, name_field);
+        HeaderValue::from_str(&text).map_err(|_| format!("invalid header value {}", quote(&text)))
+    };
+    let edit = match action_text.as_str() {
+        "header-add" => HeaderEdit::Add(name, value()?),
+        "header-replace" => HeaderEdit::Replace(name, value()?),
+        "header-del" => HeaderEdit::Del(name),
         "header-replace-regex" => {
-            if rest.len() < 2 {
+            if args.len() < 2 {
                 return Err("header-replace-regex needs a pattern and a replacement".to_string());
             }
-            value_regex = Some(Pattern::new(&field_text(rest, 0))?);
-            replacement = field_text(rest, 1);
-            HeaderAction::ReplaceRegex
+            HeaderEdit::ReplaceRegex(
+                name,
+                Pattern::new(&field_text(args, 0))?,
+                field_text(args, 1),
+            )
         }
-        _ => return Err(format!("unknown action {}", quote(&field_text(&fields, 1)))),
+        _ => {
+            return Err(format!(
+                "unknown action {}",
+                quote(&field_text(&fields, at))
+            ));
+        }
     };
-    let pattern = Pattern::new(&field_text(&fields, 0))?;
     Ok(HeaderRewrite {
         response,
-        pattern,
-        action,
-        name,
-        value,
-        value_regex,
-        replacement,
+        pattern: Pattern::new(&field_text(&fields, 0))?,
+        conditions,
+        edit,
     })
 }
 
 impl HeaderRewrite {
-    fn apply(&self, header: &mut HeaderMap) -> bool {
-        match self.action {
-            HeaderAction::Add => {
-                header.append(self.name.clone(), self.value.clone());
+    /// The pattern and replacement of a rule that rewrites the whole head, which its caller
+    /// applies as only it knows the first line.
+    pub(crate) fn whole_head(&self) -> Option<(&Pattern, &str)> {
+        match &self.edit {
+            HeaderEdit::Text(pattern, replacement) => Some((pattern, replacement)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn apply(&self, header: &mut HeaderMap) -> bool {
+        match &self.edit {
+            HeaderEdit::Add(name, value) => {
+                header.append(name.clone(), value.clone());
             }
-            HeaderAction::Del => {
-                if !header.contains_key(&self.name) {
+            HeaderEdit::Del(name) => return header.remove(name).is_some(),
+            HeaderEdit::Replace(name, value) => {
+                if !header.contains_key(name) {
                     return false;
                 }
-                header.remove(&self.name);
+                header.insert(name.clone(), value.clone());
             }
-            HeaderAction::Replace => {
-                if !header.contains_key(&self.name) {
+            HeaderEdit::ReplaceRegex(name, regex, replacement) => {
+                if !header.contains_key(name) {
                     return false;
                 }
-                header.insert(self.name.clone(), self.value.clone());
-            }
-            HeaderAction::ReplaceRegex => {
-                if !header.contains_key(&self.name) {
-                    return false;
-                }
-                let Some(regex) = &self.value_regex else {
-                    return false;
-                };
                 let values: Vec<HeaderValue> = header
-                    .get_all(&self.name)
+                    .get_all(name)
                     .iter()
                     .map(|value| {
                         value
                             .to_str()
                             .ok()
-                            .and_then(|text| regex.replace(text, &self.replacement, true))
+                            .and_then(|text| regex.replace(text, replacement, true))
                             .and_then(|text| HeaderValue::from_str(&text).ok())
                             .unwrap_or_else(|| value.clone())
                     })
                     .collect();
-                header.remove(&self.name);
+                header.remove(name);
                 for value in values {
-                    header.append(self.name.clone(), value);
+                    header.append(name.clone(), value);
                 }
             }
+            HeaderEdit::Text(..) => return false,
         }
         true
     }
@@ -322,7 +438,14 @@ pub(crate) fn parse_body_rewrite(line: &str) -> Result<BodyRewrite, String> {
     };
     if let Some(response) = jq_response {
         let rest = line.trim_start().get(kind.len()..).unwrap_or_default();
-        let (pattern, expression) = leading_field(rest).ok_or("unclosed quote")?;
+        let (pattern, mut expression) = leading_field(rest).ok_or("unclosed quote")?;
+        let mut conditions = HeadConditions::default();
+        while let Some((keyword, after)) = leading_field(expression)
+            && let Some((condition, after)) = leading_field(after)
+            && conditions.set(&keyword, Some(&condition), response)?
+        {
+            expression = after;
+        }
         let expression = unwrap_quotes(expression.trim());
         if pattern.is_empty() || expression.is_empty() {
             return Err("expected a pattern and a jq expression".to_string());
@@ -330,6 +453,7 @@ pub(crate) fn parse_body_rewrite(line: &str) -> Result<BodyRewrite, String> {
         return Ok(BodyRewrite {
             response,
             pattern: Pattern::new(&pattern)?,
+            conditions,
             action: BodyAction::Jq(Jq::compile(expression).map_err(|err| err.to_string())?),
         });
     }
@@ -343,7 +467,11 @@ pub(crate) fn parse_body_rewrite(line: &str) -> Result<BodyRewrite, String> {
         "http-response" => true,
         _ => return Err(format!("unknown type {}", quote(&first))),
     };
-    let pairs = fields.get(2..).unwrap_or_default();
+    let (conditions, at) = HeadConditions::read(&fields, response, 2)?;
+    let pairs = fields.get(at..).unwrap_or_default();
+    if pairs.is_empty() {
+        return Err("expected a regex with its replacement".to_string());
+    }
     if pairs.len() % 2 != 0 {
         return Err("a regex is missing its replacement".to_string());
     }
@@ -358,6 +486,7 @@ pub(crate) fn parse_body_rewrite(line: &str) -> Result<BodyRewrite, String> {
     Ok(BodyRewrite {
         response,
         pattern: Pattern::new(&field_text(&fields, 1))?,
+        conditions,
         action: BodyAction::Replace(replacements),
     })
 }
@@ -590,7 +719,7 @@ impl Rules {
         url: &str,
         head: impl Fn() -> String,
     ) -> Option<(&UrlRewrite, String)> {
-        let text = std::cell::OnceCell::new();
+        let text = OnceCell::new();
         for rule in &self.url_rewrites {
             if !rule.pattern.is_match(url) {
                 continue;
@@ -615,27 +744,31 @@ impl Rules {
             .find(|rule| rule.pattern.is_match(url))
     }
 
-    pub(crate) fn rewrite_headers(
+    /// The header rewrites for an exchange, picked before any of them runs so that each
+    /// condition reads the head as the phase began.
+    pub(crate) fn header_rewrites_for(
         &self,
         url: &str,
-        header: &mut HeaderMap,
         response: bool,
-    ) -> usize {
+        heads: &Heads<'_>,
+    ) -> Vec<&HeaderRewrite> {
         self.header_rewrites
             .iter()
             .filter(|rule| rule.response == response && rule.pattern.is_match(url))
-            .filter(|rule| rule.apply(header))
-            .count()
+            .filter(|rule| heads.allow(&rule.conditions))
+            .collect()
     }
 
     pub(crate) fn body_rewrites_for(
         &self,
         url: &str,
         response: bool,
+        heads: &Heads<'_>,
     ) -> Vec<std::sync::Arc<BodyRewrite>> {
         self.body_rewrites
             .iter()
             .filter(|rule| rule.response == response && rule.pattern.is_match(url))
+            .filter(|rule| heads.allow(&rule.conditions))
             .cloned()
             .collect()
     }
@@ -813,8 +946,12 @@ mod tests {
             ("referer", "http://a.com/x"),
             ("set-cookie", "c=d"),
         ]);
+        let picked = rules.header_rewrites_for("https://a.com/", false, &Heads::new(None, None));
         assert_eq!(
-            rules.rewrite_headers("https://a.com/", &mut header, false),
+            picked
+                .into_iter()
+                .filter(|rule| rule.apply(&mut header))
+                .count(),
             5
         );
         let get = |name: &str| {
@@ -833,6 +970,107 @@ mod tests {
         assert_eq!(get("set-cookie").as_deref(), Some("c=d"));
         assert_eq!(get("cookie"), None);
         assert_eq!(header.len(), 5);
+    }
+
+    #[test]
+    fn head_conditions_read_each_head_once_and_only_past_the_url() {
+        let lines = [
+            r"http-response ^https://a\.com/ response-head ^HTTP/\S+\s200\s request-head ^POST\s header-add X-A 1",
+            r"http-response ^https://a\.com/ request-head ^POST\s header-add X-B 1",
+            r"http-response ^https://b\.com/ request-head ^GET header-add X-C 1",
+            r"http-response ^https://a\.com/ header-del X-D",
+        ];
+        let mut rules = Rules::default();
+        for line in lines {
+            rules
+                .header_rewrites
+                .push(parse_header_rewrite(line).unwrap_or_else(|e| panic!("{line}: {e}")));
+        }
+        let built = std::cell::Cell::new(0);
+        let picked = |request: &str, response: &str| {
+            let request = || {
+                built.set(built.get() + 1);
+                request.to_string()
+            };
+            let response = || response.to_string();
+            rules
+                .header_rewrites_for(
+                    "https://a.com/x",
+                    true,
+                    &Heads::new(Some(&request), Some(&response)),
+                )
+                .len()
+        };
+        assert_eq!(
+            picked("POST /x HTTP/1.1\r\n\r\n", "HTTP/1.1 200 OK\r\n\r\n"),
+            3
+        );
+        assert_eq!(
+            built.get(),
+            1,
+            "two conditions on the request head read it once"
+        );
+        assert_eq!(
+            picked("POST /x HTTP/1.1\r\n\r\n", "HTTP/2.0 404 Not Found\r\n\r\n"),
+            2
+        );
+        assert_eq!(
+            picked("GET /x HTTP/1.1\r\n\r\n", "HTTP/1.1 200 OK\r\n\r\n"),
+            1
+        );
+        assert_eq!(
+            rules
+                .header_rewrites_for("https://a.com/x", true, &Heads::new(None, None))
+                .len(),
+            3,
+            "a head not known yet lets its condition pass"
+        );
+        built.set(0);
+        let request = || {
+            built.set(built.get() + 1);
+            String::new()
+        };
+        rules.header_rewrites_for("https://c.com/", true, &Heads::new(Some(&request), None));
+        assert_eq!(
+            built.get(),
+            0,
+            "no rule matched the URL, so no head is written"
+        );
+    }
+
+    #[test]
+    fn head_conditions_and_whole_head_rewrites_parse() {
+        let rule = parse_header_rewrite(
+            r#"^https://a\.com/ header-text-replace "(\r\n)User-Agent:[^\r]*(\r\n)" "$1User-Agent: app$2""#,
+        )
+        .unwrap();
+        assert!(rule.whole_head().is_some());
+        assert!(!rule.apply(&mut HeaderMap::new()));
+        for line in [
+            r"http-request ^a response-head x header-add X 1",
+            r"http-response ^a request-head",
+            r"http-response ^a request-head a request-head b header-del X",
+            r"http-response ^a request-head ( header-del X",
+            r"^a header-text-replace only",
+            r"^a header-text-replace a b c",
+        ] {
+            assert!(parse_header_rewrite(line).is_err(), "{line}");
+        }
+        let body = parse_body_rewrite(r"http-response ^a request-head ^POST\s a b").unwrap();
+        assert!(body.conditions.request.is_some());
+        let jq = parse_body_rewrite(
+            r#"http-response-jq ^a response-head "^HTTP/\S+ 200 " request-head ^POST '.ad = false'"#,
+        )
+        .unwrap();
+        assert!(jq.conditions.response.is_some() && jq.conditions.request.is_some());
+        assert_eq!(jq.apply(r#"{"ad":true}"#.to_string()), r#"{"ad":false}"#);
+        for line in [
+            r"http-request ^a response-head x a b",
+            r"http-response ^a request-head x",
+            r"http-request-jq ^a response-head x '.a'",
+        ] {
+            assert!(parse_body_rewrite(line).is_err(), "{line}");
+        }
     }
 
     #[test]
