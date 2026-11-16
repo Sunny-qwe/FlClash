@@ -39,6 +39,20 @@ pub use trust::{SystemRoots, TrustStore, parse_certificates};
 
 pub use rustls::ClientConfig;
 
+/// Connects a caller-configured rustls client through the native record engine.
+/// The config must enable secret extraction for the record-layer handoff.
+pub async fn connect_config(
+    config: &Arc<ClientConfig>,
+    server_name: &str,
+    io: concord_common::BoxStream,
+) -> io::Result<TlsConn> {
+    let name = rustls::pki_types::ServerName::try_from(server_name.to_owned())
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+    Ok(TlsConn::Record(Box::new(
+        rustls_backend::connect(config, name, io, false).await?,
+    )))
+}
+
 pub fn quic_client_config(
     options: &TlsOptions,
     trust: Arc<TrustStore>,

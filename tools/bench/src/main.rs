@@ -18,6 +18,7 @@ mod env;
 mod gost;
 mod isolate;
 mod load;
+mod masque;
 mod netstat;
 mod origin;
 mod plan;
@@ -56,6 +57,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(hide = true)]
+    MasqueServer {
+        #[arg(long)]
+        listen: std::net::SocketAddr,
+    },
     #[command(about = "Measure a tier.")]
     Run(Box<RunArgs>),
     #[command(about = "Compare two results.json files and fail on a significant regression.")]
@@ -220,6 +226,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Run(args) => run(*args),
+        Command::MasqueServer { listen } => masque::serve(listen),
         Command::Compare(args) => compare(args),
         Command::List => {
             list();
@@ -505,10 +512,12 @@ fn run(args: RunArgs) -> Result<bool, String> {
         return Err("hysteria-brutal needs --sing-box with QUIC support".into());
     }
     let needs_server = attached.is_empty()
-        && plan
-            .cases
-            .iter()
-            .any(|c| !matches!(c.name, "direct" | "rematch" | "hysteria-brutal"));
+        && plan.cases.iter().any(|c| {
+            !matches!(
+                c.name,
+                "direct" | "rematch" | "hysteria-brutal" | "masque-l4"
+            )
+        });
     let mihomo = match mihomo {
         Some(m) => m,
         None if !needs_server => cores

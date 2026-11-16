@@ -45,6 +45,9 @@ mod tests {
             "hysteria" => json!({"up": "10", "down": "10"}),
             "hysteria2" => json!({"password": "p"}),
             "tuic" => json!({"uuid": "b831381d-6324-4d53-ad4f-8cda48b30811", "password": "p"}),
+            "masque" => {
+                json!({"private-key": "invalid", "public-key": "invalid", "ip": "10.0.0.2"})
+            }
             "wireguard" => json!({
                 "private-key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
                 "public-key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",

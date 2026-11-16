@@ -1,8 +1,8 @@
 mod amnezia;
-mod config;
-mod dns;
+pub(crate) mod config;
+pub(crate) mod dns;
 mod session;
-mod stack;
+pub(crate) mod stack;
 mod transport;
 mod tunnel;
 
@@ -12,24 +12,19 @@ mod tests;
 use std::future::poll_fn;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use concord_common::{
-    Address, BoxRead, BoxStream, BoxWrite, DialCx, Outbound, OutboundInfo, OutboundKind,
-    PacketSession, Stream,
+    Address, BoxStream, DialCx, Outbound, OutboundInfo, OutboundKind, PacketSession,
 };
 use concord_config::proxy::{ProxyDef, WireGuardOpts};
 use concord_net::dial_found;
-use concord_netstack::{NetReadHalf, NetWriteHalf};
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::time::timeout;
 
 use self::config::WgConfig;
 use self::session::WgSession;
-use self::stack::TcpConn;
+use self::stack::IpStream;
 use self::tunnel::{Tunnel, watch_idle};
 use crate::ctx::{BuildCtx, BuildError};
 use crate::node::{Egress, info};
@@ -45,99 +40,6 @@ pub(crate) struct Shared {
 
 struct WireGuard {
     shared: Arc<Shared>,
-}
-
-struct WgStream {
-    conn: TcpConn,
-    _tunnel: Arc<Tunnel>,
-}
-
-impl AsyncRead for WgStream {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().conn).poll_read(cx, buf)
-    }
-}
-
-impl AsyncWrite for WgStream {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        data: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.get_mut().conn).poll_write(cx, data)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().conn).poll_flush(cx)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().conn).poll_shutdown(cx)
-    }
-}
-
-impl Stream for WgStream {
-    concord_common::stream_policy!(conn;
-        forward: direct;
-        default: read_requirements, write_requirements, poll_read_buffer, poll_write_buffer,
-            raw_socket, tcp, peer_addr, needs_handshake, into_tcp;
-        own: into_split);
-    fn into_split(self: Box<Self>) -> (BoxRead, BoxWrite) {
-        let WgStream { conn, _tunnel } = *self;
-        let (read, write, active) = conn.into_split();
-        let hold = Arc::new((active, _tunnel));
-        (
-            Box::new(WgRead {
-                read,
-                _hold: hold.clone(),
-            }),
-            Box::new(WgWrite { write, _hold: hold }),
-        )
-    }
-}
-
-type Hold = Arc<(stack::Active, Arc<Tunnel>)>;
-
-struct WgRead {
-    read: NetReadHalf,
-    _hold: Hold,
-}
-
-impl AsyncRead for WgRead {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().read).poll_read(cx, buf)
-    }
-}
-
-struct WgWrite {
-    write: NetWriteHalf,
-    _hold: Hold,
-}
-
-impl AsyncWrite for WgWrite {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        data: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.get_mut().write).poll_write(cx, data)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().write).poll_flush(cx)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().write).poll_shutdown(cx)
-    }
 }
 
 impl Shared {
@@ -217,10 +119,7 @@ impl Outbound for WireGuard {
                 dial_found(cx, found, dst, version, open).await?
             }
         };
-        Ok(Box::new(WgStream {
-            conn,
-            _tunnel: tunnel,
-        }))
+        Ok(Box::new(IpStream::new(conn, tunnel)))
     }
 
     async fn associate(

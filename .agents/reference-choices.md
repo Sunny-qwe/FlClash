@@ -57,6 +57,7 @@ something, read the reference's path for a host that supplies it.
 | gRPC, HTTP/2, WebSocket, XHTTP | mihomo `transport/gun`, `transport/vmess`, `transport/xhttp` for the wire; sing-box `transport/v2raygrpclite` and `transport/v2raywebsocket` for the Go implementation | sing-box `transport/v2raygrpc` is the optional google.golang.org/grpc build |
 | Snell, mieru | mihomo `transport/snell`; `enfein/mieru/v3` `pkg/protocol` (`underlay_stream.go`, `session.go`) | |
 | TLS records and fingerprints | Go `crypto/tls` (`conn.go`); `metacubex/utls` for client fingerprints and REALITY | |
+| MASQUE | mihomo `3c0d10a5` `adapter/outbound/masque.go:51-78`, `transport/masque/masque.go:33-235`, `client_h2.go:27-138`, `l4proxy.go:82-116` | WARP H3/H2 CONNECT-IP and H3 L4 proxy |
 | WireGuard | sing-box's wireguard-go (`device/`, `conn/`) | |
 | Interface lookup and network-change monitoring | sing-box `route/network.go`: a dial binds through `AutoDetectInterfaceFunc` (`:342-366`), which reads the interface table (sing `common/control/bind_finder_default.go:113`, `ByAddr`) and the monitor's default interface (sing-tun `monitor_shared.go:115`); the table is refreshed only when the network monitor reports a change (`route/network.go:267-270`), a netlink subscription on Linux (sing-tun `monitor_linux.go:18`, `:65-70`). Where the host reports network changes (Android, `network_update`), sing-box's platform-interface path: `route/network.go:343-348`, `UsePlatformAutoDetectInterfaceControl` | mihomo's 20 s interface cache (`component/iface/iface.go:35`), cleared by its TUN monitor, is a fallback bound only; sing-box's standalone monitor is not the reference where the host reports changes |
 
@@ -121,6 +122,20 @@ Concord already takes these from the references; keep them unless the reference 
   negotiated-timeout getter or keepalive setter, so shorter peer timeouts remain a compatibility limit. TLS is mandatory; additional security modes are
   rejected (`adapter/outbound/vless.go:676-708`). `download-settings` selects its own HTTP version
   and connection settings (`adapter/outbound/vless.go:867-903`).
+
+- [language-neutral] **MASQUE transport and identity defaults** follow mihomo's MTU 1280, QUIC
+  initial packet 1242, keepalive 30 s and 20-byte CID (`adapter/outbound/masque.go:208-219`, `:267-275`).
+  The certificate lasts one day with serial zero (`transport/masque/masque.go:96-100`). BBR CWND defaults
+  to 32 (`transport/tuic/common/congestion.go:17-18`); Cubic/Reno and BBR v2 count the actual initial packet
+  size (`transport/tuic/congestion/cubic_sender.go:62-71`, `congestion_v2/bbr_sender.go:303-308`), while
+  legacy BBR v1 counts InitialMaxDatagramSize (`transport/tuic/common/congestion.go:33-49`). H2 caps the
+  response header list at 10 MiB (`metacubex/http` 0.1.8 `h2_bundle.go:7513-7522`). Empty User-Agent is
+  omitted on both IP transports; L4 sends quic-go HTTP/3's default agent and gzip advertisement
+  (`quic-go` `http3/request_writer.go:174-208`, `http3/client.go:32`); H2 also advertises gzip by default
+  (`metacubex/http` 0.1.8 `internal/httpcommon/httpcommon.go:417-433`). H3 sends only the 10 MiB field limit
+  and, for IP, the two datagram settings, without grease or disabled extensions (`quic-go`
+  `http3/client.go:33`, `http3/frames.go:263-296`).
+  QUIC advertises max_datagram_frame_size 16383 (`quic-go` `internal/wire/datagram_frame.go:14`).
 
 - [language-neutral] **Gun HTTP/2 receive limits** are Go's HTTP/2 client defaults, which both references run for gun:
   mihomo `3f27ef39` through `metacubex/http` 0.1.8 (`h2_bundle.go:7358`, `:7363`, `:3555`), sing-box
@@ -270,8 +285,13 @@ Concord already takes these from the references; keep them unless the reference 
 | TUN driver scheduling | runtime-bound | sing-tun `611d83b7` runs one engine goroutine per queue that sleeps on its own epoll, loops over bursts without a time bound and yields to the Go scheduler only after a burst that woke a handler (`stack_go_engine.go:317-320`, `:361-380`). Concord's driver is a Tokio task: a busy poll ends after `MAX_ROUNDS` rounds and wakes itself, and Tokio 1.54.1 sends a task woken during its own poll to the back of the run queue and wakes a parked worker for it (`src/runtime/scheduler/multi_thread/worker.rs:1393-1416`). Each such yield costs that wake and can move the driver to another CPU; the engine goroutine pays neither. The two ways around it were measured and not taken: a driver that reruns in place on a worker keeps Tokio's I/O driver from the tasks that wait on it (`tcp-crr` beside a `udp-stream` on one CPU: p99 24 times `main`'s), and a driver on a thread of its own halves a proxied download, whose relay tasks then run on other threads than the driver. | TUN `direct`, 6 rounds: `udp-stream` CPU per GB 1.675 against sing-box 1.305, +28.4% [+17.6, +30.8]. `ss-aes128` `tcp-down`, 3 rounds: the driver on its own thread 7.11 Gbit/s against 13.82 as a Tokio task. 5 rounds: `tcp-crr` p99 65.5 ms with the driver rerunning in place against 2.69 as a Tokio task. |
 | Fake-IP mappings across a range change | language-neutral | mihomo's `CloneFrom` copies the previous pool's whole store (`component/fakeip/pool.go:90-102`), so after `fake-ip-range` changes a host seen before keeps an address outside the new range, which the TUN route no longer covers and the pool no longer counts as fake, until the mapping ages out. The new pool takes over only the mappings whose addresses it hands out itself (`crates/dns/src/fakeip.rs`, `FakeIpPool::adopt`); any other host gets an address from the new range; `adopting_from_another_range_keeps_only_the_addresses_this_one_hands_out` holds it. | None (behaviour, no performance effect) |
 | ECH retry configs | language-neutral | mihomo sets the ECH list it was given or looked up on the TLS config (`component/ech/ech.go:19-24`, `:38-43`) and never reads the `retry_configs` a rejecting server sends, so a rejected offer is a failed connection. sing-box reads them: on an ECH rejection with a non-empty retry list it closes the connection, makes the list the node's ECH list and dials one more TCP connection with retry off; a second rejection is the error (`common/tls/client.go:154-170`, `common/tls/std_client.go:111-113`). Concord follows sing-box on the TCP paths of both TLS backends (rustls; BoringSSL, whose verify then checks the public name the way ECH requires). The list is kept for the node's later connections until its source changes: a configured `config` until reload, a looked-up one until the lookup answers with another list (sing-box replaces a looked-up list when the DNS answer's TTL runs out, `common/tls/ech.go:133-170`; Concord asks its resolver on every handshake, so it follows the answer). QUIC does not retry, as in sing-box. `crates/tls/src/tests/ech_retry.rs` holds both backends, the kept list and its end with a changed lookup. | None (behaviour, no performance effect) |
+| MASQUE oversized datagrams | runtime-bound | The stack retains its configured MTU, like mihomo (`adapter/outbound/masque.go:218-239`). Each packet is checked against Quinn's current datagram limit, so an initial small path does not permanently reduce the stack's UDP capacity. An oversized packet is dropped; mihomo's connect-ip-go 67ccdb0cf771 instead returns PMTU ICMP (`conn.go:361-378`), which the native shared stack does not process. | macOS regression `masque_initial_path_mtu_drops_large_udp_without_shrinking_the_ip_stack` fixes the path at the initial MTU and checks that a 1200-byte UDP payload is admitted by the stack, dropped by the transport, and followed by a successful small datagram. Performance screening is pending. |
+
 
 ## Tunables
+
+The MASQUE benchmark peer reads 8192 bytes per TCP read, matching Rust Tokio 1.54.1
+`src/io/util/mod.rs:88` (basis B, the runtime copy helper's default).
 
 Every tunable (`rules.md`, "Tunables") with its basis: A, a spec; B, the reference's value for the same knob (or,
 where mihomo and sing-box have none, the default of the Rust library used there, or the nearest analogue named as
@@ -631,6 +651,7 @@ tunables. `module::*` covers every constant in that module and its submodules th
 | `inbound::socks5::*` | RFC 1928 §4 ATYP domain name = 3; RFC 1928 §4 ATYP IPv4 = 1; RFC 1928 §4 ATYP IPv6 = 4; RFC 1928 §4 CMD CONNECT = 1; RFC 1928 §4 CMD UDP ASSOCIATE = 3; RFC 1928 §7 maximum UDP request header: RSV 2 + FRAG 1 + ATYP 1 + len 1 + 255-byte domain + port 2 |
 | `mitm::hostlist::*` | IANA well-known port for https, 443 (RFC 9110 §4.2.2); IANA well-known port for http, 80 (RFC 9110 §4.2.1) |
 | `mitm::target::*` | IANA well-known port for https, 443 (RFC 9110 §4.2.2); IANA well-known port for http, 80 (RFC 9110 §4.2.1) |
+| `proxy::masque::datagram::HEADER_MAX` | 9 bytes: RFC 9000 §16 maximum QUIC variable integer width (8), plus the zero Context ID (1) of RFC 9484 §4.4; Quarter Stream ID is defined in RFC 9297 §2.1 |
 | `netstack::readiness::*` | In-memory readiness bit flags READ=1, WRITE=2, FLAGS=READ or WRITE of Concord's own atomic state word; bit layout, no tuning. |
 | `netstack::wire::*` | IP/TCP/UDP header lengths (RFC 791, 8200, 9293, 768), TCP flag bits (RFC 9293 §3.1), IANA protocol numbers, IPv4 MF bit and IPv6 fragment header (RFC 8200 §4.5), 4 SACK blocks fit 40-byte options (RFC 2018 §3), default TTL 64 (RFC 1700). |
 | `platform::clock::*` | Windows API GetTimeZoneInformation return code TIME_ZONE_ID_DAYLIGHT = 2 (timezoneapi.h); Unit conversion: seconds from the Windows FILETIME epoch 1601-01-01 to the Unix epoch |

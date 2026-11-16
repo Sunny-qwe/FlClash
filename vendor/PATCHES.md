@@ -28,6 +28,7 @@ crate's directory, its `[patch.crates-io]` entry and its lines in `UPSTREAM.sha2
 | Crate | Change | Upstream | Route |
 |---|---|---|---|
 | boring | Read-only `SslRef` record-layer accessors | None | None planned: the change stays in the vendored copy |
+| h3 | Opt-in draft-00 datagram SETTINGS for WARP | None | Propose the default-off client builder switch to hyperium/h3 |
 | h2 | Ignore DATA and HEADERS on forgotten client streams | None as of 0.4.20 | Issue and PR to hyperium/h2 with the delayed-DATA-after-reset transport test |
 | mio | High-resolution timed waits on Windows | None | PR to tokio-rs/mio, citing Go's default poller path |
 | quinn | `MAX_TRANSMIT_DATAGRAMS` 80 (`MAX_TRANSMIT_SEGMENTS` back to upstream's 10) | n0-computer/noq#636 (noq) | The segment cap is upstream's again; propose only the datagram limit to quinn-rs/quinn |
@@ -223,3 +224,21 @@ Upgrade `quinn`, `quinn-proto` and `quinn-udp` together; replay these changes an
 
 - `src/async_device/unix/mod.rs`: `AsyncDevice::into_sync` returns the existing owned device after reactor deregistration, preserving its FD, queued packets and VNET/offload state. TUN queue owners use it with `AsyncDevice::new` to register on their runtime; raw-fd adoption rejects VNET descriptors.
 
+
+## h3 0.0.8
+
+The package archive checksum is `10872b55cfb02a821b69dc7cf8dc6a71d6af25eb9a79662bec4a9d016056b3be`.
+
+- `src/config.rs`, `src/client/builder.rs`: a default-off legacy HTTP datagram switch advertises `0x276: 1`
+  for MASQUE peers, alongside the standard setting. The default encoding is unchanged. The byte-level QUIC
+  contracts are in `crates/proxy/tests/h3_settings.rs`; the off-switch golden was captured from unpatched 0.0.8.
+- `src/ext.rs`: the fixed `CF_CONNECT_IP` protocol token sends and decodes Cloudflare WARP extended CONNECT
+  requests. Existing protocol values and defaults are unchanged; there is no dynamic protocol API.
+- `src/proto/headers.rs`: ordinary CONNECT omits `:scheme`/`:path` as RFC 9114 section 4.4 requires;
+  extended CONNECT and other methods keep their original bytes. Consider reporting this fix upstream.
+- `src/config.rs`, `src/client/builder.rs`: default-off omission of disabled extension settings, used only by
+  MASQUE to match quic-go's IP and L4 SETTINGS profiles. Other H3 clients retain their original bytes.
+- `src/config.rs`, `src/proto/frame.rs`: peer datagram support also recognizes and retains WARP's draft-00
+  setting as a receive-side alias.
+- `src/shared_state.rs`, `src/client/connection.rs`: a read-only poll for received peer datagram SETTINGS lets
+  CONNECT-IP wait for and validate peer support without enabling h3's internal API feature.

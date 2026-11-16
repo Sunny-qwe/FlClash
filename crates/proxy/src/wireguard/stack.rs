@@ -1,3 +1,4 @@
+mod stream;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::{IpAddr, SocketAddr};
@@ -6,6 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
+pub(crate) use stream::IpStream;
 
 use concord_common::Stream;
 use concord_netstack::frag::Reassembler;
@@ -22,7 +24,7 @@ use tokio::time::{Instant, sleep_until};
 
 use crate::util::lock;
 
-pub(super) use concord_netstack::Congestion;
+pub(crate) use concord_netstack::Congestion;
 
 #[cfg(test)]
 mod serve;
@@ -34,9 +36,9 @@ const RX_BATCH: usize = 64;
 const EPHEMERAL_START: u16 = 32768;
 const EPHEMERAL_END: u16 = 60999;
 
-pub(super) struct StackConfig {
-    pub(super) addrs: Vec<IpAddr>,
-    pub(super) mtu: usize,
+pub(crate) struct StackConfig {
+    pub(crate) addrs: Vec<IpAddr>,
+    pub(crate) mtu: usize,
 }
 
 /// Builds the stack's packets into buffers from gotatun's pool, at most one MTU each.
@@ -52,7 +54,8 @@ impl Egress for Out<'_> {
             return false;
         }
         let mut packet = self.pool.get();
-        let room = packet.len().min(self.mtu);
+        packet.buf_mut().resize(self.mtu, 0);
+        let room = self.mtu;
         if let Some(len) = packet.get_mut(..room).and_then(build) {
             packet.truncate(len);
             self.queue.push_back(packet);
@@ -193,7 +196,7 @@ impl Inner {
     }
 }
 
-pub(super) struct Stack {
+pub(crate) struct Stack {
     inner: Mutex<Inner>,
     wake: Arc<Notify>,
     active: AtomicUsize,
@@ -212,18 +215,18 @@ impl Wake for NotifyWake {
 }
 
 /// The two halves gotatun talks to, and the handle the application side uses.
-pub(super) struct Wired {
-    pub(super) stack: Arc<Stack>,
-    pub(super) send: StackSend,
-    pub(super) recv: StackRecv,
-    pub(super) driver: JoinHandle<()>,
+pub(crate) struct Wired {
+    pub(crate) stack: Arc<Stack>,
+    pub(crate) send: StackSend,
+    pub(crate) recv: StackRecv,
+    pub(crate) driver: JoinHandle<()>,
 }
 
-pub(super) struct StackSend {
+pub(crate) struct StackSend {
     tx: mpsc::Sender<Packet>,
 }
 
-pub(super) struct StackRecv {
+pub(crate) struct StackRecv {
     rx: mpsc::Receiver<Packet>,
     mtu: MtuWatcher,
 }
@@ -258,7 +261,7 @@ impl IpRecv for StackRecv {
 }
 
 impl Stack {
-    pub(super) fn start(config: &StackConfig) -> Wired {
+    pub(crate) fn start(config: &StackConfig) -> Wired {
         let (to_wg, from_stack) = mpsc::channel(OUTBOUND_QUEUE);
         let (to_stack, from_wg) = mpsc::channel(OUTBOUND_QUEUE);
         let tcp = TcpStack::new(concord_netstack::StackConfig {
@@ -298,7 +301,7 @@ impl Stack {
         }
     }
 
-    pub(super) fn active(&self) -> usize {
+    pub(crate) fn active(&self) -> usize {
         self.active.load(Ordering::Relaxed)
     }
 
@@ -306,7 +309,7 @@ impl Stack {
         self.wake.notify_one();
     }
 
-    pub(super) fn connect_tcp(
+    pub(crate) fn connect_tcp(
         self: &Arc<Self>,
         remote: SocketAddr,
         congestion: Congestion,
@@ -327,7 +330,7 @@ impl Stack {
         })
     }
 
-    pub(super) fn bind_udp(self: &Arc<Self>) -> io::Result<UdpPort> {
+    pub(crate) fn bind_udp(self: &Arc<Self>) -> io::Result<UdpPort> {
         let mut inner = lock(&self.inner);
         let mut port = inner.port();
         while inner.udp.contains_key(&port) {
@@ -395,13 +398,13 @@ async fn drive(stack: Arc<Stack>, out: mpsc::Sender<Packet>, mut from_wg: mpsc::
     }
 }
 
-pub(super) struct TcpConn {
+pub(crate) struct TcpConn {
     stream: NetStream,
     active: Active,
 }
 
 /// Keeps the stack's count of live connections.
-pub(super) struct Active(Arc<Stack>);
+pub(crate) struct Active(Arc<Stack>);
 
 impl Drop for Active {
     fn drop(&mut self) {
@@ -410,12 +413,12 @@ impl Drop for Active {
 }
 
 impl TcpConn {
-    pub(super) fn into_split(self) -> (NetReadHalf, NetWriteHalf, Active) {
+    pub(crate) fn into_split(self) -> (NetReadHalf, NetWriteHalf, Active) {
         let (read, write) = self.stream.into_split();
         (read, write, self.active)
     }
 
-    pub(super) fn poll_established(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    pub(crate) fn poll_established(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.stream.poll_established(cx)
     }
 }
@@ -455,13 +458,25 @@ impl Stream for TcpConn {
             raw_socket, tcp, peer_addr, needs_handshake, into_tcp);
 }
 
-pub(super) struct UdpPort {
+pub(crate) struct UdpPort {
     stack: Arc<Stack>,
     port: u16,
 }
 
 impl UdpPort {
-    pub(super) fn poll_send_to(
+    pub(crate) fn close(&self) {
+        let mut inner = lock(&self.stack.inner);
+        if let Some(mut slot) = inner.udp.remove(&self.port)
+            && let Some(waker) = slot.waker.take()
+        {
+            waker.wake();
+        }
+        for waker in inner.send_wakers.drain(..) {
+            waker.wake();
+        }
+    }
+
+    pub(crate) fn poll_send_to(
         &self,
         cx: &mut Context<'_>,
         data: &[u8],
@@ -497,7 +512,7 @@ impl UdpPort {
         Poll::Ready(result)
     }
 
-    pub(super) fn poll_recv_from(
+    pub(crate) fn poll_recv_from(
         &self,
         cx: &mut Context<'_>,
         buf: &mut [u8],

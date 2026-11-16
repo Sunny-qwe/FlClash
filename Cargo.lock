@@ -480,13 +480,19 @@ checksum = "d86b93f97252c47b41663388e6d155714a9d0c398b99f1005cbc5f978b29f445"
 name = "bench"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "clap",
  "concord-ipc",
+ "h3",
+ "h3-quinn",
  "hex",
  "hmac 0.12.1",
+ "http",
  "libc",
+ "quinn",
  "rand 0.9.5",
  "rcgen",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -1409,12 +1415,14 @@ dependencies = [
  "shadowsocks",
  "tempfile",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tokio-rustls",
  "tokio-util",
  "tracing",
  "uuid",
  "x25519-dalek",
+ "x509-parser",
 ]
 
 [[package]]
@@ -2579,8 +2587,6 @@ dependencies = [
 [[package]]
 name = "h3"
 version = "0.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10872b55cfb02a821b69dc7cf8dc6a71d6af25eb9a79662bec4a9d016056b3be"
 dependencies = [
  "bytes",
  "fastrand",

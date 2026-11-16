@@ -493,6 +493,29 @@ pub struct AmneziaWgOpts {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MasqueOpts {
+    pub server: String,
+    pub port: u16,
+    pub private_key: String,
+    pub public_key: String,
+    pub ip: String,
+    pub ipv6: String,
+    pub uri: String,
+    pub sni: String,
+    pub mtu: u32,
+    pub handshake_timeout: u64,
+    pub skip_cert_verify: bool,
+    pub network: String,
+    pub congestion_controller: String,
+    pub cwnd: u32,
+    pub bbr_profile: String,
+    pub ip_stack_mode: String,
+    pub ip_stack_congestion_controller: String,
+    pub remote_dns_resolve: bool,
+    pub dns: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WireGuardOpts {
     pub ip: String,
     pub ipv6: String,
@@ -631,6 +654,7 @@ pub enum ProxyKind {
     GostRelay(Box<GostRelayOpts>),
     Http(HttpProxyOpts),
     WireGuard(Box<WireGuardOpts>),
+    Masque(Box<MasqueOpts>),
     Hysteria(Box<HysteriaOpts>),
     Ssr(SsrOpts),
     Snell(SnellOpts),
@@ -657,6 +681,7 @@ impl ProxyKind {
             ProxyKind::GostRelay(_) => "gost-relay",
             ProxyKind::Http(_) => "http",
             ProxyKind::WireGuard(_) => "wireguard",
+            ProxyKind::Masque(_) => "masque",
             ProxyKind::Hysteria(_) => "hysteria",
             ProxyKind::Ssr(_) => "ssr",
             ProxyKind::Snell(_) => "snell",
@@ -673,6 +698,8 @@ impl ProxyKind {
             | ProxyKind::Dns(_)
             | ProxyKind::Rematch(_)
             | ProxyKind::WireGuard(_) => None,
+            ProxyKind::Masque(o) => Some((&o.server, o.port)),
+
             ProxyKind::Ss(o) => Some((&o.server, o.port)),
             ProxyKind::Vmess(o) => Some((&o.server, o.port)),
             ProxyKind::Vless(o) => Some((&o.server, o.port)),

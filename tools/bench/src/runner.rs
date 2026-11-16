@@ -53,12 +53,41 @@ struct Far {
     singbox: Option<Child>,
     xray: Option<Child>,
     gost: Vec<(String, Child)>,
+    masque: Option<Child>,
     cases: Vec<Case>,
     /// Cases whose listener the server refused, with its reason.
     refused: Vec<(String, String)>,
 }
 
 impl Rig {
+    fn start_masque_peer(&self, built: &[Case]) -> Result<Option<Child>, String> {
+        let child = if let Some(case) = built.iter().find(|case| case.name() == "masque-l4") {
+            let proxy = case.proxy.as_ref().ok_or("MASQUE case has no proxy")?;
+            let host = proxy["server"].as_str().ok_or("MASQUE server is missing")?;
+            let port = proxy["port"].as_u64().ok_or("MASQUE port is missing")?;
+            let placement = self.placement(Role::Server);
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let log = std::fs::File::create(self.dir.join("logs/masque.log"))
+                .map_err(|e| e.to_string())?;
+            let mut command = isolate::command(&exe, &placement);
+            let ip: IpAddr = host.parse().map_err(|e| format!("MASQUE server IP: {e}"))?;
+            let port = u16::try_from(port).map_err(|e| e.to_string())?;
+            let address = std::net::SocketAddr::new(ip, port);
+            command
+                .args(["masque-server", "--listen", &address.to_string()])
+                .stdin(Stdio::null())
+                .stdout(log.try_clone().map_err(|e| e.to_string())?)
+                .stderr(log);
+            Some(
+                isolate::spawn(&mut command, &placement)
+                    .map_err(|e| format!("spawn MASQUE peer: {e}"))?,
+            )
+        } else {
+            None
+        };
+        Ok(child)
+    }
+
     fn placement(&self, role: Role) -> Placement {
         Placement {
             cpus: self
@@ -176,6 +205,7 @@ impl Rig {
             None
         };
         let gost = crate::gost::start(&built, &self.dir, &self.placement(Role::Server))?;
+        let masque = self.start_masque_peer(&built)?;
         tokio::time::sleep(Duration::from_millis(800)).await;
         let log = std::fs::read_to_string(self.dir.join("logs/server.log")).unwrap_or_default();
         let refused = built
@@ -200,6 +230,7 @@ impl Rig {
             singbox,
             xray,
             gost,
+            masque,
             cases: built,
             refused,
         })
@@ -383,6 +414,7 @@ impl Rig {
         drop(far.singbox.take());
         drop(far.xray.take());
         drop(std::mem::take(&mut far.gost));
+        drop(far.masque.take());
         drop(far.origin);
         Ok(())
     }
@@ -409,6 +441,8 @@ impl Rig {
                     .iter()
                     .find(|(name, _)| name == case.name())
                     .and_then(|(_, child)| child.id())
+            } else if case.name() == "masque-l4" {
+                far.masque.as_ref().and_then(Child::id)
             } else if case.singbox_listener.is_some() {
                 far.singbox.as_ref().and_then(Child::id)
             } else if case.listener.is_some() {
@@ -703,6 +737,13 @@ fn check_far(far: &mut Far) -> Result<(), String> {
     {
         return Err(format!(
             "the Xray server exited: {status}; see logs/xray.log"
+        ));
+    }
+    if let Some(server) = far.masque.as_mut()
+        && let Ok(Some(status)) = server.try_wait()
+    {
+        return Err(format!(
+            "the MASQUE peer exited: {status}; see logs/masque.log"
         ));
     }
     if let Some(server) = far.singbox.as_mut()

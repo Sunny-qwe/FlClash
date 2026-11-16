@@ -190,7 +190,8 @@ impl QuicLink {
     async fn connect_to(&self, cx: &DialCx<'_>, remote: SocketAddr) -> io::Result<QuicConn> {
         let remote = self.first_port(remote);
         let raw = self.open_socket(cx, remote).await?;
-        self.handshake(cx, raw, remote).await
+        self.handshake(cx, raw, remote, EndpointConfig::default())
+            .await
     }
 
     /// Dials the server's first address and completes the QUIC handshake, as mihomo's
@@ -217,6 +218,17 @@ impl QuicLink {
         .await
     }
 
+    pub(crate) async fn connect_endpoint(
+        &self,
+        cx: &DialCx<'_>,
+        endpoint: EndpointConfig,
+    ) -> io::Result<QuicConn> {
+        let proxy_cx = DialCx::new(cx.env, Initiator::Proxy, cx.deadline);
+        let remote = resolve_server(&proxy_cx, &self.server, self.egress.version()).await?;
+        let socket = self.open_socket(cx, remote).await?;
+        self.handshake(cx, socket, remote, endpoint).await
+    }
+
     /// Like `connect`, over a socket that already reaches `remote`.
     pub(crate) async fn connect_on(
         &self,
@@ -225,7 +237,8 @@ impl QuicLink {
         remote: SocketAddr,
     ) -> io::Result<QuicConn> {
         let raw = TokioRuntime.wrap_udp_socket(socket)?;
-        self.handshake(cx, raw, remote).await
+        self.handshake(cx, raw, remote, EndpointConfig::default())
+            .await
     }
 
     async fn handshake(
@@ -233,6 +246,7 @@ impl QuicLink {
         cx: &DialCx<'_>,
         raw: Arc<dyn AsyncUdpSocket>,
         remote: SocketAddr,
+        endpoint_config: EndpointConfig,
     ) -> io::Result<QuicConn> {
         let socket: Arc<dyn AsyncUdpSocket> = match (&self.obfs, &self.hop) {
             #[cfg(windows)]
@@ -246,7 +260,7 @@ impl QuicLink {
             ),
         };
         let endpoint = Endpoint::new_with_abstract_socket(
-            EndpointConfig::default(),
+            endpoint_config,
             None,
             socket,
             Arc::new(TokioRuntime),

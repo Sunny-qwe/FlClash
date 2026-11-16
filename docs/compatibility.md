@@ -99,7 +99,7 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
 ## Not Supported
 
 - Outbound types, networks, TLS options and Shadowsocks plugins outside Concord's scope (among them tailscale,
-  easytier, zerotier, openvpn, masque, sudoku, kcp, restls and kcptun): the node is set aside with a warning,
+  easytier, zerotier, openvpn, sudoku, kcp, restls and kcptun): the node is set aside with a warning,
   also when the TLS option is given in xhttp `download-settings`. The full lists are the `T2_*` constants in
   `crates/config/src/proxy/parse.rs`.
 - A provider's `override.override-expr`: the provider gets no proxies and a warning, because its nodes must not run
@@ -122,6 +122,19 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
 
 ## Partial Support
 
+- **MASQUE:** Cloudflare WARP CONNECT-IP over H3 and H2 capsules, and TCP-only `h3-l4proxy`, with
+  ECDSA client authentication and endpoint SPKI pinning. H3 IP advertises the 10 MiB header limit and both
+  standard and legacy datagram settings; L4 advertises only the header limit. Grease and disabled extension
+  settings are omitted. IP requests wait for peer SETTINGS and require both HTTP and QUIC datagram support.
+  A peer advertising only the legacy datagram setting is accepted; mihomo requires the standard setting.
+  Local loopback tests cover both IP families, TCP half-close, UDP, remote DNS, reconnect and rejection;
+  a live WARP enrollment is not part of those tests. `remote-dns-resolve` currently accepts literal UDP/TCP
+  nameservers (L4 requires `tcp://`); encrypted or hostname nameservers are rejected when building the node.
+  The native IP stack implements Cubic/Reno; `bbr`/`bbr3` select Cubic with a warning, and stack mode names use
+  the same native stack. The IP stack keeps the configured MTU; each H3 packet is checked against the current
+  QUIC datagram capacity and oversized packets are dropped without retiring the tunnel or returning PMTU ICMP.
+  H2 drops received capsules larger than the configured MTU. The `masque-l4` benchmark uses a local H3
+  CONNECT peer and covers TCP.
 - **mieru:** both transports work against mihomo's mieru listener; the UDP transport with a `dialer-proxy` is
   rejected when the node is built, and padding statistics are approximated.
 - **Hysteria2 `realm-opts`:** works against mihomo's `hysteria2-realm` listener, including through two NATs; it speaks

@@ -2,6 +2,7 @@ mod gost_relay;
 use self::gost_relay::gost_relay_opts;
 mod ss;
 use self::ss::parse_ss;
+mod masque;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -28,6 +29,7 @@ pub const T0_PROXY_TYPES: &[&str] = &[
 ];
 pub const T1_PROXY_TYPES: &[&str] = &[
     "wireguard",
+    "masque",
     "hysteria",
     "ssr",
     "snell",
@@ -43,7 +45,6 @@ pub const T2_PROXY_TYPES: &[&str] = &[
     "easytier",
     "zerotier",
     "openvpn",
-    "masque",
     "sudoku",
     "trusttunnel",
 ];
@@ -184,6 +185,7 @@ fn parse_typed(
         "gost-relay" => ProxyKind::GostRelay(Box::new(gost_relay_opts(f)?)),
         "http" => ProxyKind::Http(parse_http(f)?),
         "wireguard" => ProxyKind::WireGuard(Box::new(parse_wireguard(f)?)),
+        "masque" => ProxyKind::Masque(Box::new(masque::parse(f)?)),
         "hysteria" => ProxyKind::Hysteria(Box::new(parse_hysteria(f, caps)?)),
         "ssr" => ProxyKind::Ssr(parse_ssr(f)?),
         "snell" => ProxyKind::Snell(parse_snell(f)?),
@@ -1353,7 +1355,6 @@ mod tests {
             "easytier",
             "zerotier",
             "openvpn",
-            "masque",
             "sudoku",
             "trusttunnel",
         ] {
@@ -1633,6 +1634,32 @@ mod tests {
             let got = quarantined(node);
             assert!(got.contains(reason), "{got}");
         }
+    }
+    #[test]
+    fn masque_options_preserve_the_warp_modes_and_reject_negative_timeouts() {
+        let base = json!({"name":"warp","type":"masque","server":"peer.test","port":443,
+            "private-key":"sec1","public-key":"spki","ip":"10.0.0.2","ipv6":"fd00::2",
+            "uri":"https://cloudflareaccess.com/","sni":"warp.test","mtu":1280,
+            "handshake-timeout":7,"skip-cert-verify":true,"remote-dns-resolve":true,
+            "dns":["tcp://10.0.0.1"],"ip-stack":{"mode":"mips","congestion-controller":"reno"}});
+        for mode in ["", "h2", "h3-l4proxy"] {
+            let mut raw = base.clone();
+            raw["network"] = json!(mode);
+            let ProxyKind::Masque(opts) = def(raw).kind else {
+                panic!("MASQUE was not parsed");
+            };
+            assert_eq!(opts.network, mode);
+            assert_eq!(opts.handshake_timeout, 7);
+            assert_eq!(opts.ip_stack_congestion_controller, "reno");
+            assert_eq!(opts.dns, ["tcp://10.0.0.1"]);
+            assert!(opts.skip_cert_verify);
+        }
+        let mut raw = base;
+        raw["handshake-timeout"] = json!(-1);
+        assert_eq!(
+            parse(raw).unwrap_err().to_string(),
+            "masque handshake timeout must be non-negative"
+        );
     }
 }
 

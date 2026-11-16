@@ -33,15 +33,15 @@ impl PeerConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum DnsTransport {
+pub(crate) enum DnsTransport {
     Udp,
     Tcp,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct DnsServer {
-    pub(super) addr: SocketAddr,
-    pub(super) transport: DnsTransport,
+pub(crate) struct DnsServer {
+    pub(crate) addr: SocketAddr,
+    pub(crate) transport: DnsTransport,
 }
 
 pub(super) struct WgConfig {
@@ -127,7 +127,7 @@ fn peer(index: usize, raw: &WgPeer, addrs: &[IpNetwork]) -> Result<PeerConfig, B
     })
 }
 
-fn dns_server(text: &str) -> Option<DnsServer> {
+pub(crate) fn dns_server(text: &str) -> Option<DnsServer> {
     let (addr, tcp) = wireguard_dns(text)?;
     let transport = if tcp {
         DnsTransport::Tcp

@@ -3,7 +3,7 @@
 mod gost_plugin;
 mod gun;
 mod h2_transport;
-mod h2io;
+pub mod h2io;
 mod http1;
 mod http_obfs;
 mod outgoing;

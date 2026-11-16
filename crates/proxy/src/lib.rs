@@ -15,6 +15,7 @@ mod hysteria;
 mod hysteria2;
 mod lazy;
 mod link;
+mod masque;
 mod mieru;
 mod node;
 mod quic;

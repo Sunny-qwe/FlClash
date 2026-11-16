@@ -131,6 +131,11 @@ pub const ALL: &[Spec] = &[
     ),
     spec("tuic", true, "tuic v5 over QUIC"),
     spec(
+        "masque-l4",
+        false,
+        "MASQUE H3 L4 proxy over a local QUIC peer",
+    ),
+    spec(
         "snell",
         false,
         "snell v4; mihomo's listener stalls some flows",
@@ -235,6 +240,21 @@ pub fn build(spec: Spec, host: &str, port: u16, decoy: u16, certs: &Path) -> Cas
             xray_listener: None,
             proxy: Some(
                 json!({"name": spec.name, "type": "rematch", "target-rematch-name": "bench", "target-sub-rule": "bench-rematch"}),
+            ),
+        };
+    }
+    if spec.name == "masque-l4" {
+        // Public test keys; the local benchmark peer does not request client authentication.
+        return Case {
+            spec,
+            listener: None,
+            gost: None,
+            singbox_listener: None,
+            xray_listener: None,
+            proxy: Some(
+                json!({"name":spec.name,"type":"masque","server":host,"port":port,
+                "network":"h3-l4proxy", "private-key":"MHcCAQEEIIv8E335vR4FW1LFLLzFZYMueRGUm5fHUPlx0KCzPu23oAoGCCqGSM49AwEHoUQDQgAEd3X4sHYlzsLE8QDt31G5xCXnaY4+1L7dHARLSuUbcuFTRwyFFmwAnH5A2jwjs1A/HHd1yP28nuFTMXWKdgQh2A==",
+                "public-key":"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEd3X4sHYlzsLE8QDt31G5xCXnaY4+1L7dHARLSuUbcuFTRwyFFmwAnH5A2jwjs1A/HHd1yP28nuFTMXWKdgQh2A==", "skip-cert-verify":true, "sni":"localhost"}),
             ),
         };
     }
