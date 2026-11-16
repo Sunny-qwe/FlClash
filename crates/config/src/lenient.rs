@@ -99,6 +99,7 @@ enum Lookup<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ignored {
+    pub code: &'static str,
     pub key: String,
     pub why: String,
 }
@@ -266,7 +267,7 @@ impl<'a> Fields<'a> {
             return Ok(fallback);
         };
         Ok(T::try_from(number).unwrap_or_else(|_| {
-            self.note(key, format!("{number} is out of range"));
+            self.note("out_of_range", key, format!("{number} is out of range"));
             fallback
         }))
     }
@@ -425,12 +426,13 @@ impl<'a> Fields<'a> {
     /// Notes a key this core reads past when it asks for something, for the load report.
     pub fn ignore(&mut self, key: &str, why: &str) {
         if self.lookup(key).is_some_and(crate::raw::asks_for_something) {
-            self.note(key, why.to_string());
+            self.note("not_applied", key, why.to_string());
         }
     }
 
-    fn note(&self, key: &str, why: String) {
+    fn note(&self, code: &'static str, key: &str, why: String) {
         self.ignored.borrow_mut().push(Ignored {
+            code,
             key: self.name(key),
             why,
         });

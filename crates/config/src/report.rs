@@ -25,9 +25,9 @@ pub struct LoadReport {
 }
 
 impl LoadReport {
-    pub fn warn_ignored(&mut self, code: &'static str, prefix: &str, notes: &[Ignored]) {
+    pub fn warn_ignored(&mut self, prefix: &str, notes: &[Ignored]) {
         for note in notes {
-            self.warn(code, format!("{prefix}{}", note.key), note.to_string());
+            self.warn(note.code, format!("{prefix}{}", note.key), note.to_string());
         }
     }
 

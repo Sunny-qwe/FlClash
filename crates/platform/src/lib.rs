@@ -44,7 +44,7 @@ pub use identity::{SocketIdentity, with_same_socket};
 pub use limits::{FdPressure, fd_limit, open_fd_count, raise_fd_limit};
 pub use mem::{release_free_memory, resident_memory};
 pub use native::NativePlatform;
-pub use netinfo::{interface_by_name, parse_resolv_conf};
+pub use netinfo::{interface_addrs, interface_by_name, parse_resolv_conf};
 #[cfg(unix)]
 pub use sigpipe::ignore_sigpipe;
 #[cfg(any(target_os = "linux", target_os = "android"))]

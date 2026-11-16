@@ -158,6 +158,9 @@ fn section_user_keys(
 
 fn unsupported_message(section: &str, key: &str) -> &'static str {
     match key {
+        "global-client-fingerprint" if section.is_empty() => {
+            "key was removed and is ignored; set client-fingerprint on each node instead"
+        }
         _ if section != "tun" || !keys::TUN_SCOPE.contains(&key) => {
             "key is not supported by this core and is ignored"
         }
@@ -306,7 +309,7 @@ impl RawConfig {
                             raw.report.warn(
                                 "unsupported_key",
                                 other,
-                                "key is not supported by this core and is ignored",
+                                unsupported_message("", other),
                             );
                         }
                         raw.extra.insert(key, value);
@@ -615,6 +618,17 @@ mod tests {
         assert!(raw.report.warnings.is_empty());
         let raw = parse_raw_str("external-ui: ui\ntun:\n  dns-mode: fake\n").unwrap();
         assert_eq!(raw.report.warnings.len(), 2);
+    }
+
+    #[test]
+    fn the_removed_global_fingerprint_points_at_the_nodes() {
+        let raw = parse_raw_str("global-client-fingerprint: chrome\n").unwrap();
+        let warning = &raw.report.warnings[0];
+        assert_eq!(warning.code, "unsupported_key");
+        assert_eq!(
+            warning.message,
+            "key was removed and is ignored; set client-fingerprint on each node instead"
+        );
     }
 
     #[test]

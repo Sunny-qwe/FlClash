@@ -37,6 +37,12 @@ widen exposure are never ignored silently, and keys that name a server's identit
 | The process name of connections the core opens itself (provider updates, health checks, DNS through the tunnel) | `mihomo`, in the connections API, the routing log and `PROCESS-NAME` | `concord` |
 | File providers | Reloaded on file-system events | Reloaded by polling the file every 2 s |
 | A provider `path` outside the home directory, or one that passes through a symlink | Read when `SAFE_PATHS` lists the directory; a symlink is followed | Refused: the apply fails, naming the provider and the path |
+| A `hosts` entry that maps a name to itself, such as `a.example: a.example` | Loaded; an address lookup of the name never returns, nor does loading a later entry that points at the name | Loaded; the entry is skipped with a warning and the name is resolved by DNS. A cycle through two or more entries is refused, as in mihomo |
+| A regular expression with .NET-only syntax, such as `\p{IsCJKUnifiedIdeographs}`, in a group `filter`, `DOMAIN-REGEX`, `PROCESS-NAME-REGEX` or `override.proxy-name` | Accepted | Refused when loading |
+| A number too wide for its field in a rule or group, such as `DST-PORT,70000`, `DSCP,300` or `tolerance: -1` | Cut to the field's width without a warning | Refused when loading |
+| The replacement text of `override.proxy-name` | .NET rules: `$1x` is group 1 followed by `x` | Rust `regex` rules: `$1x` names a group called `1x`, so write `${1}x` |
+| The TUN keys that choose what is captured: `route-address-set`, `route-exclude-address-set`, `include-uid-range`, `exclude-uid-range`, `exclude-src-port-range`, `exclude-dst-port-range`, `include-android-user`, `include-package`, `exclude-package`, `include-mac-address` and `exclude-mac-address` | Applied | Ignored with a warning that the TUN captures other traffic than the profile says; an app that embeds Concord picks the apps itself |
+| `iptables` | Installs redirect rules on Linux | Ignored with a warning; Concord does not run as a Linux router |
 | Picking a dead `fallback` member | Stores the pick, then tests the member; a connection during the test drops the pick (`adapter/outboundgroup/fallback.go:105-145`) | Stores the pick, then tests the member; a connection during the test uses another member, and the pick stays until the test decides |
 
 ## Routing
@@ -84,6 +90,10 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
   from its `url` or fails to load, as in mihomo when the home directory has no `BundleMRS.7z`. The key is ignored
   with a warning.
 - The `relay` group type, which mihomo also removed; use `dialer-proxy`.
+- Shadowsocks ciphers that only `sing-shadowsocks2` has: `aes-192-gcm`, `aes-192-ccm`, `chacha8-ietf-poly1305`,
+  `xchacha8-ietf-poly1305`, `rabbit128-poly1305`, `aegis-128l`, `aegis-256`, `aez-384`, `deoxys-ii-256-128`,
+  `lea-{128,192,256}-gcm`, `ascon128`, `ascon128a` and `2022-blake3-aes-{128,256}-ccm`; the node is set aside with a
+  warning.
 - VLESS `encryption`; xhttp over HTTP/3; Hysteria `faketcp`; ShadowQUIC over QUIC v2; Snell version 6, whose node is set
   aside with a warning.
 - sing-mux brutal on the client's own socket, which needs a Linux kernel module. The sing-mux exchange is done, so
@@ -120,7 +130,9 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
   The keys that narrow what the TUN captures by package, Android user, uid range, port range, MAC address or route
   set are ignored, so the TUN captures other traffic than they say; the warning says so. An app that embeds Concord
   picks the apps that go through its TUN itself.
-- **DNS:** a `dhcp://<interface>` upstream runs as `system://` with a warning.
+- **DNS:** a `dhcp://<interface>` upstream runs as `system://` with a warning. A `ts://`, `tailscale://`, `et://` or
+  `easytier://` server is skipped with a warning, as its tailscale or easytier node is set aside; a list, such as one
+  `nameserver-policy` entry, left with no other server answers REFUSED, so those names do not go to another resolver.
 - **Accepted without effect:** `skip-auth-prefixes` and `inbound-tfo` (a non-empty value gets a warning).
 - **Deprecated fingerprint names:** `chrome_psk`, the other `chrome_*` variants and `randomized` are read as `chrome`
   and `random` with a warning.

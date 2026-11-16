@@ -328,7 +328,7 @@ fn resolve_groups(
             .with_line(line));
         }
         let prefix = format!("proxy-groups.{}.", group.name);
-        report.warn_ignored("not_applied", &prefix, &group.ignored);
+        report.warn_ignored(&prefix, &group.ignored);
         names.groups.insert(group.name.clone());
         groups.push(group);
     }
@@ -710,7 +710,7 @@ pub fn load_raw(mut raw: RawConfig, options: &LoadOptions) -> Result<Profile> {
     let sniffer = SnifferConfig::from_map(&raw.sniffer).map_err(|err| err.within("sniffer"))?;
     let (ntp, ntp_notes) = NtpConfig::read(&raw.ntp)?;
     let notes = [general_notes, dns_notes, ntp_notes].concat();
-    report.warn_ignored("out_of_range", "", &notes);
+    report.warn_ignored("", &notes);
     let geo = GeoConfig::from_maps(&general, &raw.geox_url)?;
     let hosts = parse_hosts(&raw.hosts, &mut report)?;
 
@@ -1047,8 +1047,8 @@ rules:
             ),
             ("dns: {fake-ip-range: x}\n", "dns.fake-ip-range: "),
             (
-                "dns: {nameserver-policy: {'+.ts.net': 'ts://node'}}\n",
-                "dns.nameserver-policy[+.ts.net]: DNS NameServer[0] format error: unsupported DNS scheme ts://",
+                "dns: {nameserver-policy: {'+.a.test': 'gopher://node'}}\n",
+                "dns.nameserver-policy[+.a.test]: DNS NameServer[0] format error: unsupport scheme: gopher",
             ),
             ("dns: {enable: x}\n", "'dns.enable' expected type"),
             ("tun: {route-address: [x]}\n", "tun.route-address[0]: "),
@@ -1062,6 +1062,40 @@ rules:
             let message = error(text);
             assert!(message.starts_with(expected), "{text}: {message}");
         }
+    }
+
+    #[test]
+    fn a_tailscale_dns_server_is_skipped_and_a_list_of_only_those_answers_refused() {
+        let profile = load_text(
+            "dns:\n  nameserver: ['ts://node', 8.8.8.8]\n  nameserver-policy: {'+.ts.net': 'tailscale://node'}\n",
+        )
+        .unwrap();
+        let texts: Vec<&str> = profile
+            .dns
+            .nameserver
+            .iter()
+            .map(|ns| ns.text.as_str())
+            .collect();
+        assert_eq!(texts, ["8.8.8.8"]);
+        let policy = &profile.dns.nameserver_policy[0].servers;
+        assert_eq!(policy.len(), 1);
+        assert_eq!(
+            policy[0].scheme,
+            crate::dns::UpstreamScheme::Rcode(crate::dns::Rcode::Refused)
+        );
+        let warned: Vec<(&str, &str)> = profile
+            .report
+            .warnings
+            .iter()
+            .map(|w| (w.code, w.path.as_str()))
+            .collect();
+        assert_eq!(
+            warned,
+            [
+                ("not_applied", "dns.nameserver[0]"),
+                ("not_applied", "dns.nameserver-policy[+.ts.net][0]"),
+            ]
+        );
     }
 
     #[test]
