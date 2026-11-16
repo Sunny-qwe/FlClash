@@ -17,7 +17,7 @@ const NLM_F_REQUEST_DUMP: u16 = 0x1 | 0x300;
 const HEADER: usize = 16;
 const DIAG_MSG: usize = 72;
 
-fn request(family: u8, protocol: u8) -> Vec<u8> {
+fn request(family: u8, protocol: u8, port: u16) -> Vec<u8> {
     let mut message = Vec::with_capacity(HEADER + 56);
     message.extend_from_slice(&((HEADER + 56) as u32).to_ne_bytes());
     message.extend_from_slice(&SOCK_DIAG_BY_FAMILY.to_ne_bytes());
@@ -25,7 +25,8 @@ fn request(family: u8, protocol: u8) -> Vec<u8> {
     message.extend_from_slice(&[0; 8]);
     message.extend_from_slice(&[family, protocol, 0, 0]);
     message.extend_from_slice(&u32::MAX.to_ne_bytes());
-    message.extend_from_slice(&[0; 40]);
+    message.extend_from_slice(&port.to_be_bytes());
+    message.extend_from_slice(&[0; 38]);
     message.extend_from_slice(&[0xff; 8]);
     message
 }
@@ -52,7 +53,7 @@ fn parse_diag(data: &[u8]) -> Option<Diag> {
     })
 }
 
-fn dump(protocol: u8, family: u8) -> Option<Vec<Diag>> {
+fn dump(protocol: u8, family: u8, port: u16) -> Option<Vec<Diag>> {
     let socket = Socket::new(
         Domain::from(libc::AF_NETLINK),
         Type::RAW,
@@ -60,7 +61,7 @@ fn dump(protocol: u8, family: u8) -> Option<Vec<Diag>> {
     )
     .ok()?;
     socket.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
-    (&socket).write_all(&request(family, protocol)).ok()?;
+    (&socket).write_all(&request(family, protocol, port)).ok()?;
 
     let mut found = Vec::new();
     let mut buf = vec![0u8; 64 * 1024];
@@ -98,8 +99,10 @@ fn sock_diag(network: Network, src: SocketAddr) -> Option<Diag> {
     let wanted = src.ip();
     let mut wildcard = None;
     for &family in families {
-        for diag in dump(protocol, family).unwrap_or_default() {
-            if diag.local.port() != src.port() {
+        for diag in dump(protocol, family, src.port()).unwrap_or_default() {
+            // A socket no process holds any more (TIME_WAIT, or closed and still finishing
+            // its handshake) reports inode 0 and may share its port with a live connection.
+            if diag.local.port() != src.port() || diag.inode == 0 {
                 continue;
             }
             let ip = diag.local.ip();
@@ -175,10 +178,11 @@ mod tests {
 
     #[test]
     fn the_request_is_a_dump_of_one_family() {
-        let message = request(2, 6);
+        let message = request(2, 6, 8080);
         assert_eq!(message.len(), 72);
         assert_eq!(u32::from_ne_bytes(message[..4].try_into().unwrap()), 72);
         assert_eq!(&message[16..20], &[2, 6, 0, 0]);
+        assert_eq!(&message[24..26], &8080u16.to_be_bytes());
     }
 
     #[test]
@@ -211,6 +215,32 @@ mod tests {
             info.uid,
             Some(std::fs::metadata("/proc/self").unwrap().uid())
         );
+    }
+
+    #[test]
+    fn a_closed_socket_on_the_same_port_is_not_the_owner() {
+        let first = TcpListener::bind("127.0.0.1:0").unwrap();
+        let second = TcpListener::bind("127.0.0.1:0").unwrap();
+        let reusable = || {
+            let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+            socket.set_reuse_address(true).unwrap();
+            socket
+        };
+        let closed = reusable();
+        let any: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        closed.bind(&any.into()).unwrap();
+        closed.connect(&first.local_addr().unwrap().into()).unwrap();
+        let src = closed.local_addr().unwrap().as_socket().unwrap();
+        let _peer = first.accept().unwrap();
+        drop(closed);
+
+        let live = reusable();
+        live.bind(&src.into()).unwrap();
+        live.connect(&second.local_addr().unwrap().into()).unwrap();
+
+        let info = find(Network::Tcp, src).unwrap();
+        let exe = std::env::current_exe().unwrap();
+        assert_eq!(Path::new(&info.path).file_name(), exe.file_name());
     }
 
     #[test]
