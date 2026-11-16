@@ -42,6 +42,14 @@ fn cidrs(f: &mut Fields<'_>, key: &str) -> Result<Vec<IpCidr>> {
         .collect()
 }
 
+/// mihomo still appends the old per-family keys to the merged lists (`listener/sing_tun/server.go`).
+fn routes(f: &mut Fields<'_>, key: &str, inet4: &str, inet6: &str) -> Result<Vec<IpCidr>> {
+    let mut out = cidrs(f, key)?;
+    out.extend(cidrs(f, inet4)?);
+    out.extend(cidrs(f, inet6)?);
+    Ok(out)
+}
+
 fn narrow<T: TryFrom<i128>>(values: Vec<i128>) -> Vec<T> {
     values
         .into_iter()
@@ -66,8 +74,18 @@ impl TunConfig {
             auto_route: f.boolean("auto-route")?,
             auto_detect_interface: f.boolean("auto-detect-interface")?,
             dns_hijack: f.strings("dns-hijack")?,
-            route_address: cidrs(&mut f, "route-address")?,
-            route_exclude_address: cidrs(&mut f, "route-exclude-address")?,
+            route_address: routes(
+                &mut f,
+                "route-address",
+                "inet4-route-address",
+                "inet6-route-address",
+            )?,
+            route_exclude_address: routes(
+                &mut f,
+                "route-exclude-address",
+                "inet4-route-exclude-address",
+                "inet6-route-exclude-address",
+            )?,
             strict_route: f.boolean("strict-route")?,
             mtu: f.u32("mtu")?,
             congestion_controller: f.string("congestion-controller")?,
@@ -115,5 +133,24 @@ mod tests {
         assert_eq!(tun.mtu, 1500);
         map.insert("route-address".into(), json!(["10.0.0.0"]));
         assert!(TunConfig::from_map(&map).is_err());
+    }
+
+    #[test]
+    fn the_old_per_family_route_keys_add_to_the_merged_lists() {
+        let mut map = tun_defaults();
+        map.insert("route-address".into(), json!(["10.0.0.0/8"]));
+        map.insert("inet4-route-address".into(), json!(["0.0.0.0/1"]));
+        map.insert("inet6-route-address".into(), json!(["::/1"]));
+        map.insert(
+            "inet4-route-exclude-address".into(),
+            json!(["192.168.0.0/16"]),
+        );
+        let tun = TunConfig::from_map(&map).unwrap();
+        let text = |list: &[IpCidr]| list.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert_eq!(
+            text(&tun.route_address),
+            ["10.0.0.0/8", "0.0.0.0/1", "::/1"]
+        );
+        assert_eq!(text(&tun.route_exclude_address), ["192.168.0.0/16"]);
     }
 }

@@ -123,7 +123,7 @@ impl General {
         general.tcp_concurrent = f.boolean("tcp-concurrent")?;
         general.unified_delay = f.boolean("unified-delay")?;
         general.interface_name = f.string("interface-name")?;
-        general.routing_mark = f.u32("routing-mark")?;
+        general.routing_mark = f.mark("routing-mark")?;
         general.keep_alive_idle = f.u32("keep-alive-idle")?;
         general.keep_alive_interval = f.u32("keep-alive-interval")?;
         general.disable_keep_alive = f.boolean("disable-keep-alive")?;

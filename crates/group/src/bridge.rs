@@ -33,7 +33,6 @@ impl NodeFactory for ProxyFactory {
 
     fn build_def(&self, def: &ProxyDef) -> Result<Arc<dyn Outbound>, BuildFailure> {
         build_outbound(def, &self.ctx).map_err(|err| BuildFailure {
-            unsupported: err.is_unsupported(),
             message: err.to_string(),
         })
     }
@@ -45,12 +44,11 @@ impl NodeFactory for ProxyFactory {
             }
             ProxyParse::Ok(def) => match build_outbound(&def, &self.ctx) {
                 Ok(outbound) => Ok(Built::Node(outbound)),
-                Err(err) if err.is_unsupported() => Ok(Built::Quarantined {
+                Err(err) => Ok(Built::Quarantined {
                     name: def.name.clone(),
                     kind: def.kind.type_name().to_string(),
                     reason: err.to_string(),
                 }),
-                Err(err) => Err(err.to_string()),
             },
         }
     }

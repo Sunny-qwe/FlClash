@@ -99,6 +99,7 @@ pub struct Fields<'a> {
     path: String,
     missing: Vec<String>,
     replace_underscore: bool,
+    ignored: Vec<String>,
 }
 
 impl<'a> Fields<'a> {
@@ -125,6 +126,7 @@ impl<'a> Fields<'a> {
             path: path.to_string(),
             missing: Vec::new(),
             replace_underscore,
+            ignored: Vec::new(),
         }
     }
 
@@ -141,6 +143,10 @@ impl<'a> Fields<'a> {
     }
 
     fn lookup(&self, key: &str) -> Option<&'a Value> {
+        self.lookup_present(key).filter(|value| !value.is_null())
+    }
+
+    fn lookup_present(&self, key: &str) -> Option<&'a Value> {
         let lowered;
         let key = if key.bytes().any(|b| b.is_ascii_uppercase()) {
             lowered = key.to_ascii_lowercase();
@@ -148,11 +154,10 @@ impl<'a> Fields<'a> {
         } else {
             key
         };
-        let found = match &self.lookup {
+        match &self.lookup {
             Lookup::Direct(map) => map.get(key),
             Lookup::Folded(map) => map.get(key).copied(),
-        };
-        found.filter(|value| !value.is_null())
+        }
     }
 
     pub fn has(&self, key: &str) -> bool {
@@ -171,8 +176,9 @@ impl<'a> Fields<'a> {
         ))
     }
 
+    /// A key written with no value is set, as mihomo's decoder reads it; it keeps the zero value.
     pub fn require(&mut self, key: &str) {
-        if self.lookup(key).is_none() {
+        if self.lookup_present(key).is_none() {
             self.missing.push(key.to_string());
         }
     }
@@ -256,6 +262,12 @@ impl<'a> Fields<'a> {
             .integer(key, "int64", i128::from(i64::MIN), i128::from(i64::MAX))?
             .and_then(|n| i64::try_from(n).ok())
             .unwrap_or(0))
+    }
+
+    /// mihomo keeps a mark as an `int` and hands it to `setsockopt` as a C `int`, so its low 32
+    /// bits are the mark.
+    pub fn mark(&mut self, key: &str) -> Result<u32> {
+        Ok(self.i64(key)? as u32)
     }
 
     pub fn i32(&mut self, key: &str) -> Result<i32> {
@@ -380,6 +392,18 @@ impl<'a> Fields<'a> {
             }
         }
         Ok(out)
+    }
+
+    /// Notes a key this core reads past when it asks for something, for the load report.
+    pub fn ignore(&mut self, key: &str, why: &str) {
+        if self.lookup(key).is_some_and(crate::raw::asks_for_something) {
+            self.ignored
+                .push(format!("{} is ignored: {why}", self.name(key)));
+        }
+    }
+
+    pub fn take_ignored(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.ignored)
     }
 
     pub fn finish(self) -> Result<()> {

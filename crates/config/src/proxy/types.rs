@@ -37,7 +37,7 @@ pub struct CommonOpts {
     pub tfo: bool,
     pub mptcp: bool,
     pub interface_name: String,
-    pub routing_mark: i32,
+    pub routing_mark: u32,
     pub ip_version: IpVersionPref,
     pub dialer_proxy: String,
     pub udp: bool,
@@ -637,6 +637,8 @@ pub struct ProxyDef {
     pub common: CommonOpts,
     pub kind: ProxyKind,
     pub smux: Option<SmuxOpts>,
+    /// Keys read past with a reason, reported as warnings.
+    pub ignored: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

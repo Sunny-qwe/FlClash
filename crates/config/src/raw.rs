@@ -124,7 +124,7 @@ fn expect_named_maps(value: Value, what: &str) -> Result<IndexMap<String, Map>> 
 }
 
 /// The app writes every key it knows, so an unsupported key left empty asks for nothing.
-fn asks_for_something(value: &Value) -> bool {
+pub(crate) fn asks_for_something(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::String(text) => !text.is_empty(),

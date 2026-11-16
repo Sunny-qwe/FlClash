@@ -18,8 +18,6 @@ pub enum GroupError {
     DuplicateProvider { group: String },
     #[error("parse proxy provider {provider} error: {message}")]
     Provider { provider: String, message: String },
-    #[error("proxy {name}: {message}")]
-    Proxy { name: String, message: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

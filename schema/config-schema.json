@@ -142,7 +142,11 @@
       "include-uid",
       "exclude-uid",
       "exclude-src-port",
-      "exclude-dst-port"
+      "exclude-dst-port",
+      "inet4-route-address",
+      "inet6-route-address",
+      "inet4-route-exclude-address",
+      "inet6-route-exclude-address"
     ],
     "t2": [
       "dns-mode",
@@ -169,10 +173,6 @@
       "endpoint-independent-nat",
       "icmp-timeout",
       "file-descriptor",
-      "inet4-route-address",
-      "inet6-route-address",
-      "inet4-route-exclude-address",
-      "inet6-route-exclude-address",
       "recvmsgx",
       "sendmsgx",
       "processors-per-channel"

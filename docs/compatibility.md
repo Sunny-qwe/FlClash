@@ -8,10 +8,12 @@ deliberate differences, what is left out, and what is supported only in part.
 | Handling | When |
 |---|---|
 | The profile is rejected, and the built-in empty config runs instead, routing everything direct | The profile is wrong: an unknown or malformed rule, an illegal field, a reference to something that does not exist |
-| The node is set aside with a warning | The node is valid but uses something Concord does not support. A group left empty by this, or whose selected node was set aside, refuses connections instead of falling back to another member; `empty-fallback` applies when given |
+| The node is set aside with a warning | The node uses something Concord does not support, or its options cannot be built into a working node (a certificate that cannot be read, a malformed fingerprint pin, REALITY over `ws`). A group left empty by this, or whose selected node was set aside, refuses connections instead of falling back to another member; `empty-fallback` applies when given |
 | The key is ignored with a warning | It does not change where traffic goes |
 
-Warnings carry a stable `code` and are returned by `config.warnings`. Settings whose loss would change routing or
+A key that a node's type does not have in mihomo, such as `reality-opts` on `hysteria2` or `alpn` on `socks5`, is
+ignored with a warning, as is a `smux` that is not a map. Warnings carry a stable `code` and are returned by
+`config.warnings`. Settings whose loss would change routing or
 widen exposure are never ignored silently, and keys that name a server's identity (`fingerprint`, `certificate`,
 `reality-opts`) are never dropped while the node keeps working.
 
@@ -19,7 +21,7 @@ widen exposure are never ignored silently, and keys that name a server's identit
 
 | Behaviour | mihomo | Concord |
 |---|---|---|
-| A node of an unsupported type | The whole profile fails | The node is set aside with a warning |
+| A node of an unsupported type, or one whose options cannot be built | The whole profile fails, or, for options checked when connecting, the node's connections fail | The node is set aside with a warning |
 | `listeners`, `tunnels`, `external-controller-tls`, `-unix`, `-pipe`, `external-ui` and `external-doh-server` | Opened | Never opened; the host opens listeners through the API |
 | `external-controller` and `secret` | Read from the profile | Read from the profile when Concord runs on its own (`concord run`). An app that embeds Concord sets them itself, and the profile's values are ignored with a warning |
 | Dashboard changes in an app that embeds Concord | mihomo's embedded builds refuse `PUT`/`PATCH /configs` and the geo update | Allowed, except `PUT /configs` and `tun` in `PATCH /configs`, which belong to the app; the app is told of every change so it stays in step |
@@ -62,8 +64,9 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
 ## Not Supported
 
 - Outbound types, networks, TLS options and Shadowsocks plugins outside Concord's scope (among them tailscale,
-  easytier, zerotier, openvpn, masque, sudoku, kcp, restls, jls and kcptun): the node is set aside with a warning.
-  The full lists are the `T2_*` constants in `crates/config/src/proxy/parse.rs`.
+  easytier, zerotier, openvpn, masque, sudoku, kcp, restls, jls and kcptun): the node is set aside with a warning,
+  also when the TLS option is given in xhttp `download-settings`. The full lists are the `T2_*` constants in
+  `crates/config/src/proxy/parse.rs`.
 - A provider's `override.override-expr`: the provider gets no proxies and a warning, because its nodes must not run
   without the expressions.
 - A rule provider's `path-in-bundle`: `BundleMRS.7z` is not read, so a provider whose local file is missing loads

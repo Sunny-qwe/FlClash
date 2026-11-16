@@ -465,7 +465,8 @@ impl DnsConfig {
         found
     }
 
-    pub fn from_map(map: &Map) -> Result<DnsConfig> {
+    /// With `ipv6` off mihomo drops `fake-ip-range6` before reading it (`parseIPV6`).
+    pub fn from_map(map: &Map, ipv6: bool) -> Result<DnsConfig> {
         let mut f = Fields::new(map, "dns", false);
         let enable = f.boolean("enable")?;
         let respect_rules = f.boolean("respect-rules")?;
@@ -537,7 +538,7 @@ impl DnsConfig {
             dns.fake_ip_range = Some(cidr);
         }
         let range6 = f.string("fake-ip-range6")?;
-        if !range6.is_empty() {
+        if ipv6 && !range6.is_empty() {
             let cidr = crate::net::parse_cidr(&range6)?;
             if cidr.is_ipv4() {
                 return Err(ConfigError::new("dns.fake-ip-range6 must be a IPv6 prefix"));
@@ -555,7 +556,10 @@ impl DnsConfig {
                 ));
             }
         }
-        if let Some(mut filter) = f.sub("fallback-filter")? {
+        if let Some(mut filter) = f
+            .sub("fallback-filter")?
+            .filter(|_| !dns.fallback.is_empty())
+        {
             dns.fallback_filter.geoip = filter.boolean("geoip")?;
             dns.fallback_filter.geoip_code = filter.string("geoip-code")?;
             dns.fallback_filter.geosite = filter.strings("geosite")?;
@@ -605,12 +609,31 @@ mod tests {
                 map.insert(key, value);
             }
         }
-        DnsConfig::from_map(&map)
+        DnsConfig::from_map(&map, true)
+    }
+
+    #[test]
+    fn what_mihomo_never_reads_is_not_checked() {
+        let filter = serde_json::json!({"fallback-filter": {"ipcidr": ["bogus"]}});
+        assert!(dns_with(filter.clone()).is_ok());
+        let mut with_fallback = filter;
+        with_fallback["fallback"] = serde_json::json!(["8.8.8.8"]);
+        assert!(dns_with(with_fallback).is_err());
+
+        let mut map = dns_defaults();
+        map.insert("fake-ip-range6".into(), "fc00::/18x".into());
+        assert!(
+            DnsConfig::from_map(&map, false)
+                .unwrap()
+                .fake_ip_range6
+                .is_none()
+        );
+        assert!(DnsConfig::from_map(&map, true).is_err());
     }
 
     #[test]
     fn defaults_parse() {
-        let dns = DnsConfig::from_map(&dns_defaults()).unwrap();
+        let dns = DnsConfig::from_map(&dns_defaults(), true).unwrap();
         assert!(!dns.enable);
         assert_eq!(dns.nameserver.len(), 2);
         assert_eq!(dns.nameserver[0].scheme, UpstreamScheme::Https);

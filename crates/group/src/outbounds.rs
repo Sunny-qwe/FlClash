@@ -387,17 +387,15 @@ impl Outbounds {
                 Ok(outbound) => {
                     table.insert(name.clone(), Entry::Leaf(Leaf::new(outbound, None)));
                 }
-                Err(failure) if failure.unsupported => {
+                Err(failure) => {
+                    let message = format!("{}: {}", def.name, failure.message);
+                    profile
+                        .report
+                        .warn("proxy_quarantined", format!("proxies.{name}"), message);
                     table.insert(
                         name.clone(),
                         Entry::Ghost(ghost(&def.name, def.kind.type_name(), &failure.message)),
                     );
-                }
-                Err(failure) => {
-                    return Err(GroupError::Proxy {
-                        name: def.name,
-                        message: failure.message,
-                    });
                 }
             }
             node_order.push(name);

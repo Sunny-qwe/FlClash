@@ -58,7 +58,7 @@ fn fingerprints(kind: &ProxyKind) -> Vec<(&'static str, &str)> {
 
 /// What the node's options say that the app should show, beyond what makes it unsupported.
 pub fn proxy_warnings(def: &ProxyDef) -> Vec<String> {
-    let mut out = Vec::new();
+    let mut out = def.ignored.clone();
     for (key, value) in fingerprints(&def.kind) {
         if let Some(modern) = deprecated_fingerprint(value) {
             out.push(format!(

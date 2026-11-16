@@ -55,7 +55,7 @@ pub struct OverrideDef {
     pub skip_cert_verify: Option<bool>,
     pub name_cert_verify: Option<String>,
     pub interface_name: Option<String>,
-    pub routing_mark: Option<i32>,
+    pub routing_mark: Option<u32>,
     pub ip_version: Option<String>,
     pub additional_prefix: Option<String>,
     pub additional_suffix: Option<String>,
@@ -143,7 +143,7 @@ fn parse_override(f: &mut Fields<'_>) -> Result<OverrideDef> {
         name_cert_verify: opt_override(&mut o, "name-cert-verify")?,
         interface_name: opt_override(&mut o, "interface-name")?,
         routing_mark: if o.has("routing-mark") {
-            Some(o.i32("routing-mark")?)
+            Some(o.mark("routing-mark")?)
         } else {
             None
         },
@@ -296,8 +296,9 @@ impl ProxyProviderDef {
                 continue;
             }
             if !self.dialer_proxy.is_empty() {
-                mapping.insert(
-                    "dialer-proxy".into(),
+                put(
+                    &mut mapping,
+                    "dialer-proxy",
                     Value::String(self.dialer_proxy.clone()),
                 );
             }
@@ -325,7 +326,7 @@ impl ProxyProviderDef {
         ];
         for (key, value) in flags {
             if let Some(value) = value {
-                mapping.insert(key.into(), Value::Bool(value));
+                put(mapping, key, Value::Bool(value));
             }
         }
         let texts = [
@@ -338,11 +339,11 @@ impl ProxyProviderDef {
         ];
         for (key, value) in texts {
             if let Some(value) = value {
-                mapping.insert(key.into(), Value::String(value.clone()));
+                put(mapping, key, Value::String(value.clone()));
             }
         }
         if let Some(mark) = o.routing_mark {
-            mapping.insert("routing-mark".into(), Value::from(mark));
+            put(mapping, "routing-mark", Value::from(mark));
         }
         let mut name = mapping
             .get("name")
@@ -421,6 +422,13 @@ pub fn parse_rule_provider(name: &str, map: &Map) -> Result<RuleProviderDef> {
         path_in_bundle,
         raw: map.clone(),
     })
+}
+
+/// Node keys are read without case and with `_` for `-`, first spelling first, so a spelling the
+/// node already has would win over the override.
+fn put(mapping: &mut Map, key: &str, value: Value) {
+    mapping.retain(|existing, _| !existing.replace('_', "-").eq_ignore_ascii_case(key));
+    mapping.insert(key.into(), value);
 }
 
 pub fn parse_rule_providers(
@@ -522,6 +530,31 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn an_override_replaces_every_spelling_of_its_key() {
+        let def = parse_proxy_provider(
+            "p",
+            &map(json!({"type": "file", "path": "a", "dialer-proxy": "relay",
+                "override": {"skip-cert-verify": false}})),
+        )
+        .unwrap();
+        let node = map(
+            json!({"name": "a", "type": "trojan", "server": "s", "port": 443, "password": "p",
+            "skip_cert_verify": true, "Dialer_Proxy": "other"}),
+        );
+        let out = def.select_proxies(vec![node]).unwrap();
+        let Ok(crate::ProxyParse::Ok(parsed)) =
+            crate::parse_proxy(&out[0], &crate::Capabilities::full())
+        else {
+            panic!("{out:?}");
+        };
+        assert_eq!(parsed.common.dialer_proxy, "relay");
+        let crate::proxy::ProxyKind::Trojan(trojan) = &parsed.kind else {
+            panic!("{parsed:?}");
+        };
+        assert!(!trojan.tls.skip_cert_verify);
     }
 
     #[test]

@@ -196,6 +196,8 @@ impl ProxyProvider {
             },
         };
         let initial = match &vehicle {
+            // Loading emptied it with a warning: its nodes must not run without the expressions.
+            Vehicle::Inline { .. } if def.override_.expr => Vec::new(),
             Vehicle::Inline { payload } => {
                 items_from_maps(def, shared.factory.as_ref(), &name, payload.clone())
                     .map_err(fail)?

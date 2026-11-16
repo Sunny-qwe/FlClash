@@ -53,9 +53,7 @@ impl Egress {
             interface: Some(common.interface_name.as_str())
                 .filter(|name| !name.is_empty())
                 .map(Arc::from),
-            routing_mark: u32::try_from(common.routing_mark)
-                .ok()
-                .filter(|mark| *mark != 0),
+            routing_mark: Some(common.routing_mark).filter(|mark| *mark != 0),
             tfo: common.tfo,
             mptcp: common.mptcp,
         }

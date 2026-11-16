@@ -566,6 +566,55 @@ async fn a_rejected_config_falls_back_to_direct_and_says_so() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_node_that_cannot_be_built_is_set_aside_and_the_config_runs() {
+    let rig = Rig::new();
+    let uuid = "6a4f3bc1-2c44-4a43-a5a3-3f1a2b0e6a11";
+    let key = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+    let config = format!(
+        "proxies:\n  \
+         - {{name: pin, type: vless, server: 127.0.0.1, port: 1, uuid: {uuid}, tls: true, fingerprint: chrome}}\n  \
+         - {{name: ws-reality, type: vless, server: 127.0.0.1, port: 1, uuid: {uuid}, tls: true, network: ws, \
+         client-fingerprint: chrome, reality-opts: {{public-key: {key}}}}}\n\
+         proxy-providers:\n  \
+         inline:\n    type: inline\n    payload:\n      \
+         - {{name: in-pin, type: trojan, server: 127.0.0.1, port: 1, password: p, fingerprint: zz}}\n\
+         proxy-groups:\n  - {{name: G, type: select, proxies: [pin, ws-reality, DIRECT], use: [inline]}}\n\
+         rules:\n  - MATCH,G\n"
+    );
+    rig.apply(&config).await.unwrap();
+    let warned: Vec<_> = rig
+        .engine
+        .warnings()
+        .into_iter()
+        .map(|w| (w.code, w.path))
+        .collect();
+    assert_eq!(
+        warned,
+        [
+            ("proxy_quarantined", "proxies.pin".to_string()),
+            ("proxy_quarantined", "proxies.ws-reality".to_string()),
+        ]
+    );
+    rig.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_provider_emptied_for_override_expr_leaves_the_config_running() {
+    let rig = Rig::new();
+    rig.apply(
+        "proxy-providers:\n  sub:\n    type: inline\n    override:\n      override-expr: ['.udp = true']\n    \
+         payload:\n      - {name: a, type: socks5, server: 127.0.0.1, port: 1}\n\
+         proxy-groups:\n  - {name: G, type: select, use: [sub], proxies: [DIRECT]}\n\
+         rules:\n  - MATCH,G\n",
+    )
+    .await
+    .unwrap();
+    let warned: Vec<_> = rig.engine.warnings().into_iter().map(|w| w.code).collect();
+    assert_eq!(warned, ["provider_emptied"]);
+    rig.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_geo_file_that_cannot_be_fetched_rejects_the_config() {
     let (server, hits) = http_server(HashMap::new()).await;
     let rig = Rig::new();

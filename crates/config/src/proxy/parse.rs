@@ -122,12 +122,14 @@ pub fn parse_proxy(map: &Map, caps: &Capabilities) -> Result<ProxyParse> {
     let name = f.string("name")?;
     match parse_typed(&mut f, type_name, caps) {
         Ok((kind, common, smux)) => {
+            let ignored = f.take_ignored();
             f.finish()?;
             Ok(ProxyParse::Ok(Box::new(ProxyDef {
                 name,
                 common,
                 kind,
                 smux,
+                ignored,
             })))
         }
         Err(Fail::Quarantine(reason)) => Ok(ProxyParse::Quarantined {
@@ -172,8 +174,8 @@ fn parse_typed(
         "hysteria2" => ProxyKind::Hysteria2(Box::new(parse_hysteria2(f, caps)?)),
         "tuic" => ProxyKind::Tuic(Box::new(parse_tuic(f, caps)?)),
         "anytls" => ProxyKind::AnyTls(Box::new(parse_anytls(f, caps)?)),
-        "socks5" => ProxyKind::Socks5(parse_socks5(f, caps)?),
-        "http" => ProxyKind::Http(parse_http(f, caps)?),
+        "socks5" => ProxyKind::Socks5(parse_socks5(f)?),
+        "http" => ProxyKind::Http(parse_http(f)?),
         "wireguard" => ProxyKind::WireGuard(Box::new(parse_wireguard(f)?)),
         "hysteria" => ProxyKind::Hysteria(Box::new(parse_hysteria(f, caps)?)),
         "ssr" => ProxyKind::Ssr(parse_ssr(f)?),
@@ -191,7 +193,7 @@ fn common_opts(f: &mut Fields<'_>) -> R<CommonOpts> {
         tfo: f.boolean("tfo")?,
         mptcp: f.boolean("mptcp")?,
         interface_name: f.string("interface-name")?,
-        routing_mark: f.i32("routing-mark")?,
+        routing_mark: f.mark("routing-mark")?,
         ip_version: IpVersionPref::parse(&f.string("ip-version")?),
         dialer_proxy: f.string("dialer-proxy")?,
         udp: f.boolean("udp")?,
@@ -199,6 +201,10 @@ fn common_opts(f: &mut Fields<'_>) -> R<CommonOpts> {
 }
 
 fn smux_opts(f: &mut Fields<'_>, caps: &Capabilities) -> R<Option<SmuxOpts>> {
+    if f.raw("smux").is_some_and(|smux| !smux.is_object()) {
+        f.ignore("smux", "it is not a map");
+        return Ok(None);
+    }
     let Some(mut s) = f.sub("smux")? else {
         return Ok(None);
     };
@@ -282,6 +288,18 @@ fn reality_opts(f: &mut Fields<'_>) -> R<Option<RealityOpts>> {
 }
 
 fn tls_opts(f: &mut Fields<'_>, name_key: &str, caps: &Capabilities) -> R<TlsOpts> {
+    let mut tls = tls_fields(f, name_key, caps)?;
+    tls.reality = reality_opts(f)?;
+    Ok(tls)
+}
+
+/// mihomo reads `reality-opts` on vmess, vless and trojan only.
+fn tls_without_reality(f: &mut Fields<'_>, name_key: &str, caps: &Capabilities) -> R<TlsOpts> {
+    f.ignore("reality-opts", "this type does not use REALITY");
+    tls_fields(f, name_key, caps)
+}
+
+fn tls_fields(f: &mut Fields<'_>, name_key: &str, caps: &Capabilities) -> R<TlsOpts> {
     Ok(TlsOpts {
         enabled: false,
         server_name: f.string(name_key)?,
@@ -293,7 +311,7 @@ fn tls_opts(f: &mut Fields<'_>, name_key: &str, caps: &Capabilities) -> R<TlsOpt
         private_key: f.string("private-key")?,
         name_cert_verify: f.string("name-cert-verify")?,
         client_fingerprint: f.string("client-fingerprint")?,
-        reality: reality_opts(f)?,
+        reality: None,
         ech: ech_opts(f, caps)?,
     })
 }
@@ -335,6 +353,13 @@ fn opt_text(f: &mut Fields<'_>, key: &str) -> R<Option<String>> {
 }
 
 fn xhttp_download(mut d: Fields<'_>, caps: &Capabilities) -> R<XhttpDownload> {
+    for key in T2_TLS_KEYS {
+        if d.has(key) {
+            return quarantine(format!(
+                "option 'download-settings.{key}' is not supported by this core"
+            ));
+        }
+    }
     let headers = if d.has("headers") {
         Some(headers(&mut d, "headers")?)
     } else {
@@ -467,9 +492,7 @@ fn shadow_tls_opts(mut o: Fields<'_>, node: &str) -> R<ShadowTlsOpts> {
     let version = o.opt_u16("version")?.unwrap_or(2);
     let version = u8::try_from(version).unwrap_or(0);
     if !(1..=3).contains(&version) {
-        return Err(Fail::Hard(ConfigError::new(format!(
-            "{node} shadow-tls version error: {version}"
-        ))));
+        return quarantine(format!("{node} shadow-tls version error: {version}"));
     }
     let alpn = if o.has("alpn") {
         o.strings("alpn")?
@@ -668,7 +691,7 @@ fn parse_hysteria2(f: &mut Fields<'_>, caps: &Capabilities) -> R<Hysteria2Opts> 
     let server = f.req_string("server")?;
     let port = f.u16("port")?;
     let ports = port_or_ports(f, port, "ports", "hysteria2")?;
-    let mut tls = tls_opts(f, "sni", caps)?;
+    let mut tls = tls_without_reality(f, "sni", caps)?;
     tls.enabled = true;
     let realm = match f.sub("realm-opts")? {
         Some(mut r) => {
@@ -725,7 +748,7 @@ fn parse_hysteria2(f: &mut Fields<'_>, caps: &Capabilities) -> R<Hysteria2Opts> 
 
 fn parse_tuic(f: &mut Fields<'_>, caps: &Capabilities) -> R<TuicOpts> {
     let (server, port) = server_port(f)?;
-    let mut tls = tls_opts(f, "sni", caps)?;
+    let mut tls = tls_without_reality(f, "sni", caps)?;
     tls.enabled = true;
     let out = TuicOpts {
         server,
@@ -754,9 +777,7 @@ fn parse_tuic(f: &mut Fields<'_>, caps: &Capabilities) -> R<TuicOpts> {
         udp_over_stream_version: u8::try_from(f.u32("udp-over-stream-version")?).unwrap_or(0),
     };
     if out.token.is_empty() && (out.uuid.is_empty() || out.password.is_empty()) {
-        return Err(Fail::Hard(ConfigError::new(
-            "tuic: either 'token' or both 'uuid' and 'password' must be set",
-        )));
+        return quarantine("tuic: either 'token' or both 'uuid' and 'password' must be set");
     }
     Ok(out)
 }
@@ -764,9 +785,8 @@ fn parse_tuic(f: &mut Fields<'_>, caps: &Capabilities) -> R<TuicOpts> {
 fn parse_anytls(f: &mut Fields<'_>, caps: &Capabilities) -> R<AnyTlsOpts> {
     let (server, port) = server_port(f)?;
     let password = f.req_string("password")?;
-    let mut tls = tls_opts(f, "sni", caps)?;
+    let mut tls = tls_without_reality(f, "sni", caps)?;
     tls.enabled = true;
-    tls.reality = None;
     // mihomo reads these as int; a negative one acts as unset.
     let mut non_negative =
         |key: &str| -> R<u32> { Ok(u32::try_from(f.i64(key)?.max(0)).unwrap_or(u32::MAX)) };
@@ -784,25 +804,27 @@ fn parse_anytls(f: &mut Fields<'_>, caps: &Capabilities) -> R<AnyTlsOpts> {
 }
 
 /// mihomo's socks5 and http nodes dial plain Go TLS: no ALPN, uTLS, REALITY or ECH.
-fn plain_tls(f: &mut Fields<'_>, caps: &Capabilities) -> R<TlsOpts> {
-    let tls = tls_opts(f, "sni", caps)?;
+fn plain_tls(f: &mut Fields<'_>) -> R<TlsOpts> {
+    for key in ["alpn", "client-fingerprint", "reality-opts", "ech-opts"] {
+        f.ignore(key, "socks5 and http nodes dial plain TLS");
+    }
     Ok(TlsOpts {
         enabled: f.boolean("tls")?,
-        server_name: tls.server_name,
-        skip_cert_verify: tls.skip_cert_verify,
-        fingerprint: tls.fingerprint,
-        certificate: tls.certificate,
-        private_key: tls.private_key,
-        name_cert_verify: tls.name_cert_verify,
+        server_name: f.string("sni")?,
+        skip_cert_verify: f.boolean("skip-cert-verify")?,
+        fingerprint: f.string("fingerprint")?,
+        certificate: f.string("certificate")?,
+        private_key: f.string("private-key")?,
+        name_cert_verify: f.string("name-cert-verify")?,
         ..TlsOpts::default()
     })
 }
 
-fn parse_socks5(f: &mut Fields<'_>, caps: &Capabilities) -> R<Socks5Opts> {
+fn parse_socks5(f: &mut Fields<'_>) -> R<Socks5Opts> {
     let (server, port) = server_port(f)?;
     let tls = TlsOpts {
         server_name: String::new(),
-        ..plain_tls(f, caps)?
+        ..plain_tls(f)?
     };
     Ok(Socks5Opts {
         server,
@@ -813,9 +835,9 @@ fn parse_socks5(f: &mut Fields<'_>, caps: &Capabilities) -> R<Socks5Opts> {
     })
 }
 
-fn parse_http(f: &mut Fields<'_>, caps: &Capabilities) -> R<HttpProxyOpts> {
+fn parse_http(f: &mut Fields<'_>) -> R<HttpProxyOpts> {
     let (server, port) = server_port(f)?;
-    let tls = plain_tls(f, caps)?;
+    let tls = plain_tls(f)?;
     Ok(HttpProxyOpts {
         server,
         port,
@@ -913,9 +935,7 @@ fn parse_wireguard(f: &mut Fields<'_>) -> R<WireGuardOpts> {
     if out.peers.is_empty() {
         let server = f.string("server")?;
         if server.is_empty() {
-            return Err(Fail::Hard(ConfigError::new(
-                "wireguard: server or peers must be set",
-            )));
+            return quarantine("wireguard: server or peers must be set");
         }
         out.peers.push(WgPeer {
             server,
@@ -932,8 +952,11 @@ fn parse_wireguard(f: &mut Fields<'_>) -> R<WireGuardOpts> {
 fn parse_hysteria(f: &mut Fields<'_>, caps: &Capabilities) -> R<HysteriaOpts> {
     let server = f.req_string("server")?;
     let port = f.u16("port")?;
-    let ports = port_or_ports(f, port, "ports", "hysteria")?;
-    let mut tls = tls_opts(f, "sni", caps)?;
+    let ports = f.string("ports")?;
+    if port == 0 && ports.is_empty() {
+        return quarantine("hysteria: either 'port' or 'ports' must be set");
+    }
+    let mut tls = tls_without_reality(f, "sni", caps)?;
     tls.enabled = true;
     Ok(HysteriaOpts {
         server,
@@ -1119,6 +1142,24 @@ mod tests {
     }
 
     #[test]
+    fn a_routing_mark_is_read_as_the_low_32_bits_of_an_int() {
+        for (mark, expected) in [
+            (json!(2_147_483_648_u64), 0x8000_0000),
+            (json!(-1), u32::MAX),
+        ] {
+            let node = def(json!({"name": "d", "type": "direct", "routing-mark": mark}));
+            assert_eq!(node.common.routing_mark, expected);
+        }
+    }
+
+    #[test]
+    fn download_settings_with_a_tls_layer_this_core_lacks_set_the_node_aside() {
+        let node = json!({"name": "e", "type": "vless", "server": "x", "port": 1, "uuid": "u", "network": "xhttp",
+            "xhttp-opts": {"download-settings": {"shadow-tls-opts": {"host": "a.test"}}}});
+        assert!(quarantined(node).contains("download-settings.shadow-tls-opts"));
+    }
+
+    #[test]
     fn missing_required_fields_are_hard_errors() {
         let message = error(json!({"name": "a", "type": "trojan", "server": "x"}));
         assert_eq!(message, "'' has unset fields: password, port");
@@ -1138,6 +1179,39 @@ mod tests {
         );
         assert!(error(json!({"name": "a", "type": "ss", "server": "x", "port": "abc", "cipher": "c", "password": "p"}))
             .contains("port"));
+    }
+
+    #[test]
+    fn keys_a_type_does_not_have_are_ignored_with_a_warning() {
+        let key = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+        let cases = [
+            (
+                json!({"name": "a", "type": "vmess", "server": "x", "port": 1, "uuid": "u", "cipher": "auto", "smux": true}),
+                vec!["smux is ignored: it is not a map"],
+            ),
+            (
+                json!({"name": "b", "type": "hysteria2", "server": "x", "port": 1, "password": "p",
+                       "reality-opts": {"public-key": key}}),
+                vec!["reality-opts is ignored: this type does not use REALITY"],
+            ),
+            (
+                json!({"name": "c", "type": "socks5", "server": "x", "port": 1, "alpn": ["h2"],
+                       "ech-opts": {"enable": true, "config": "%"}}),
+                vec![
+                    "alpn is ignored: socks5 and http nodes dial plain TLS",
+                    "ech-opts is ignored: socks5 and http nodes dial plain TLS",
+                ],
+            ),
+        ];
+        for (node, expected) in cases {
+            let parsed = def(node);
+            assert_eq!(crate::proxy::proxy_warnings(&parsed), expected);
+        }
+        let reality_kept = def(
+            json!({"name": "d", "type": "vless", "server": "x", "port": 1, "uuid": "u",
+            "tls": true, "reality-opts": {"public-key": key}}),
+        );
+        assert!(crate::proxy::proxy_warnings(&reality_kept).is_empty());
     }
 
     #[test]
@@ -1340,5 +1414,32 @@ mod tests {
         };
         assert!(tls(json!({"alpn": []})).alpn_set);
         assert!(!tls(json!({})).alpn_set);
+    }
+
+    #[test]
+    fn what_mihomo_checks_only_when_dialing_sets_the_node_aside() {
+        let cases = [
+            (
+                json!({"name": "t", "type": "tuic", "server": "x", "port": 1, "uuid": "6a4f3bc1-2c44-4a43-a5a3-3f1a2b0e6a11"}),
+                "either 'token'",
+            ),
+            (
+                json!({"name": "h", "type": "hysteria", "server": "x", "up": "10", "down": "50"}),
+                "either 'port' or 'ports'",
+            ),
+            (
+                json!({"name": "w", "type": "wireguard", "private-key": "k", "ip": "10.0.0.2"}),
+                "server or peers",
+            ),
+            (
+                json!({"name": "s", "type": "ss", "server": "x", "port": 1, "cipher": "aes-128-gcm", "password": "p",
+                       "plugin": "shadow-tls", "plugin-opts": {"host": "a.test", "password": "x", "version": 0}}),
+                "shadow-tls version error: 0",
+            ),
+        ];
+        for (node, reason) in cases {
+            let got = quarantined(node);
+            assert!(got.contains(reason), "{got}");
+        }
     }
 }

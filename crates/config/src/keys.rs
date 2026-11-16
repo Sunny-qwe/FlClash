@@ -143,6 +143,10 @@ pub const TUN_T1: &[&str] = &[
     "exclude-uid",
     "exclude-src-port",
     "exclude-dst-port",
+    "inet4-route-address",
+    "inet6-route-address",
+    "inet4-route-exclude-address",
+    "inet6-route-exclude-address",
 ];
 
 pub const TUN_T2: &[&str] = &[
@@ -170,10 +174,6 @@ pub const TUN_T2: &[&str] = &[
     "endpoint-independent-nat",
     "icmp-timeout",
     "file-descriptor",
-    "inet4-route-address",
-    "inet6-route-address",
-    "inet4-route-exclude-address",
-    "inet6-route-exclude-address",
     "recvmsgx",
     "sendmsgx",
     "processors-per-channel",
@@ -407,6 +407,7 @@ fn into_map(value: Value) -> Map {
     }
 }
 
+/// A null keeps any default but a list, as go-yaml leaves a scalar or struct field alone and clears a slice.
 pub fn overlay(defaults: &Map, user: Map) -> Map {
     let mut out = defaults.clone();
     for (key, value) in user {
@@ -420,7 +421,10 @@ pub fn overlay(defaults: &Map, user: Map) -> Map {
                     out.insert(key, Value::Object(top));
                 }
             },
-            Value::Null if matches!(out.get(&key), Some(Value::Object(_))) => {}
+            Value::Null
+                if out
+                    .get(&key)
+                    .is_some_and(|default| !matches!(default, Value::Array(_) | Value::Null)) => {}
             value => {
                 out.insert(key, value);
             }

@@ -190,7 +190,13 @@ fn parse_provider_proxies(
         let ProxySource::Inline { payload } = &provider.source else {
             continue;
         };
-        for (index, mapping) in payload.iter().enumerate() {
+        if provider.override_.expr {
+            continue;
+        }
+        let selected = provider.select_proxies(payload.clone()).map_err(|err| {
+            err.prefixed(&format!("parse proxy provider {} error: ", provider.name))
+        })?;
+        for (index, mapping) in selected.iter().enumerate() {
             let prefix = format!(
                 "parse proxy provider {} error: proxy {index}: ",
                 provider.name
@@ -697,7 +703,7 @@ fn warn_ignored_sections(raw: &RawConfig, report: &mut LoadReport) {
 pub fn load_raw(mut raw: RawConfig, options: &LoadOptions) -> Result<Profile> {
     let mut report = std::mem::take(&mut raw.report);
     let general = General::from_map(&raw.general)?;
-    let dns = DnsConfig::from_map(&raw.dns).map_err(|err| err.prefixed("dns: "))?;
+    let dns = DnsConfig::from_map(&raw.dns, general.ipv6).map_err(|err| err.prefixed("dns: "))?;
     let tun = TunConfig::from_map(&raw.tun).map_err(|err| err.prefixed("tun: "))?;
     let sniffer = SnifferConfig::from_map(&raw.sniffer).map_err(|err| err.prefixed("sniffer: "))?;
     let ntp = NtpConfig::from_map(&raw.ntp)?;
@@ -1092,6 +1098,25 @@ proxy-groups:
     }
 
     #[test]
+    fn a_key_written_with_no_value_reads_as_mihomo_reads_it() {
+        let text = "tun:\n  enable: true\n  auto-route:\n  route-exclude-address:\n\
+                    dns:\n  enable: true\n  nameserver: [8.8.8.8]\n  enhanced-mode: fake-ip\n  fake-ip-range:\n\
+                    proxies:\n  - {name: n, type: ss, server: s.test, port: 8388, cipher: none, password: }\n";
+        let profile = load_text(text).unwrap();
+        assert!(profile.tun.auto_route);
+        assert!(profile.tun.route_exclude_address.is_empty());
+        assert_eq!(
+            profile
+                .dns
+                .fake_ip_range
+                .map(|range| range.to_string())
+                .as_deref(),
+            Some("198.18.0.1/16")
+        );
+        assert_eq!(profile.proxies.len(), 1);
+    }
+
+    #[test]
     fn inbound_tfo_asks_for_something_the_core_does_not_do() {
         assert!(
             warned_paths(
@@ -1193,6 +1218,18 @@ proxy-groups:
             warned_paths("tls:\n  certificate: server.crt\n  ech-key: k\n", false),
             ["tls.certificate", "tls.ech-key"]
         );
+    }
+
+    #[test]
+    fn an_inline_provider_is_read_after_its_filters_and_overrides() {
+        let text = "proxy-providers:\n  p:\n    type: inline\n    exclude-type: ssh\n    \
+                    override: {up: 50 Mbps, down: 200 Mbps}\n    payload:\n      \
+                    - {name: h, type: hysteria, server: s.test, port: 443}\n      \
+                    - {name: bad, type: ssh, server: s.test}\n      \
+                    - {type: ss, server: s.test}\n\
+                    proxy-groups:\n  - {name: G, type: select, use: [p]}\nrules:\n  - MATCH,G\n";
+        let profile = load_text(text).unwrap();
+        assert!(profile.report.warnings.is_empty(), "{:?}", profile.report);
     }
 
     #[test]

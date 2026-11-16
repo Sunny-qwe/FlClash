@@ -142,11 +142,12 @@ fn shadow_tls_options_are_read_as_the_ss_plugin_reads_them() {
 
     let wrong = json!({"name": "s", "type": "snell", "server": "h", "port": 1, "psk": "p",
         "obfs-opts": {"mode": "shadow-tls", "host": "a.test", "version": 4}});
-    let err = parse_proxy(wrong.as_object().unwrap(), &Capabilities::full()).unwrap_err();
-    assert!(
-        err.to_string().contains("shadow-tls version error: 4"),
-        "{err}"
-    );
+    let Ok(ProxyParse::Quarantined { reason, .. }) =
+        parse_proxy(wrong.as_object().unwrap(), &Capabilities::full())
+    else {
+        panic!("a shadow-tls version mihomo checks only when dialing sets the node aside");
+    };
+    assert!(reason.contains("shadow-tls version error: 4"), "{reason}");
 }
 
 async fn read_after_close_with(scheme: Scheme, wire: Vec<u8>) -> std::io::Result<Vec<u8>> {
