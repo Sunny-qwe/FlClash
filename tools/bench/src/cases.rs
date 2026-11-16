@@ -21,6 +21,11 @@ pub const ALL: &[Spec] = &[
     spec("ss-aes128", true, "shadowsocks aes-128-gcm"),
     spec("ss-chacha", true, "shadowsocks chacha20-ietf-poly1305"),
     spec("ss2022", true, "shadowsocks 2022-blake3-aes-128-gcm"),
+    spec(
+        "ss2022-chacha8",
+        true,
+        "shadowsocks 2022-blake3-chacha8-poly1305",
+    ),
     spec("vmess", true, "vmess aes-128-gcm, alterId 0"),
     spec("vmess-chacha", true, "vmess chacha20-poly1305, alterId 0"),
     spec("vmess-none", true, "vmess unencrypted body, alterId 0"),
@@ -102,6 +107,7 @@ pub fn find(name: &str) -> Option<Spec> {
 const UUID: &str = "b831381d-6324-4d53-ad4f-8cda48b30811";
 const TUIC_UUID: &str = "b3f1a6d2-5c0e-4a11-9c43-7e2d8f6a0b15";
 const KEY16: &str = "MDEyMzQ1Njc4OWFiY2RlZg==";
+const KEY32: &str = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
 
 pub struct Case {
     pub spec: Spec,
@@ -170,6 +176,7 @@ pub fn build(spec: Spec, host: &str, port: u16, certs: &Path) -> Case {
         "ss-aes128" => ss("aes-128-gcm", "pw"),
         "ss-chacha" => ss("chacha20-ietf-poly1305", "pw"),
         "ss2022" => ss("2022-blake3-aes-128-gcm", KEY16),
+        "ss2022-chacha8" => ss("2022-blake3-chacha8-poly1305", KEY32),
         "vmess" | "vmess-chacha" | "vmess-none" => (
             "vmess",
             "vmess",

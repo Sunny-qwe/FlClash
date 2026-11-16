@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn a_generated_ca_reloads_and_keeps_its_key_private() {
-        #[cfg_attr(not(unix), allow(unused_variables))]
+        #[cfg_attr(not(unix), allow(unused_variables, reason = "Unix mode check"))]
         let (dir, home) = home();
         let ca = generate_ca(&home).unwrap();
         let loaded = load_ca(&home).unwrap();

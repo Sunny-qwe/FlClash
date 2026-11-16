@@ -274,6 +274,9 @@ opt-level = 3
 [profile.release.package.aws-lc-sys]
 opt-level = 3
 
+[profile.release.package.boring-sys]
+opt-level = 3
+
 [patch.crates-io]
 boring = { path = "vendor/boring" }
 h2 = { path = "vendor/h2" }
