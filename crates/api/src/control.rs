@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex};
 use concord_common::sync::lock;
 use concord_common::{CoreOptions, Origin};
 use concord_engine::{
-    Engine, Failure, SetupRequest, StatusRanges, TunPatch as EngineTunPatch, UpdateRequest, ops,
+    ControllerCors, Engine, Failure, SetupRequest, StatusRanges, TunPatch as EngineTunPatch,
+    UpdateRequest, ops,
 };
 use concord_proto::types::*;
 use concord_proto::{ApiError, ErrorData};
@@ -39,6 +40,7 @@ pub struct ControlOptions {
 pub struct ControllerSettings {
     pub address: String,
     pub secret: String,
+    pub cors: ControllerCors,
 }
 
 pub struct Control {
@@ -190,8 +192,12 @@ impl Control {
         if self.host_owned() {
             return;
         }
-        let (address, secret) = self.engine.profile_controller().await;
-        self.set_external_controller(ControllerSettings { address, secret });
+        let (address, secret, cors) = self.engine.profile_controller().await;
+        self.set_external_controller(ControllerSettings {
+            address,
+            secret,
+            cors,
+        });
     }
 
     /// The file a core running on its own was started with, which a reload
@@ -669,14 +675,19 @@ impl ControlService for Control {
 
     async fn config_patch(&self, params: ConfigPatchParams) -> Result<ChangeSeq, ApiError> {
         let (address, secret) = (params.external_controller.clone(), params.secret.clone());
+        let cors = params.external_controller_cors.clone();
         let patched = self.config_patch_as(Origin::Host, params).await?;
-        if self.host_owned() && (address.is_some() || secret.is_some()) {
+        if self.host_owned() && (address.is_some() || secret.is_some() || cors.is_some()) {
             let mut next = self.controller.borrow().clone();
             if let Some(address) = address {
                 next.address = address;
             }
             if let Some(secret) = secret {
                 next.secret = secret;
+            }
+            if let Some(cors) = cors {
+                next.cors =
+                    ControllerCors::or_defaults(cors.allow_origins, cors.allow_private_network);
             }
             self.set_external_controller(next);
         }

@@ -50,8 +50,11 @@ the host keeps no shadow copy.
 ## External Controller And State Sync
 
 `config.patch` with `externalController` (and `secret`) opens the Clash REST API at that address through
-`concord-controller`; an empty address closes it, and a change moves it, ending the sessions on the old address. The
-profile's `external-controller` and `secret` are ignored while a host drives the core (`host_owned_key` warning).
+`concord-controller`; an empty address closes it, and a change moves it, ending the sessions on the old address.
+`externalControllerCors` (`allowOrigins`, `allowPrivateNetwork`) says which browser origins may call it; an absent
+field takes mihomo's default (every origin, private network allowed), and `allowOrigins: []` refuses every
+cross-origin request, which a profile cannot ask for. The profile's `external-controller`, `secret` and
+`external-controller-cors` are ignored while a host drives the core (`host_owned_key` warning).
 
 A dashboard may change what the host keeps: a group's pick (`PUT /proxies/:name`, `DELETE` to clear a fixed pick)
 and the general settings `PATCH /configs` reaches (`mode`, `log-level`, `ipv6`, `allow-lan`, `mixed-port`,

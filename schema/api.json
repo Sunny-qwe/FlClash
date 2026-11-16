@@ -1430,6 +1430,16 @@
             "null"
           ]
         },
+        "externalControllerCors": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControllerCorsPatch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "unifiedDelay": {
           "type": [
             "boolean",
@@ -1517,6 +1527,27 @@
         "error",
         "silent"
       ]
+    },
+    "ControllerCorsPatch": {
+      "type": "object",
+      "properties": {
+        "allowOrigins": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowPrivateNetwork": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "description": "Which browser origins may call the external controller. An absent field takes mihomo's\ndefault: every origin, and private-network preflights allowed. No origin refuses them all."
     },
     "ChangeSeq": {
       "type": "object",

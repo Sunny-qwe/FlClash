@@ -54,6 +54,7 @@ pub const TOP_T1: &[&str] = &[
     "experimental",
     "external-controller",
     "secret",
+    "external-controller-cors",
 ];
 
 pub const TOP_T2: &[&str] = &[
@@ -73,7 +74,6 @@ pub const TOP_T2: &[&str] = &[
     "external-controller-pipe",
     "external-controller-unix",
     "external-controller-tls",
-    "external-controller-cors",
     "external-controller-routing-mark",
     "external-ui",
     "external-ui-url",

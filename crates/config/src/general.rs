@@ -19,6 +19,39 @@ pub enum GeodataLoader {
     MemConservative,
 }
 
+/// Which browser origins may call the external controller, as mihomo's `external-controller-cors`.
+/// No origin at all refuses every cross-origin request; a profile cannot ask for that, since mihomo
+/// reads an empty `allow-origins` as every origin.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ControllerCors {
+    pub allow_origins: Vec<String>,
+    pub allow_private_network: bool,
+}
+
+impl Default for ControllerCors {
+    /// mihomo's defaults (`config/config.go`, `DefaultRawConfig`).
+    fn default() -> Self {
+        ControllerCors {
+            allow_origins: vec!["*".to_string()],
+            allow_private_network: true,
+        }
+    }
+}
+
+impl ControllerCors {
+    /// What a host asks for, with mihomo's default for a part it leaves out.
+    pub fn or_defaults(
+        allow_origins: Option<Vec<String>>,
+        allow_private_network: Option<bool>,
+    ) -> Self {
+        let default = ControllerCors::default();
+        ControllerCors {
+            allow_origins: allow_origins.unwrap_or(default.allow_origins),
+            allow_private_network: allow_private_network.unwrap_or(default.allow_private_network),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct General {
     pub port: u16,
@@ -46,6 +79,7 @@ pub struct General {
     pub geodata_loader: GeodataLoader,
     pub external_controller: String,
     pub secret: String,
+    pub external_controller_cors: ControllerCors,
 }
 
 impl Default for General {
@@ -76,6 +110,7 @@ impl Default for General {
             geodata_loader: GeodataLoader::MemConservative,
             external_controller: String::new(),
             secret: String::new(),
+            external_controller_cors: ControllerCors::default(),
         }
     }
 }
@@ -140,6 +175,15 @@ impl General {
         };
         general.external_controller = f.string("external-controller")?;
         general.secret = f.string("secret")?;
+        if let Some(mut cors) = f.sub("external-controller-cors")? {
+            let origins = cors.strings("allow-origins")?;
+            if !origins.is_empty() {
+                general.external_controller_cors.allow_origins = origins;
+            }
+            if let Some(allow) = cors.opt_bool("allow-private-network")? {
+                general.external_controller_cors.allow_private_network = allow;
+            }
+        }
         f.finish()?;
         Ok(general)
     }
@@ -157,6 +201,25 @@ mod tests {
             General::from_map(&general_defaults()).unwrap(),
             General::default()
         );
+    }
+
+    #[test]
+    fn controller_cors_keeps_mihomos_defaults_for_what_is_not_written() {
+        let mut map = general_defaults();
+        map.insert(
+            "external-controller-cors".into(),
+            json!({"allow-origins": ["https://board.example"]}),
+        );
+        let cors = General::from_map(&map).unwrap().external_controller_cors;
+        assert_eq!(cors.allow_origins, ["https://board.example"]);
+        assert!(cors.allow_private_network);
+        map.insert(
+            "external-controller-cors".into(),
+            json!({"allow-origins": [], "allow-private-network": false}),
+        );
+        let cors = General::from_map(&map).unwrap().external_controller_cors;
+        assert_eq!(cors.allow_origins, ["*"]);
+        assert!(!cors.allow_private_network);
     }
 
     #[test]

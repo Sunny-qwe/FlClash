@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::mem::take;
 use std::net::SocketAddr;
 #[cfg(unix)]
 use std::os::fd::OwnedFd;
@@ -14,6 +15,7 @@ use concord_common::{
     TunnelMode,
 };
 use concord_config::Profile;
+use concord_config::general::ControllerCors;
 use concord_config::tun::TunConfig;
 use concord_dns::{QueryError, QueryView, Resolver};
 use concord_group::{NodeStateView, Outbounds, ProxyViews, SelectionStore, StatusRanges};
@@ -860,7 +862,7 @@ impl Engine {
     }
 
     /// The profile's `external-controller` and `secret`; empty while a host owns them.
-    pub async fn profile_controller(&self) -> (String, String) {
+    pub async fn profile_controller(&self) -> (String, String, ControllerCors) {
         self.state
             .lock()
             .await
@@ -869,6 +871,7 @@ impl Engine {
                 (
                     applied.general.external_controller.clone(),
                     applied.general.secret.clone(),
+                    applied.general.external_controller_cors.clone(),
                 )
             })
             .unwrap_or_default()
@@ -1384,14 +1387,18 @@ fn host_owns_controller(
     warnings: &mut Vec<WarningView>,
 ) {
     const MESSAGE: &str = "the host sets this; the profile's value is ignored";
-    for (key, value) in [
-        ("external-controller", &mut general.external_controller),
-        ("secret", &mut general.secret),
-    ] {
-        if value.is_empty() {
-            continue;
-        }
-        value.clear();
+    let written = [
+        (
+            "external-controller",
+            !take(&mut general.external_controller).is_empty(),
+        ),
+        ("secret", !take(&mut general.secret).is_empty()),
+        (
+            "external-controller-cors",
+            take(&mut general.external_controller_cors) != ControllerCors::default(),
+        ),
+    ];
+    for (key, _) in written.into_iter().filter(|(_, written)| *written) {
         tracing::warn!("[Config] {key}: {MESSAGE}");
         warnings.push(WarningView {
             level: "warning",

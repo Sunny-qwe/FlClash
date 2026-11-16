@@ -15,6 +15,7 @@ mod route;
 mod tun;
 mod views;
 
+pub use concord_config::general::ControllerCors;
 pub use concord_dns::{QueryView, QuestionView, RecordView};
 pub use concord_group::{
     DelayRecord, GroupView, HealthSnapshot, NodeStateView, NodeView, ProxyView, ProxyViews,

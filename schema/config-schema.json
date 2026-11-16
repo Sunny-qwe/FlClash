@@ -44,7 +44,8 @@
       "tls",
       "experimental",
       "external-controller",
-      "secret"
+      "secret",
+      "external-controller-cors"
     ],
     "t2": [
       "geodata-mode",
@@ -63,7 +64,6 @@
       "external-controller-pipe",
       "external-controller-unix",
       "external-controller-tls",
-      "external-controller-cors",
       "external-controller-routing-mark",
       "external-ui",
       "external-ui-url",
