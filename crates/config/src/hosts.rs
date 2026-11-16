@@ -81,13 +81,14 @@ pub fn parse_hosts(map: &Map, report: &mut LoadReport) -> Result<HostsConfig> {
         } else {
             let mut ips = Vec::with_capacity(items.len());
             for item in &items {
-                ips.push(
-                    item.parse::<IpAddr>()
-                        .map_err(|_| ConfigError::new(format!("{value} is not a valid value")))?,
-                );
+                ips.push(item.parse::<IpAddr>().map_err(|_| {
+                    ConfigError::new(format!("hosts[{domain}]: {value} is not a valid value"))
+                })?);
             }
             if ips.is_empty() {
-                return Err(ConfigError::new(format!("{value} is not a valid value")));
+                return Err(ConfigError::new(format!(
+                    "hosts[{domain}]: {value} is not a valid value"
+                )));
             }
             HostValue::Ips(ips)
         };

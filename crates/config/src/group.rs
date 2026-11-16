@@ -87,17 +87,19 @@ pub fn parse_group(map: &Map) -> Result<GroupDef> {
     if name.is_empty() || type_name.is_empty() {
         return Err(format_error());
     }
-    let decode = |err: ConfigError| {
-        let _ = err;
-        format_error()
-    };
+    let decode =
+        |err: ConfigError| ConfigError::new(format!("format error: {name}: {}", err.message));
     let include_all = f.boolean("include-all").map_err(decode)?;
     let mut use_position = IndexMap::new();
     if let Some(positions) = f.object("use-position").map_err(decode)? {
         for (provider, value) in positions {
             let index = crate::lenient::to_i128(value)
                 .and_then(|n| i32::try_from(n).ok())
-                .ok_or_else(format_error)?;
+                .ok_or_else(|| {
+                    ConfigError::new(format!(
+                        "format error: {name}: use-position.{provider} is not an int"
+                    ))
+                })?;
             use_position.insert(provider.clone(), index);
         }
     }
@@ -174,10 +176,13 @@ pub fn parse_group(map: &Map) -> Result<GroupDef> {
         }
         GroupKind::Fallback => {}
     }
-    for text in [&def.filter, &def.exclude_filter] {
+    for (key, text) in [
+        ("filter", &def.filter),
+        ("exclude-filter", &def.exclude_filter),
+    ] {
         if !text.is_empty() {
             filter::validate(text)
-                .map_err(|err| ConfigError::new(format!("{name}: {}", err.message)))?;
+                .map_err(|err| ConfigError::new(format!("{name}: {key}: {}", err.message)))?;
         }
     }
     parse_unsigned_ranges(&def.expected_status, u64::from(u16::MAX))
@@ -315,6 +320,23 @@ mod tests {
         assert_eq!(
             group(json!({"type": "select"})).unwrap_err().message,
             "format error"
+        );
+    }
+
+    #[test]
+    fn a_field_that_does_not_decode_names_the_group_and_the_key() {
+        let message = |value| group(value).unwrap_err().message;
+        assert_eq!(
+            message(json!({"name": "g", "type": "select", "interval": "abc"})),
+            "format error: g: 'interval' expected type 'uint32', got unconvertible type 'string'"
+        );
+        assert_eq!(
+            message(json!({"name": "g", "type": "select", "use-position": {"p": "x"}})),
+            "format error: g: use-position.p is not an int"
+        );
+        assert!(
+            message(json!({"name": "g", "type": "select", "exclude-filter": "(abc"}))
+                .starts_with("g: exclude-filter: ")
         );
     }
 

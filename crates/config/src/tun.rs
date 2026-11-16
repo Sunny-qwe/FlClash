@@ -38,7 +38,10 @@ pub struct TunConfig {
 fn cidrs(f: &mut Fields<'_>, key: &str) -> Result<Vec<IpCidr>> {
     f.strings(key)?
         .iter()
-        .map(|text| parse_cidr(text))
+        .enumerate()
+        .map(|(index, text)| {
+            parse_cidr(text).map_err(|err| err.prefixed(&format!("tun.{key}[{index}]: ")))
+        })
         .collect()
 }
 

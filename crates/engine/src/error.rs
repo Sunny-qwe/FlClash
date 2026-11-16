@@ -1,3 +1,4 @@
+use concord_config::provider::RuleProviderDef;
 use concord_group::FetchError;
 use concord_rules::RuleSetError;
 use concord_rules::geo::GeoError;
@@ -65,8 +66,12 @@ impl std::error::Error for ResourceError {}
 /// Why a rule provider could not be set up or loaded.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RuleLoadError {
-    #[error(transparent)]
-    Path(std::io::Error),
+    #[error("rule provider {provider}: {source}: {path}")]
+    Path {
+        provider: String,
+        path: String,
+        source: std::io::Error,
+    },
     #[error(transparent)]
     Parse(#[from] RuleSetError),
     #[error(transparent)]
@@ -75,6 +80,17 @@ pub(crate) enum RuleLoadError {
     Pull(#[from] ResourceError),
     #[error(transparent)]
     Join(#[from] tokio::task::JoinError),
+}
+
+impl RuleLoadError {
+    pub(crate) fn path(def: &RuleProviderDef, path: &str) -> impl FnOnce(std::io::Error) -> Self {
+        let (provider, path) = (def.name.clone(), path.to_string());
+        move |source| RuleLoadError::Path {
+            provider,
+            path,
+            source,
+        }
+    }
 }
 
 /// Why a geo file could not be fetched or refreshed. The text is what the resource event and

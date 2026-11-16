@@ -115,8 +115,8 @@ impl Default for General {
     }
 }
 
-fn choice<T>(text: String, parse: impl Fn(&str) -> Option<T>, what: &str) -> Result<T> {
-    parse(&text).ok_or_else(|| ConfigError::new(format!("invalid {what}")))
+fn choice<T>(text: String, parse: impl Fn(&str) -> Option<T>, key: &str, what: &str) -> Result<T> {
+    parse(&text).ok_or_else(|| ConfigError::new(format!("{key}: invalid {what} \"{text}\"")))
 }
 
 impl General {
@@ -152,13 +152,18 @@ impl General {
             general.skip_auth_prefixes.push(prefix);
         }
         if let Some(mode) = f.opt_string("mode")? {
-            general.mode = choice(mode, TunnelMode::parse, "mode")?;
+            general.mode = choice(mode, TunnelMode::parse, "mode", "mode")?;
         }
         if let Some(level) = f.opt_string("log-level")? {
-            general.log_level = choice(level, LogLevel::parse, "log level")?;
+            general.log_level = choice(level, LogLevel::parse, "log-level", "log level")?;
         }
         if let Some(mode) = f.opt_string("find-process-mode")? {
-            general.find_process_mode = choice(mode, FindProcessMode::parse, "find process mode")?;
+            general.find_process_mode = choice(
+                mode,
+                FindProcessMode::parse,
+                "find-process-mode",
+                "find process mode",
+            )?;
         }
         general.ipv6 = f.opt_bool("ipv6")?.unwrap_or(true);
         general.tcp_concurrent = f.boolean("tcp-concurrent")?;

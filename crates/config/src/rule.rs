@@ -477,7 +477,7 @@ fn build_cond(parts: &Parts) -> Result<(Cond, bool, bool)> {
             let items = slash_list(payload, "in type")?;
             for item in &items {
                 if !IN_TYPES.contains(&item.to_uppercase().as_str()) {
-                    return Err(ConfigError::new(format!("unsupported type: {item}")));
+                    return Err(ConfigError::new(format!("unknown type: {item}")));
                 }
             }
             Cond::InType(items.iter().map(|i| i.to_uppercase()).collect())
@@ -749,7 +749,7 @@ mod tests {
             err("NETWORK,icmp,DIRECT"),
             "unsupported network type, only TCP/UDP"
         );
-        assert_eq!(err("IN-TYPE,FOO,DIRECT"), "unsupported type: FOO");
+        assert_eq!(err("IN-TYPE,FOO,DIRECT"), "unknown type: FOO");
         assert_eq!(err("IN-USER,a//b,DIRECT"), "in user couldn't be empty");
         assert!(err("DOMAIN-REGEX,(abc,DIRECT").starts_with("error parsing regexp"));
         assert_eq!(err("AND,DOMAIN,a.com,DIRECT"), "payload format error");

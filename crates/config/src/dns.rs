@@ -278,7 +278,7 @@ pub fn parse_policy(map: Option<&Map>, what: &str) -> Result<Vec<PolicyEntry>> {
     let mut out = Vec::new();
     for (key, value) in map {
         let servers = crate::lenient::value_to_strings(value);
-        let upstreams = parse_upstreams(&servers, what)?;
+        let upstreams = parse_upstreams(&servers, &format!("{what}[{key}]"))?;
         for policy_key in policy_keys(key) {
             out.push(PolicyEntry {
                 key: policy_key,
@@ -361,7 +361,9 @@ fn parse_enhanced(text: &str) -> Result<EnhancedMode> {
         "normal" => Ok(EnhancedMode::Normal),
         "fake-ip" => Ok(EnhancedMode::FakeIp),
         "redir-host" | "" => Ok(EnhancedMode::RedirHost),
-        _ => Err(ConfigError::new("invalid mode")),
+        _ => Err(ConfigError::new(format!(
+            "dns.enhanced-mode: invalid mode \"{text}\""
+        ))),
     }
 }
 
@@ -370,7 +372,9 @@ fn parse_filter_mode(text: &str) -> Result<FakeIpFilterMode> {
         "blacklist" | "" => Ok(FakeIpFilterMode::Blacklist),
         "whitelist" => Ok(FakeIpFilterMode::Whitelist),
         "rule" => Ok(FakeIpFilterMode::Rule),
-        _ => Err(ConfigError::new("invalid mode")),
+        _ => Err(ConfigError::new(format!(
+            "dns.fake-ip-filter-mode: invalid mode \"{text}\""
+        ))),
     }
 }
 
@@ -533,12 +537,17 @@ impl DnsConfig {
             ));
         }
         dns.default_nameserver = parse_upstreams(&defaults, "dns.default-nameserver")?;
-        if dns.default_nameserver.iter().any(|ns| !ns.is_pure_ip()) {
-            return Err(ConfigError::new("default nameserver should be pure IP"));
+        for (index, text) in defaults.iter().enumerate() {
+            if !parse_upstream(text).is_ok_and(|ns| ns.is_pure_ip()) {
+                return Err(ConfigError::new(format!(
+                    "dns.default-nameserver[{index}]: default nameserver should be pure IP: {text}"
+                )));
+            }
         }
         let range = f.string("fake-ip-range")?;
         if !range.is_empty() {
-            let cidr = crate::net::parse_cidr(&range)?;
+            let cidr = crate::net::parse_cidr(&range)
+                .map_err(|err| err.prefixed("dns.fake-ip-range: "))?;
             if !cidr.is_ipv4() {
                 return Err(ConfigError::new("dns.fake-ip-range must be a IPv4 prefix"));
             }
@@ -546,7 +555,8 @@ impl DnsConfig {
         }
         let range6 = f.string("fake-ip-range6")?;
         if ipv6 && !range6.is_empty() {
-            let cidr = crate::net::parse_cidr(&range6)?;
+            let cidr = crate::net::parse_cidr(&range6)
+                .map_err(|err| err.prefixed("dns.fake-ip-range6: "))?;
             if cidr.is_ipv4() {
                 return Err(ConfigError::new("dns.fake-ip-range6 must be a IPv6 prefix"));
             }

@@ -163,7 +163,7 @@ impl ProxyProvider {
             shared
                 .home
                 .confine(path)
-                .map_err(|_| fail(format!("path is not subpath of home directory: {path}")))
+                .map_err(|err| fail(format!("{err}: {path}")))
         };
         let vehicle = match &def.source {
             ProxySource::File { path } => Vehicle::File {

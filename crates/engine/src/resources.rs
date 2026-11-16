@@ -274,15 +274,16 @@ impl RuleProviders {
         let mut list = Vec::with_capacity(defs.len());
         for def in defs {
             let handle = store.declare(&def.name, behavior_of(def.behavior));
+            let confine = |path: &str| home.confine(path).map_err(RuleLoadError::path(def, path));
             let path = match &def.source {
-                RuleSource::File { path } => Some(home.confine(path).map_err(RuleLoadError::Path)?),
+                RuleSource::File { path } => Some(confine(path)?),
                 RuleSource::Http(http) => {
                     let relative = if http.path.is_empty() {
                         format!("rules/{:x}", Md5::digest(http.url.as_bytes()))
                     } else {
                         http.path.clone()
                     };
-                    Some(home.confine(&relative).map_err(RuleLoadError::Path)?)
+                    Some(confine(&relative)?)
                 }
                 RuleSource::Inline { .. } => None,
             };

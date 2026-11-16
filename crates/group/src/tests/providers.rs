@@ -63,7 +63,12 @@ async fn a_file_provider_loads_from_the_home_directory() {
 async fn a_path_outside_the_home_directory_is_refused() {
     let escaped = FILE_PROVIDER.replace("p.yaml", "../p.yaml");
     let built = Rig::try_with(&profile(&escaped), Arc::new(SelectionStore::new()), None);
-    assert!(built.is_err());
+    let message = built.err().unwrap().to_string();
+    assert!(
+        message.starts_with("parse proxy provider p error: path ")
+            && message.ends_with(": ../p.yaml"),
+        "{message}"
+    );
 }
 
 fn answered() -> CancellationToken {

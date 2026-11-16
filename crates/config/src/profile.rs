@@ -379,19 +379,21 @@ fn resolve_groups(
             return Err(fail(format!("{}: `use` or `proxies` missing", group.name)));
         }
         for provider in &group.use_providers {
-            if provider == RESERVED_PROVIDER {
+            let defined = provider_defs.iter().any(|p| &p.name == provider);
+            if provider == RESERVED_PROVIDER || (!defined && names.groups.contains(provider)) {
                 return Err(fail(format!(
                     "proxy group {provider} can't contains in `use`"
                 )));
             }
-            if !provider_defs.iter().any(|p| &p.name == provider) {
+            if !defined {
                 return Err(fail(format!("{}: '{provider}' not found", group.name)));
             }
         }
         let had_proxies = !group.proxies.is_empty();
         let mut kept = Vec::with_capacity(group.proxies.len());
         for proxy in std::mem::take(&mut group.proxies) {
-            if names.known.contains(&proxy) || BUILTIN_TARGETS.contains(&proxy.as_str()) {
+            let builtin = BUILTIN_TARGETS.contains(&proxy.as_str()) && proxy != "GLOBAL";
+            if names.known.contains(&proxy) || builtin {
                 kept.push(proxy);
             } else if names.quarantined.contains(&proxy) {
                 quarantined_refs.insert(proxy.clone());
@@ -560,14 +562,21 @@ fn each_checked_rule<'a>(
                 "rule type {unsupported} is not supported by this core"
             )));
         }
-        if matches!(rule.cond, Cond::SubRule(_)) {
-            if !ctx.sub_rules.contains_key(&rule.target) {
+        let proxy =
+            BUILTIN_TARGETS.contains(&rule.target.as_str()) || ctx.names.resolves(&rule.target);
+        if !matches!(rule.cond, Cond::SubRule(_)) {
+            if !proxy {
+                return Err(fail(&format!("proxy [{}] not found", rule.target)));
+            }
+        } else if !ctx.sub_rules.contains_key(&rule.target) {
+            if !proxy || format != "rules" {
                 return Err(fail(&format!("sub-rule [{}] not found", rule.target)));
             }
-        } else if !BUILTIN_TARGETS.contains(&rule.target.as_str())
-            && !ctx.names.resolves(&rule.target)
-        {
-            return Err(fail(&format!("proxy [{}] not found", rule.target)));
+            let message = format!(
+                "SUB-RULE target {} is not a sub-rule, so the rule never matches",
+                rule.target
+            );
+            report.info("rule_never_matches", format!("rules[{index}]"), message);
         }
         let mut sets = Vec::new();
         rule.cond.rule_sets(&mut sets);
@@ -696,9 +705,9 @@ pub fn load_raw(mut raw: RawConfig, options: &LoadOptions) -> Result<Profile> {
     let mut report = std::mem::take(&mut raw.report);
     let (general, general_notes) = General::read(&raw.general)?;
     let (dns, dns_notes) =
-        DnsConfig::read(&raw.dns, general.ipv6).map_err(|err| err.prefixed("dns: "))?;
-    let tun = TunConfig::from_map(&raw.tun).map_err(|err| err.prefixed("tun: "))?;
-    let sniffer = SnifferConfig::from_map(&raw.sniffer).map_err(|err| err.prefixed("sniffer: "))?;
+        DnsConfig::read(&raw.dns, general.ipv6).map_err(|err| err.within("dns"))?;
+    let tun = TunConfig::from_map(&raw.tun).map_err(|err| err.within("tun"))?;
+    let sniffer = SnifferConfig::from_map(&raw.sniffer).map_err(|err| err.within("sniffer"))?;
     let (ntp, ntp_notes) = NtpConfig::read(&raw.ntp)?;
     let notes = [general_notes, dns_notes, ntp_notes].concat();
     report.warn_ignored("out_of_range", "", &notes);
@@ -993,7 +1002,83 @@ rules:
             message.contains("sub-rule [nothing] not found"),
             "{message}"
         );
+        let message = error("sub-rules:\n  s:\n    - SUB-RULE,(DOMAIN,a.com),DIRECT\n");
+        assert!(message.contains("sub-rule [DIRECT] not found"), "{message}");
         assert!(error("proxies:\n  - {type: direct}\n").contains("proxy 0"));
+    }
+
+    #[test]
+    fn a_group_in_use_or_global_as_a_member_is_refused_when_loading() {
+        let message = error(
+            "proxy-groups:\n  - {name: a, type: select, proxies: [DIRECT]}\n  - {name: b, type: select, use: [a]}\n",
+        );
+        assert!(
+            message.ends_with("proxy group a can't contains in `use`"),
+            "{message}"
+        );
+        let message = error("proxy-groups:\n  - {name: g, type: select, proxies: [GLOBAL]}\n");
+        assert!(message.ends_with("g: 'GLOBAL' not found"), "{message}");
+        assert!(
+            load_text(
+                "proxy-groups:\n  - {name: GLOBAL, type: select, proxies: [DIRECT]}\n  - {name: g, type: select, proxies: [GLOBAL]}\n"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_value_that_is_refused_names_its_key() {
+        let cases = [
+            (
+                "mode: sideways\n",
+                "yaml: unmarshal errors: mode: invalid mode \"sideways\"",
+            ),
+            (
+                "dns: {enhanced-mode: odd}\n",
+                "dns.enhanced-mode: invalid mode \"odd\"",
+            ),
+            (
+                "dns: {fake-ip-filter-mode: odd}\n",
+                "dns.fake-ip-filter-mode: invalid mode \"odd\"",
+            ),
+            (
+                "dns: {default-nameserver: [1.1.1.1, dns.google]}\n",
+                "dns.default-nameserver[1]: default nameserver should be pure IP: dns.google",
+            ),
+            ("dns: {fake-ip-range: x}\n", "dns.fake-ip-range: "),
+            (
+                "dns: {nameserver-policy: {'+.ts.net': 'ts://node'}}\n",
+                "dns.nameserver-policy[+.ts.net]: DNS NameServer[0] format error: unsupported DNS scheme ts://",
+            ),
+            ("dns: {enable: x}\n", "'dns.enable' expected type"),
+            ("tun: {route-address: [x]}\n", "tun.route-address[0]: "),
+            ("hosts: {a.com: [1.1.1.1, x]}\n", "hosts[a.com]: "),
+            (
+                "sniffer: {sniff: {HTTP: {ports: [abc]}}}\n",
+                "sniffer.sniff.HTTP.ports: intRanges error",
+            ),
+        ];
+        for (text, expected) in cases {
+            let message = error(text);
+            assert!(message.starts_with(expected), "{text}: {message}");
+        }
+    }
+
+    #[test]
+    fn a_sub_rule_aimed_at_a_proxy_loads_and_never_matches() {
+        let profile =
+            load_text("rules:\n  - SUB-RULE,(DOMAIN,a.com),DIRECT\n  - MATCH,DIRECT\n").unwrap();
+        let noted = profile
+            .report
+            .warnings
+            .iter()
+            .find(|w| w.path == "rules[0]")
+            .unwrap();
+        assert_eq!(noted.code, "rule_never_matches");
+        assert_eq!(
+            noted.message,
+            "SUB-RULE target DIRECT is not a sub-rule, so the rule never matches"
+        );
     }
 
     #[test]

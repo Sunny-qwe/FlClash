@@ -211,12 +211,15 @@ pub fn parse_proxy_provider(name: &str, map: &Map) -> Result<ProxyProviderDef> {
     let age_secret_key = f.string("age-secret-key")?;
     let override_ = parse_override(&mut f)?;
     let mut fallback = Vec::new();
-    if let Some(Value::Array(items)) = f.raw("payload") {
-        for item in items {
-            match item {
-                Value::Object(entry) => fallback.push(entry.clone()),
-                _ => return Err(ConfigError::new("payload entries must be maps")),
-            }
+    let payload = match f.raw("payload") {
+        Some(Value::Array(items)) => items.as_slice(),
+        None | Some(Value::Null) => &[],
+        Some(_) => return Err(ConfigError::new("'payload' is not a slice")),
+    };
+    for item in payload {
+        match item {
+            Value::Object(entry) => fallback.push(entry.clone()),
+            _ => return Err(ConfigError::new("payload entries must be maps")),
         }
     }
     let source = match type_name.as_str() {
@@ -543,6 +546,16 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_payload_that_is_not_a_list_is_refused() {
+        let err = parse_proxy_provider(
+            "p",
+            &map(json!({"type": "inline", "payload": {"name": "a", "type": "direct"}})),
+        )
+        .unwrap_err();
+        assert_eq!(err.message, "'payload' is not a slice");
     }
 
     #[test]

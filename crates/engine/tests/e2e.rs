@@ -853,6 +853,25 @@ async fn a_file_rule_provider_serves_its_payload_until_the_file_loads() {
     rig.engine.shutdown().await;
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_provider_path_through_a_symlink_names_the_provider_and_the_path() {
+    let rig = Rig::new();
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), rig.home.path().join("linked")).unwrap();
+    let config = "rule-providers:\n  local:\n    type: file\n    behavior: domain\n    path: linked/r.txt\n\
+                  rules:\n  - RULE-SET,local,REJECT\n  - MATCH,DIRECT\n";
+    let failure = rig.apply(config).await.unwrap_err();
+    assert!(
+        failure
+            .message
+            .contains("rule provider local: path crosses a symlink: linked/r.txt"),
+        "{}",
+        failure.message
+    );
+    rig.engine.shutdown().await;
+}
+
 /// Answers the first request with `body` and never answers another.
 async fn answers_once(body: String) -> SocketAddr {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
