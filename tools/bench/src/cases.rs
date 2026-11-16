@@ -24,6 +24,12 @@ pub const ALL: &[Spec] = &[
         "rematch name and sub-rule routing before DIRECT",
     ),
     spec("ss-aes128", true, "shadowsocks aes-128-gcm"),
+    spec("gost-relay", true, "gost relay with authentication"),
+    spec(
+        "ss-gost",
+        false,
+        "shadowsocks aes-128-gcm over gost WebSocket and smux v1",
+    ),
     spec("ss-chacha", true, "shadowsocks chacha20-ietf-poly1305"),
     spec("ss-chacha20", true, "shadowsocks djb chacha20"),
     spec("ss-xchacha20", true, "shadowsocks xchacha20 stream"),
@@ -53,6 +59,17 @@ pub const ALL: &[Spec] = &[
         "vmess aes-128-gcm over gRPC and TLS",
     ),
     spec("vless-tls", true, "vless over TLS"),
+    spec("vless-jls", true, "vless over TCP JLS"),
+    spec(
+        "vless-encryption",
+        true,
+        "VLESS ML-KEM-768 + X25519 encryption, 1-RTT",
+    ),
+    spec(
+        "vless-encryption-0rtt",
+        true,
+        "VLESS ML-KEM-768 + X25519 encryption, ticket resumption",
+    ),
     spec(
         "vless-xhttp-packet-up",
         false,
@@ -69,11 +86,31 @@ pub const ALL: &[Spec] = &[
         "vless XHTTP stream-one over HTTP/2",
     ),
     spec(
+        "vless-xhttp-h3-stream-one",
+        false,
+        "vless XHTTP stream-one over HTTP/3 (CONCORD_XRAY server)",
+    ),
+    spec(
+        "vless-xhttp-h3-stream-up",
+        false,
+        "vless XHTTP stream-up over HTTP/3 (CONCORD_XRAY server)",
+    ),
+    spec(
+        "vless-xhttp-h3-packet-up",
+        false,
+        "vless XHTTP packet-up over HTTP/3 (CONCORD_XRAY server)",
+    ),
+    spec(
         "ss-smux-h2mux",
         true,
         "shadowsocks aes-128-gcm with sing h2mux",
     ),
     spec("trojan-tls", true, "trojan over TLS"),
+    spec(
+        "trojan-shadowtls",
+        true,
+        "trojan with ShadowTLS v3 in place of TLS",
+    ),
     spec(
         "trojan-chrome",
         false,
@@ -97,6 +134,17 @@ pub const ALL: &[Spec] = &[
         "snell",
         false,
         "snell v4; mihomo's listener stalls some flows",
+    ),
+    spec("snell-v6", true, "snell v6 with the default profile"),
+    spec(
+        "snell-v6-unshaped",
+        true,
+        "snell v6 without traffic shaping",
+    ),
+    spec(
+        "snell-v6-unsafe-raw",
+        true,
+        "snell v6 without encryption or shaping",
     ),
     spec("mieru-tcp", false, "mieru over TCP"),
 ];
@@ -127,7 +175,9 @@ pub struct Case {
     /// The mihomo `listeners:` entry; absent for DIRECT, rematch and sing-box-served Hysteria v1.
     pub listener: Option<String>,
     pub singbox_listener: Option<Value>,
+    pub xray_listener: Option<Value>,
     pub proxy: Option<Value>,
+    pub gost: Option<(&'static str, String)>,
 }
 
 impl Case {
@@ -144,18 +194,45 @@ impl Case {
     }
 }
 
-pub fn build(spec: Spec, host: &str, port: u16, certs: &Path) -> Case {
+/// The case needs a second listener: the TLS server its handshake is relayed to.
+pub fn needs_decoy(spec: Spec) -> bool {
+    spec.name == "trojan-shadowtls"
+}
+
+pub fn build(spec: Spec, host: &str, port: u16, decoy: u16, certs: &Path) -> Case {
     let tls = format!(
         "    certificate: {}\n    private-key: {}\n",
         certs.join("cert.pem").display(),
         certs.join("key.pem").display()
     );
     let insecure = json!({"sni": "localhost", "skip-cert-verify": true});
+    if let Some(mode) = spec.name.strip_prefix("vless-xhttp-h3-") {
+        return Case {
+            spec,
+            listener: None,
+            gost: None,
+            singbox_listener: None,
+            xray_listener: Some(json!({
+                "listen": host, "port": port, "protocol": "vless",
+                "settings": {"clients": [{"id": UUID}], "decryption": "none"},
+                "streamSettings": {"network": "xhttp", "security": "tls",
+                    "tlsSettings": {"alpn": ["h3"], "certificates": [{"certificateFile": certs.join("cert.pem"), "keyFile": certs.join("key.pem")}]},
+                    "xhttpSettings": {"path": "/xh", "mode": "auto"}}
+            })),
+            proxy: Some(
+                json!({"name": spec.name, "type": "vless", "server": host, "port": port,
+                "uuid": UUID, "tls": true, "servername": "localhost", "skip-cert-verify": true,
+                "network": "xhttp", "alpn": ["h3"], "xhttp-opts": {"path": "/xh", "mode": mode}}),
+            ),
+        };
+    }
     if spec.name == "rematch" {
         return Case {
             spec,
             listener: None,
+            gost: None,
             singbox_listener: None,
+            xray_listener: None,
             proxy: Some(
                 json!({"name": spec.name, "type": "rematch", "target-rematch-name": "bench", "target-sub-rule": "bench-rematch"}),
             ),
@@ -165,6 +242,8 @@ pub fn build(spec: Spec, host: &str, port: u16, certs: &Path) -> Case {
         return Case {
             spec,
             listener: None,
+            xray_listener: None,
+            gost: None,
             singbox_listener: Some(json!({
                 "type": "hysteria", "tag": spec.name, "listen": host, "listen_port": port,
                 "up_mbps": 100, "down_mbps": 100,
@@ -177,6 +256,39 @@ pub fn build(spec: Spec, host: &str, port: u16, certs: &Path) -> Case {
                 "udp": true, "auth-str": "hy1-pw", "up": "100", "down": "100",
                 "sni": "localhost", "skip-cert-verify": true
             })),
+        };
+    }
+    if spec.name == "gost-relay" {
+        return Case {
+            spec,
+            listener: None,
+            xray_listener: None,
+            singbox_listener: None,
+            gost: Some((
+                "CONCORD_GOST3",
+                format!("relay://user:password@{host}:{port}?nodelay=true"),
+            )),
+            proxy: Some(
+                json!({"name":spec.name, "type":"gost-relay", "server":host, "port":port,
+                "username":"user", "password":"password", "udp":true}),
+            ),
+        };
+    }
+    if spec.name == "ss-gost" {
+        return Case {
+            spec,
+            listener: None,
+            xray_listener: None,
+            singbox_listener: None,
+            gost: Some((
+                "CONCORD_GOST2",
+                format!("ss+mws://aes-128-gcm:pw@{host}:{port}?path=/gost"),
+            )),
+            proxy: Some(
+                json!({"name":spec.name, "type":"ss", "server":host, "port":port,
+                "cipher":"aes-128-gcm", "password":"pw", "plugin":"gost-plugin",
+                "plugin-opts":{"mode":"websocket", "host":"localhost", "path":"/gost"}}),
+            ),
         };
     }
     let ss = |cipher: &str, password: &str| {
@@ -228,12 +340,35 @@ pub fn build(spec: Spec, host: &str, port: u16, certs: &Path) -> Case {
             ),
             json!({"uuid": UUID, "alterId": 0, "cipher": "aes-128-gcm", "tls": true, "servername": "localhost", "skip-cert-verify": true, "network": "grpc", "grpc-opts": {"grpc-service-name": "gun"}}),
         ),
+        "vless-jls" => (
+            "vless",
+            "vless",
+            format!(
+                "    users:\n      - username: a\n        uuid: {UUID}\n    jls-config:\n      enable: true\n      sni: localhost\n      dest: 127.0.0.1:9\n      users:\n        - username: name\n          password: secret\n"
+            ),
+            json!({"uuid": UUID, "tls": true, "servername": "localhost", "jls-opts": {"username": "name", "password": "secret"}}),
+        ),
         "vless-tls" => (
             "vless",
             "vless",
             format!("    users:\n      - username: a\n        uuid: {UUID}\n{tls}"),
             json!({"uuid": UUID, "tls": true, "servername": "localhost", "skip-cert-verify": true}),
         ),
+        "vless-encryption" | "vless-encryption-0rtt" => {
+            let rtt = if spec.name.ends_with("0rtt") {
+                "0rtt"
+            } else {
+                "1rtt"
+            };
+            (
+                "vless",
+                "vless",
+                format!(
+                    "    users:\n      - username: a\n        uuid: {UUID}\n    decryption: mlkem768x25519plus.native.600s.4FPB64XuuLf_4rH6cRUelA49KX6LfpmlVNKDKuionHo\n"
+                ),
+                json!({"uuid": UUID, "encryption": format!("mlkem768x25519plus.native.{rtt}.gnP8rteYQcQdsEDGFqm53nwdrL6HcBB6tZ4hd1c7nh4")}),
+            )
+        }
         "vless-xhttp-packet-up" | "vless-xhttp-stream-up" | "vless-xhttp-stream-one" => {
             let mode = spec.name.strip_prefix("vless-xhttp-").unwrap();
             (
@@ -268,6 +403,17 @@ pub fn build(spec: Spec, host: &str, port: u16, certs: &Path) -> Case {
             (kind, listener, body, extra)
         }
         "trojan-chrome" => trojan(json!({"client-fingerprint": "chrome"})),
+        "trojan-shadowtls" => (
+            "trojan",
+            "trojan",
+            format!(
+                "    users:\n      - username: a\n        password: trojan-pw\n    shadow-tls:\n      enable: true\n      version: 3\n      users:\n        - name: u\n          password: st-pw\n      handshake:\n        dest: {host}:{decoy}\n  - name: trojan-shadowtls-decoy\n    type: http\n    listen: {host}\n    port: {decoy}\n{tls}"
+            ),
+            merge(
+                json!({"password": "trojan-pw", "shadow-tls-opts": {"password": "st-pw", "version": 3}}),
+                &insecure,
+            ),
+        ),
         "anytls" => (
             "anytls",
             "anytls",
@@ -315,6 +461,21 @@ pub fn build(spec: Spec, host: &str, port: u16, certs: &Path) -> Case {
             "    psk: snell-psk\n    version: 4\n".to_string(),
             json!({"psk": "snell-psk", "version": 4}),
         ),
+        "snell-v6" | "snell-v6-unshaped" | "snell-v6-unsafe-raw" => {
+            let mode = match spec.name {
+                "snell-v6-unshaped" => "unshaped",
+                "snell-v6-unsafe-raw" => "unsafe-raw",
+                _ => "default",
+            };
+            (
+                "snell",
+                "snell",
+                format!(
+                    "    psk: snell-v6-bench-psk\n    version: 6\n    mode: {mode}\n    udp: true\n"
+                ),
+                json!({"psk":"snell-v6-bench-psk","version":6,"mode":mode,"udp":true,"userkey":"bench"}),
+            )
+        }
         "mieru-tcp" => (
             "mieru",
             "mieru",
@@ -326,6 +487,8 @@ pub fn build(spec: Spec, host: &str, port: u16, certs: &Path) -> Case {
                 spec,
                 listener: None,
                 singbox_listener: None,
+                xray_listener: None,
+                gost: None,
                 proxy: None,
             };
         }
@@ -340,6 +503,8 @@ pub fn build(spec: Spec, host: &str, port: u16, certs: &Path) -> Case {
         spec,
         listener: Some(listener),
         singbox_listener: None,
+        xray_listener: None,
+        gost: None,
         proxy: Some(merge(base, &extra)),
     }
 }
@@ -441,4 +606,10 @@ pub fn large_profile(mixed: u16, proxies: usize, rules: usize) -> String {
     }
     out.push_str("  - MATCH,DIRECT\n");
     out
+}
+
+pub fn xray_config(cases: &[Case]) -> Value {
+    json!({"log": {"loglevel": "warning"},
+        "inbounds": cases.iter().filter_map(|case| case.xray_listener.clone()).collect::<Vec<_>>(),
+        "outbounds": [{"protocol": "freedom", "settings": {"finalRules": [{"action": "allow"}]}}]})
 }

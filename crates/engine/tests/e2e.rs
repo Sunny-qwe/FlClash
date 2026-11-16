@@ -1560,7 +1560,7 @@ async fn capabilities_report_ss_plugins_and_congestion_controllers() {
     let value = serde_json::to_value(rig.engine.capabilities()).unwrap();
     assert_eq!(
         value["ss-plugins"],
-        serde_json::json!(["obfs", "v2ray-plugin", "shadow-tls"])
+        serde_json::json!(["obfs", "v2ray-plugin", "shadow-tls", "jls", "gost-plugin"])
     );
     assert_eq!(
         value["congestion-controllers"],

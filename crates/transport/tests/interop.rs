@@ -714,3 +714,9 @@ async fn xhttp_server_errors_reach_the_reader() {
     let err = conn.read(&mut buf).await.unwrap_err();
     assert!(err.to_string().contains("404"), "{err}");
 }
+
+#[path = "interop/h3.rs"]
+mod h3_tests;
+
+#[path = "interop/h3_lifecycle.rs"]
+mod h3_lifecycle;

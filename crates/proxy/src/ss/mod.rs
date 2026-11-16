@@ -97,7 +97,7 @@ fn plugin_link(def: &ProxyDef, opts: &SsOpts, ctx: &BuildCtx) -> Result<Link, Bu
                 clock: ctx.clock.clone(),
             })]
         }
-        Some(SsPlugin::V2ray(plugin)) => {
+        Some(SsPlugin::V2ray(plugin) | SsPlugin::Gost(plugin)) => {
             if plugin.mode != "websocket" {
                 return Err(BuildError::invalid(format!(
                     "obfs mode error: {}",
@@ -135,7 +135,7 @@ fn plugin_link(def: &ProxyDef, opts: &SsOpts, ctx: &BuildCtx) -> Result<Link, Bu
                     env_slot = Some(slot);
                 }
             }
-            vec![Layer::V2rayPlugin(V2rayPluginOptions {
+            let options = V2rayPluginOptions {
                 host: plugin.host.clone(),
                 ws: WsOptions {
                     path: plugin.path.clone(),
@@ -151,7 +151,20 @@ fn plugin_link(def: &ProxyDef, opts: &SsOpts, ctx: &BuildCtx) -> Result<Link, Bu
                     random_host: false,
                 },
                 mux: plugin.mux,
-            })]
+            };
+            vec![if matches!(&opts.plugin, Some(SsPlugin::Gost(_))) {
+                Layer::GostPlugin(options)
+            } else {
+                Layer::V2rayPlugin(options)
+            }]
+        }
+        Some(SsPlugin::Jls(plugin)) => {
+            transport_host = plugin.host.clone();
+            vec![crate::link::jls_layer(
+                plugin,
+                &opts.client_fingerprint,
+                ctx,
+            )?]
         }
         Some(SsPlugin::ShadowTls(plugin)) => {
             transport_host = plugin.host.clone();

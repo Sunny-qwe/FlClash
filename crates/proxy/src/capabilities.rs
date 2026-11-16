@@ -1,7 +1,7 @@
 use concord_config::Capabilities;
 
 const TRANSPORTS: &[&str] = &["ws", "grpc", "h2", "http", "xhttp", "httpupgrade"];
-const SS_PLUGINS: &[&str] = &["obfs", "v2ray-plugin", "shadow-tls"];
+const SS_PLUGINS: &[&str] = &["obfs", "v2ray-plugin", "shadow-tls", "jls", "gost-plugin"];
 
 /// `proxy_types` and `rule_types` are the config crate's full lists: `build_outbound` matches
 /// every `ProxyKind`, and the rules crate decides the rule types.

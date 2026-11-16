@@ -294,7 +294,8 @@
       "ssh",
       "shadowquic",
       "dns",
-      "rematch"
+      "rematch",
+      "gost-relay"
     ],
     "t2": [
       "tailscale",
@@ -303,8 +304,7 @@
       "openvpn",
       "masque",
       "sudoku",
-      "trusttunnel",
-      "gost-relay"
+      "trusttunnel"
     ]
   },
   "group-types": [

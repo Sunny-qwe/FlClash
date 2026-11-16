@@ -10,9 +10,11 @@ use concord_config::proxy::{
 use concord_tls::TlsConnector;
 use concord_transport::{
     DialFn, GrpcOptions, GunClient, H2Options, HttpOptions, Layer, ShadowTlsClient,
-    ShadowTlsOptions, TransportStack, WS_ALPN, WsOptions, XhttpClient, XhttpDownload, XhttpOptions,
-    shadow_tls_dial, tls_dial,
+    ShadowTlsOptions, TransportStack, WS_ALPN, WsOptions, XhttpClient, XhttpDial, XhttpDownload,
+    XhttpOptions, shadow_tls_dial, tls_dial,
 };
+
+mod xhttp_quic;
 
 use crate::ctx::{BuildCtx, BuildError};
 use crate::node::{Egress, Link};
@@ -162,6 +164,7 @@ fn shadow_tls_client(
         reality: None,
         ech: None,
         shadow_tls: None,
+        jls: None,
         ..tls.clone()
     };
     let client = ShadowTlsClient::new(
@@ -178,7 +181,7 @@ fn shadow_tls_client(
 
 /// What secures a connection the node dials: its TLS, or ShadowTLS in TLS's place.
 enum Secure {
-    Tls(TlsConnector),
+    Tls(Box<TlsConnector>),
     ShadowTls(Arc<ShadowTlsClient>),
 }
 
@@ -191,7 +194,7 @@ impl Secure {
     ) -> Result<Secure, BuildError> {
         match &tls.shadow_tls {
             Some(layer) => shadow_tls_client(layer, tls, spec, ctx).map(Secure::ShadowTls),
-            None => connector(tls, spec, ctx, Some(env)).map(Secure::Tls),
+            None => connector(tls, spec, ctx, Some(env)).map(|tls| Secure::Tls(Box::new(tls))),
         }
     }
 
@@ -201,7 +204,7 @@ impl Secure {
         stack: TransportStack,
     ) -> (Option<TlsConnector>, TransportStack) {
         match secure {
-            Some(Secure::Tls(tls)) => (Some(tls), stack),
+            Some(Secure::Tls(tls)) => (Some(*tls), stack),
             Some(Secure::ShadowTls(client)) => (None, stack.under(Layer::ShadowTls(client))),
             None => (None, stack),
         }
@@ -209,7 +212,7 @@ impl Secure {
 
     fn wrap(self, raw: DialFn, sni: String, required_alpn: Option<&'static str>) -> DialFn {
         match self {
-            Secure::Tls(tls) => tls_dial(raw, Arc::new(tls), sni, required_alpn),
+            Secure::Tls(tls) => tls_dial(raw, Arc::new(*tls), sni, required_alpn),
             Secure::ShadowTls(client) => shadow_tls_dial(raw, client, sni),
         }
     }
@@ -218,31 +221,60 @@ impl Secure {
 /// mihomo checks a node's security modes when it builds the node (`adapter/outbound/vless.go:536-555`,
 /// `:770-788` for xhttp's download side).
 fn check_security(tls: &TlsOpts, tls_on: bool, download: bool) -> Result<(), BuildError> {
-    if tls.shadow_tls.is_none() {
-        return Ok(());
+    let mut modes = Vec::new();
+    if tls.shadow_tls.is_some() {
+        modes.push("ShadowTLS");
+    }
+    if tls.jls.is_some() {
+        modes.push("JLS");
+    }
+    if tls
+        .reality
+        .as_ref()
+        .is_some_and(|r| !r.public_key.is_empty())
+    {
+        modes.push("REALITY");
     }
     let side = if download {
         "xhttp download-settings"
     } else {
         ""
     };
-    if tls
-        .reality
-        .as_ref()
-        .is_some_and(|r| !r.public_key.is_empty())
-    {
+    if modes.len() > 1 {
         let sep = if download { " " } else { "" };
         return Err(BuildError::invalid(format!(
-            "{side}{sep}security modes are mutually exclusive: ShadowTLS, REALITY"
+            "{side}{sep}security modes are mutually exclusive: {}",
+            modes.join(", ")
         )));
     }
-    if !tls_on {
+    if !tls_on && let Some(mode) = modes.first() {
         let sep = if download { ": " } else { "" };
         return Err(BuildError::invalid(format!(
-            "{side}{sep}ShadowTLS requires TLS"
+            "{side}{sep}{mode} requires TLS"
         )));
     }
     Ok(())
+}
+
+pub(crate) fn jls_layer(
+    opts: &concord_config::proxy::JlsPlugin,
+    fingerprint: &str,
+    ctx: &BuildCtx,
+) -> Result<Layer, BuildError> {
+    let tls = TlsOpts {
+        enabled: true,
+        server_name: opts.host.clone(),
+        alpn: opts.alpn.clone(),
+        alpn_set: true,
+        client_fingerprint: fingerprint.to_string(),
+        jls: Some(opts.auth.clone()),
+        ..TlsOpts::default()
+    };
+    let spec = TlsSpec {
+        sni: opts.host.clone(),
+        alpn: opts.alpn.clone(),
+    };
+    Ok(Layer::Tls(Arc::new(connector(&tls, spec, ctx, None)?)))
 }
 
 pub(crate) fn build_link(spec: LinkSpec<'_>, ctx: &BuildCtx) -> Result<Link, BuildError> {
@@ -264,9 +296,6 @@ pub(crate) fn build_link(spec: LinkSpec<'_>, ctx: &BuildCtx) -> Result<Link, Bui
         .reality
         .as_ref()
         .is_some_and(|r| !r.public_key.is_empty());
-    if reality && !tls_on {
-        return Err(BuildError::invalid("REALITY requires TLS"));
-    }
     if reality
         && !matches!(
             transport,
@@ -314,7 +343,7 @@ pub(crate) fn build_link(spec: LinkSpec<'_>, ctx: &BuildCtx) -> Result<Link, Bui
             server.to_string(),
         ),
         _ => {
-            let alpn = if trojan && !alpn_given {
+            let alpn = if (trojan || tls.jls.is_some()) && !alpn_given {
                 vec!["h2".to_string(), "http/1.1".to_string()]
             } else {
                 user_alpn(tls)
@@ -417,7 +446,11 @@ pub(crate) fn simple_link(
     let secured = if tls.enabled {
         let spec = TlsSpec {
             sni: sni.clone(),
-            alpn: tls.alpn.clone(),
+            alpn: if tls.jls.is_some() && !tls.alpn_set {
+                vec!["h2".into(), "http/1.1".into()]
+            } else {
+                tls.alpn.clone()
+            },
         };
         Some(Secure::new(tls, spec, ctx, &env_slot)?)
     } else {
@@ -454,13 +487,7 @@ fn dial_server(egress: Egress, server: Address, slot: EnvSlot) -> DialFn {
     Arc::new(move || {
         let (egress, server, slot) = (egress.clone(), server.clone(), slot.clone());
         Box::pin(async move {
-            let mut dialing = POOL_DIALS.try_with(Clone::clone).unwrap_or_default();
-            if dialing.contains(egress.name()) {
-                return Err(
-                    concord_common::CoreError::DialerLoop(egress.name().to_string()).into(),
-                );
-            }
-            dialing.push(egress.name().clone());
+            let dialing = pool_chain(egress.name())?;
             let env = slot
                 .load_full()
                 .ok_or_else(|| io::Error::other("grpc dial without an environment"))?;
@@ -472,6 +499,15 @@ fn dial_server(egress: Egress, server: Address, slot: EnvSlot) -> DialFn {
                 .await
         })
     })
+}
+
+fn pool_chain(node: &Arc<str>) -> io::Result<Vec<Arc<str>>> {
+    let mut chain = POOL_DIALS.try_with(Clone::clone).unwrap_or_default();
+    if chain.contains(node) {
+        return Err(concord_common::CoreError::DialerLoop(node.to_string()).into());
+    }
+    chain.push(node.clone());
+    Ok(chain)
 }
 
 fn request_host(explicit: &str, server_name: &str, server: &str) -> String {
@@ -513,16 +549,25 @@ fn xhttp_dial(
     (server, port): (&str, u16),
     slot: &EnvSlot,
     ctx: &BuildCtx,
-) -> Result<(DialFn, bool), BuildError> {
+    period: i64,
+) -> Result<(XhttpDial, bool), BuildError> {
     if tls.alpn.len() == 1 && tls.alpn.first().is_some_and(|alpn| alpn == "h3") {
-        return Err(BuildError::unsupported(
-            "xhttp over HTTP/3 (alpn: [h3]) is not implemented",
+        return Ok((
+            XhttpDial::Quic(xhttp_quic::dial(
+                egress,
+                tls,
+                (server, port),
+                slot,
+                ctx,
+                period,
+            )?),
+            false,
         ));
     }
     let http1 = tls.alpn.len() == 1 && tls.alpn.first().is_some_and(|alpn| alpn == "http/1.1");
     let raw = dial_server(egress.clone(), Address::new(server, port), slot.clone());
     if !tls.enabled {
-        return Ok((raw, http1));
+        return Ok((XhttpDial::Tcp(raw), http1));
     }
     let sni = if tls.server_name.is_empty() {
         server.to_string()
@@ -536,7 +581,7 @@ fn xhttp_dial(
     };
     if let Some(layer) = &tls.shadow_tls {
         let client = shadow_tls_client(layer, tls, spec, ctx)?;
-        return Ok((shadow_tls_dial(raw, client, sni), http1));
+        return Ok((XhttpDial::Tcp(shadow_tls_dial(raw, client, sni)), http1));
     }
     let connector = Arc::new(connector(tls, spec, ctx, Some(slot))?);
     let reality = tls
@@ -544,9 +589,20 @@ fn xhttp_dial(
         .as_ref()
         .is_some_and(|r| !r.public_key.is_empty());
     Ok((
-        tls_dial(raw, connector, sni, (!http1 && !reality).then_some("h2")),
+        XhttpDial::Tcp(tls_dial(
+            raw,
+            connector,
+            sni,
+            (!http1 && !reality).then_some("h2"),
+        )),
         http1,
     ))
+}
+
+fn reuse_keep_alive(reuse: &Option<XhttpReuse>) -> i64 {
+    reuse
+        .as_ref()
+        .map_or(0, |reuse| i64::from(reuse.h_keep_alive_period))
 }
 
 fn xhttp_layer(
@@ -557,16 +613,18 @@ fn xhttp_layer(
     slot: &EnvSlot,
     ctx: &BuildCtx,
 ) -> Result<Layer, BuildError> {
-    let (dial, http1) = xhttp_dial(egress, tls, (server, port), slot, ctx)?;
+    let (dial, http1) = xhttp_dial(
+        egress,
+        tls,
+        (server, port),
+        slot,
+        ctx,
+        reuse_keep_alive(&opts.reuse),
+    )?;
     let has_reality = tls
         .reality
         .as_ref()
         .is_some_and(|reality| !reality.public_key.is_empty());
-    let keep_alive = |reuse: &Option<XhttpReuse>| {
-        reuse
-            .as_ref()
-            .map_or(0, |reuse| i64::from(reuse.h_keep_alive_period))
-    };
     let download = opts
         .download
         .as_deref()
@@ -602,6 +660,9 @@ fn xhttp_layer(
             if let Some(reality) = &ds.reality {
                 side.reality = Some(reality.clone());
             }
+            if let Some(jls) = &ds.jls {
+                side.jls = (!jls.username.is_empty()).then(|| jls.clone());
+            }
             if let Some(ech) = &ds.ech {
                 side.ech = Some(ech.clone());
             }
@@ -610,15 +671,21 @@ fn xhttp_layer(
             }
             check_security(&side, side.enabled, true)?;
             let host = ds.server.as_deref().unwrap_or(server);
-            let (dial, http1) =
-                xhttp_dial(egress, &side, (host, ds.port.unwrap_or(port)), slot, ctx)?;
-            let explicit = ds.host.as_deref().unwrap_or(&opts.host);
             let reuse = ds.reuse.clone().or_else(|| opts.reuse.clone());
+            let (dial, http1) = xhttp_dial(
+                egress,
+                &side,
+                (host, ds.port.unwrap_or(port)),
+                slot,
+                ctx,
+                reuse_keep_alive(&reuse),
+            )?;
+            let explicit = ds.host.as_deref().unwrap_or(&opts.host);
             Ok::<_, BuildError>(XhttpDownload {
                 host: request_host(explicit, &side.server_name, host),
                 path: ds.path.clone().unwrap_or_else(|| opts.path.clone()),
                 headers: headers(ds.headers.as_ref().unwrap_or(&opts.headers)),
-                keep_alive_period: keep_alive(&reuse),
+                keep_alive_period: reuse_keep_alive(&reuse),
                 reuse: reuse.as_ref().map(xhttp_reuse),
                 http1,
                 dial,
@@ -650,7 +717,7 @@ fn xhttp_layer(
         sc_max_each_post_bytes: opts.sc_max_each_post_bytes.clone(),
         sc_min_posts_interval_ms: opts.sc_min_posts_interval_ms.clone(),
         reuse: opts.reuse.as_ref().map(xhttp_reuse),
-        keep_alive_period: keep_alive(&opts.reuse),
+        keep_alive_period: reuse_keep_alive(&opts.reuse),
         http1,
         has_reality,
     };
@@ -930,6 +997,89 @@ mod tests {
             assert!(
                 matches!(CoreError::of(&err), Some(CoreError::DialerLoop(name)) if name == "pooled"),
                 "{network}: {err}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod jls_tests {
+    use crate::{BuildCtx, build_outbound};
+    use concord_config::{Capabilities, ProxyParse, parse_proxy};
+    use concord_tls::TrustStore;
+    use serde_json::json;
+
+    #[test]
+    fn jls_security_modes_use_the_shared_validation_for_both_sides() {
+        use concord_config::proxy::{JlsOpts, RealityOpts, ShadowTlsLayer, TlsOpts};
+        let auth = JlsOpts {
+            username: "name".into(),
+            password: "secret".into(),
+        };
+        for download in [false, true] {
+            let mut tls = TlsOpts {
+                jls: Some(auth.clone()),
+                ..Default::default()
+            };
+            let err = super::check_security(&tls, false, download)
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(err.ends_with("JLS requires TLS"), "{err}");
+            tls.shadow_tls = Some(ShadowTlsLayer {
+                password: "pw".into(),
+                version: 3,
+            });
+            let err = super::check_security(&tls, true, download)
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(
+                err.ends_with("security modes are mutually exclusive: ShadowTLS, JLS"),
+                "{err}"
+            );
+            tls.shadow_tls = None;
+            tls.reality = Some(RealityOpts {
+                public_key: "A".repeat(43),
+                ..Default::default()
+            });
+            let err = super::check_security(&tls, true, download)
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(
+                err.ends_with("security modes are mutually exclusive: JLS, REALITY"),
+                "{err}"
+            );
+            if download {
+                assert!(err.starts_with("xhttp download-settings "));
+            }
+        }
+    }
+
+    #[test]
+    fn jls_nodes_build_for_all_six_tcp_entries() {
+        for kind in ["vmess", "vless", "trojan", "anytls", "ss", "snell"] {
+            let mut value = json!({"name": "jls", "type": kind, "server": "cover.test", "port": 443,
+                "uuid": "b831381d-6324-4d53-ad4f-8cda48b30811", "cipher": "aes-128-gcm", "password": "pw",
+                "psk": "psk", "version": 4, "tls": true, "client-fingerprint": "chrome"});
+            let auth = json!({"username": "name", "password": "secret", "host": "cover.test", "mode": "jls"});
+            match kind {
+                "ss" => {
+                    value["plugin"] = json!("jls");
+                    value["plugin-opts"] = auth;
+                }
+                "snell" => value["obfs-opts"] = auth,
+                _ => value["jls-opts"] = auth,
+            }
+            let ProxyParse::Ok(def) =
+                parse_proxy(value.as_object().unwrap(), &Capabilities::full()).unwrap()
+            else {
+                panic!("quarantined {kind}");
+            };
+            assert!(
+                build_outbound(&def, &BuildCtx::new(TrustStore::new(b"", vec![]))).is_ok(),
+                "{kind}"
             );
         }
     }

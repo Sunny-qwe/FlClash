@@ -1,5 +1,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
+mod gost_plugin;
 mod gun;
 mod h2_transport;
 mod h2io;
@@ -30,7 +31,7 @@ pub use singmux::{
 };
 pub use v2ray_plugin::V2rayPluginOptions;
 pub use ws::WsOptions;
-pub use xhttp::{XhttpClient, XhttpDownload, XhttpOptions, XhttpReuse};
+pub use xhttp::{QuicDialFn, XhttpClient, XhttpDial, XhttpDownload, XhttpOptions, XhttpReuse};
 
 pub type DialFn = Arc<dyn Fn() -> BoxFuture<'static, io::Result<BoxStream>> + Send + Sync>;
 
@@ -84,6 +85,9 @@ pub enum Layer {
     Http(HttpOptions),
     SimpleObfs(ObfsOptions),
     V2rayPlugin(V2rayPluginOptions),
+    GostPlugin(V2rayPluginOptions),
+    /// One smux v1 stream with its own session.
+    Smux,
     Tls(Arc<TlsConnector>),
     ShadowTls(Arc<ShadowTlsClient>),
 }
@@ -144,6 +148,8 @@ impl TransportStack {
                 (Layer::V2rayPlugin(opts), Some(stream)) => {
                     v2ray_plugin::apply(stream, opts).await?
                 }
+                (Layer::GostPlugin(opts), Some(stream)) => gost_plugin::apply(stream, opts).await?,
+                (Layer::Smux, Some(stream)) => singmux::smux_stream(stream).await?,
                 (Layer::Tls(connector), Some(stream)) => {
                     Box::new(connector.connect_unaligned(stream, target_host).await?)
                 }

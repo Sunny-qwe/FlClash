@@ -22,8 +22,8 @@ pub struct V2rayPluginOptions {
     /// TLS layer below takes its SNI from the same place.
     pub host: String,
     pub ws: WsOptions,
-    /// v2ray-plugin's own mux framing around a single session. On unless the
-    /// plugin options say `mux: false`.
+    /// The plugin's mux framing (mux.cool for v2ray-plugin, smux v1 for gost-plugin).
+    /// On unless the plugin options say `mux: false`.
     pub mux: bool,
 }
 

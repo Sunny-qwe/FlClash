@@ -45,6 +45,24 @@ widen exposure are never ignored silently, and keys that name a server's identit
 | `iptables` | Installs redirect rules on Linux | Ignored with a warning; Concord does not run as a Linux router |
 | Picking a dead `fallback` member | Stores the pick, then tests the member; a connection during the test drops the pick (`adapter/outboundgroup/fallback.go:105-145`) | Stores the pick, then tests the member; a connection during the test uses another member, and the pick stays until the test decides |
 
+TCP JLS does not resume sessions. Its native Hello matches the AES-capable Go jls-tls default
+(the cipher order can differ from Go on CPUs without AES acceleration), including TLS 1.2 in the offer,
+but this handshake engine only completes TLS 1.3 with X25519 or X25519MLKEM768. A peer selecting TLS 1.2,
+a P-curve retry or HelloRetryRequest is rejected; Go can continue the ordinary TLS fallback after HRR.
+Explicit fingerprints preserve their browser offers. Authentication failures still validate the real
+certificate and hostname; only an explicit fingerprint sends an HTTP fallback request. Handshake and
+fallback together have a five-second deadline, and caller cancellation can stop them earlier.
+
+XHTTP over HTTP/3 waits for the QUIC handshake before sending requests and does not send 0-RTT data.
+mihomo Alpha `3c0d10a5` can use early data through `DialEarly` (`adapter/outbound/vless.go:690-708`).
+Concord's shared QUIC link does not expose early connections or cache resumable sessions for this transport;
+connection reuse works after the handshake. QUIC DATAGRAM advertisement and HTTP/3 grease are disabled,
+as in mihomo's default xhttp HTTP/3 transport (`transport/xhttp/client.go:167-176`). Keepalive is capped
+at half the local 300-second idle timeout, but cannot follow a shorter peer idle timeout: Quinn exposes
+neither the negotiated idle timeout nor a way to change keepalive after connecting. With a peer timeout
+shorter than twice the keepalive period, an idle connection can close despite keepalive; configure a
+shorter positive keepalive period for that peer. quic-go applies the cap to the negotiated timeout.
+
 ## Routing
 
 `rematch` outbounds support `target-rematch-name` and `target-sub-rule`, including empty strings that clear a
@@ -81,7 +99,7 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
 ## Not Supported
 
 - Outbound types, networks, TLS options and Shadowsocks plugins outside Concord's scope (among them tailscale,
-  easytier, zerotier, openvpn, masque, sudoku, kcp, restls, jls and kcptun): the node is set aside with a warning,
+  easytier, zerotier, openvpn, masque, sudoku, kcp, restls and kcptun): the node is set aside with a warning,
   also when the TLS option is given in xhttp `download-settings`. The full lists are the `T2_*` constants in
   `crates/config/src/proxy/parse.rs`.
 - A provider's `override.override-expr`: the provider gets no proxies and a warning, because its nodes must not run
@@ -94,8 +112,7 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
   `xchacha8-ietf-poly1305`, `rabbit128-poly1305`, `aegis-128l`, `aegis-256`, `aez-384`, `deoxys-ii-256-128`,
   `lea-{128,192,256}-gcm`, `ascon128`, `ascon128a` and `2022-blake3-aes-{128,256}-ccm`; the node is set aside with a
   warning.
-- VLESS `encryption`; xhttp over HTTP/3; Hysteria `faketcp`; ShadowQUIC over QUIC v2; Snell version 6, whose node is set
-  aside with a warning.
+- Hysteria `faketcp`; ShadowQUIC over QUIC v2.
 - sing-mux brutal on the client's own socket, which needs a Linux kernel module. The sing-mux exchange is done, so
   the server still paces its sends.
 - A node's `tfo` on macOS and Windows, where it does nothing.
@@ -121,7 +138,12 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
   content-padding addition, the rekey, reject, keepalive and handshake-attempt timings, and the transport-message part
   of random trailers are not applied; the node works and `config.warnings` names the options it sets.
 - **Snell `obfs-opts` `shadow-tls`:** works against mihomo's Snell listener with ShadowTLS v2 and v3, over TCP and
-  UDP; Snell with `restls` or `jls` is rejected when built.
+  UDP, including Snell v6. Version 6 supports `default`, `unshaped` and `unsafe-raw` modes and an optional
+  `userkey` (up to 255 bytes); its PSK must contain 12–255 bytes. Simple-obfs `tls`/`http` is rejected for v6.
+  Snell with `restls` is rejected when built. On versions 1–5, `mode` and `userkey` are
+  ignored with a warning; mihomo rejects nonempty values for these versions.
+- **Snell connection reuse:** `reuse` selects CONNECT_V2 and its zero-chunk end marker, but Concord does not pool
+  Snell connections; each dial opens a new connection. This also applies to Snell v4/v5.
 - **TUN:** ICMP echo is forwarded from an unprivileged ICMP socket on Unix and a raw ICMP socket on Windows; only echo
   replies come back, so `traceroute` through the TUN shows no hops. `tun.gso` is ignored with a warning. On Windows
   the interface's forwarding, router-discovery, DAD and DNS-registration options are not set. `tun.dns-mode` is not
@@ -141,3 +163,8 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
   90 s idle, and a per-chunk limit against zip bombs are not implemented. Body rewrites run on the blocking pool and
   give up after 5 s (the Surge script default), leaving the body as it came; a jq filter that never ends, such as
   `until(false; .)`, keeps its blocking thread busy until the process exits, as jaq cannot be interrupted.
+
+Shadowsocks supports `gost-plugin` in WebSocket mode, including TLS and its default per-connection smux v1 stream.
+Gost relay supports TCP, destination-bound UDP, forward mode, TLS and per-connection smux v1.
+As with mihomo, its relay server needs `nodelay: true` so CONNECT is answered before application data,
+and `mux.version: 1` when multiplexing is enabled.

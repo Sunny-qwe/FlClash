@@ -13,6 +13,7 @@ use tokio::io::AsyncReadExt;
 
 use super::config::{Range, XhttpReuse, parse_range};
 use super::h1::H1Transport;
+use super::h3::{H3Transport, QuicDialFn};
 use super::request::Built;
 use super::{BoxRead, BoxWrite};
 use crate::DialFn;
@@ -125,9 +126,13 @@ impl H2Transport {
 pub(crate) enum Transport {
     H2(H2Transport),
     H1(H1Transport),
+    H3(H3Transport),
 }
 
 impl Transport {
+    pub fn h3(dial: QuicDialFn) -> Arc<Self> {
+        Arc::new(Self::H3(H3Transport::new(dial)))
+    }
     /// `period` is `h-keep-alive-period`: 0 keeps Chrome's 45 s, negative turns pings off.
     pub fn new(http1: bool, dial: DialFn, period: i64) -> Arc<Transport> {
         if http1 {
@@ -149,6 +154,7 @@ impl Transport {
         match self {
             Transport::H2(t) => t.fixed(req, body).await,
             Transport::H1(t) => t.fixed(req, body).await,
+            Transport::H3(t) => t.fixed(req, body).await,
         }
     }
 
@@ -156,6 +162,7 @@ impl Transport {
         match self {
             Transport::H2(t) => t.start_download(req).await,
             Transport::H1(t) => t.download(req).await,
+            Transport::H3(t) => t.download(req).await,
         }
     }
 
@@ -163,10 +170,14 @@ impl Transport {
         match self {
             Transport::H2(t) => t.stream(req).await,
             Transport::H1(t) => t.stream(req).await,
+            Transport::H3(t) => t.stream(req).await,
         }
     }
 
     fn close(&self) {
+        if let Transport::H3(t) = self {
+            t.close();
+        }
         if let Transport::H2(t) = self
             && let Ok(mut slot) = t.sender.try_lock()
         {

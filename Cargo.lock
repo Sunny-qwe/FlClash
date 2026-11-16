@@ -1385,6 +1385,7 @@ dependencies = [
  "crc32fast",
  "futures-util",
  "gotatun",
+ "h2",
  "h3",
  "h3-quinn",
  "hex",
@@ -1463,6 +1464,7 @@ dependencies = [
 name = "concord-tls"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm 0.10.3",
  "async-trait",
  "aws-lc-rs",
  "base64 0.22.1",
@@ -1495,14 +1497,18 @@ dependencies = [
 name = "concord-transport"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "base64 0.22.1",
  "bytes",
  "concord-common",
  "concord-tls",
  "futures-util",
  "h2",
+ "h3",
+ "h3-quinn",
  "hmac 0.12.1",
  "http",
+ "quinn",
  "rand 0.9.5",
  "rcgen",
  "rustls",

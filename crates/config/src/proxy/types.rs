@@ -58,6 +58,19 @@ pub struct EchOpts {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct JlsOpts {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct JlsPlugin {
+    pub host: String,
+    pub auth: JlsOpts,
+    pub alpn: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TlsOpts {
     pub enabled: bool,
     pub server_name: String,
@@ -71,6 +84,7 @@ pub struct TlsOpts {
     pub name_cert_verify: String,
     pub client_fingerprint: String,
     pub reality: Option<RealityOpts>,
+    pub jls: Option<JlsOpts>,
     pub ech: Option<EchOpts>,
     pub shadow_tls: Option<ShadowTlsLayer>,
 }
@@ -157,6 +171,7 @@ pub struct XhttpDownload {
     pub tls: Option<bool>,
     pub alpn: Option<Vec<String>>,
     pub reality: Option<RealityOpts>,
+    pub jls: Option<JlsOpts>,
     pub skip_cert_verify: Option<bool>,
     pub name_cert_verify: Option<String>,
     pub fingerprint: Option<String>,
@@ -223,6 +238,17 @@ impl Transport {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GostRelayOpts {
+    pub server: String,
+    pub port: u16,
+    pub forward: bool,
+    pub mux: bool,
+    pub username: String,
+    pub password: String,
+    pub tls: TlsOpts,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DirectOpts;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -235,7 +261,9 @@ pub struct DnsOpts;
 pub enum SsPlugin {
     Obfs { mode: String, host: String },
     V2ray(Box<V2rayPlugin>),
+    Gost(Box<V2rayPlugin>),
     ShadowTls(ShadowTlsOpts),
+    Jls(JlsPlugin),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -517,6 +545,8 @@ pub struct SsrOpts {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SnellOpts {
+    pub mode: String,
+    pub userkey: String,
     pub server: String,
     pub port: u16,
     pub psk: String,
@@ -525,6 +555,7 @@ pub struct SnellOpts {
     pub obfs_mode: String,
     pub obfs_host: String,
     pub shadow_tls: Option<ShadowTlsOpts>,
+    pub jls: Option<JlsPlugin>,
     pub client_fingerprint: String,
 }
 
@@ -597,6 +628,7 @@ pub enum ProxyKind {
     Tuic(Box<TuicOpts>),
     AnyTls(Box<AnyTlsOpts>),
     Socks5(Socks5Opts),
+    GostRelay(Box<GostRelayOpts>),
     Http(HttpProxyOpts),
     WireGuard(Box<WireGuardOpts>),
     Hysteria(Box<HysteriaOpts>),
@@ -622,6 +654,7 @@ impl ProxyKind {
             ProxyKind::Tuic(_) => "tuic",
             ProxyKind::AnyTls(_) => "anytls",
             ProxyKind::Socks5(_) => "socks5",
+            ProxyKind::GostRelay(_) => "gost-relay",
             ProxyKind::Http(_) => "http",
             ProxyKind::WireGuard(_) => "wireguard",
             ProxyKind::Hysteria(_) => "hysteria",
@@ -648,6 +681,7 @@ impl ProxyKind {
             ProxyKind::Tuic(o) => Some((&o.server, o.port)),
             ProxyKind::AnyTls(o) => Some((&o.server, o.port)),
             ProxyKind::Socks5(o) => Some((&o.server, o.port)),
+            ProxyKind::GostRelay(o) => Some((&o.server, o.port)),
             ProxyKind::Http(o) => Some((&o.server, o.port)),
             ProxyKind::Hysteria(o) => Some((&o.server, o.port)),
             ProxyKind::Ssr(o) => Some((&o.server, o.port)),

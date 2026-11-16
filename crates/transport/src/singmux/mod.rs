@@ -1,7 +1,9 @@
 mod h2mux;
 mod inbox;
 mod padding;
+mod single;
 mod smux;
+pub(crate) use single::smux_stream;
 #[cfg(test)]
 mod tests;
 mod wire;

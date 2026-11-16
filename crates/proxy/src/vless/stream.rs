@@ -9,6 +9,7 @@ use concord_tls::{TlsConn, TlsRead, TlsWrite};
 use rand::Rng;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+use super::vision_io::{VisionRead, VisionWrite};
 use crate::addr_codec::VMESS;
 use crate::lazy::HeadFirst;
 
@@ -311,13 +312,13 @@ fn lock(filter: &Mutex<Filter>) -> MutexGuard<'_, Filter> {
 /// connection is TLS 1.3 application data. Each direction switches to the raw
 /// socket on its own; they share only the filter, which both run on the first
 /// packets.
-pub(crate) struct Vision {
-    reader: VisionReader,
-    writer: VisionWriter,
+pub(crate) struct Vision<R = TlsRead, W = TlsWrite> {
+    reader: VisionReader<R>,
+    writer: VisionWriter<W>,
 }
 
-struct VisionReader {
-    io: ResponseSkip<TlsRead>,
+struct VisionReader<R> {
+    io: ResponseSkip<R>,
     user: [u8; 16],
     filter: Arc<Mutex<Filter>>,
     read_process: bool,
@@ -332,8 +333,8 @@ struct VisionReader {
     direct_read: bool,
 }
 
-struct VisionWriter {
-    io: HeadFirst<TlsWrite>,
+struct VisionWriter<W> {
+    io: HeadFirst<W>,
     filter: Arc<Mutex<Filter>>,
     write_filter: bool,
     write_direct: bool,
@@ -356,8 +357,14 @@ impl Vision {
         let (read, write) = tls
             .into_halves()
             .map_err(|_| io::Error::other("XTLS Vision needs the TLS record layer"))?;
+        Ok(Self::from_halves(read, write, header, user))
+    }
+}
+
+impl<R, W> Vision<R, W> {
+    pub(super) fn from_halves(read: R, write: W, header: Vec<u8>, user: [u8; 16]) -> Self {
         let filter = Arc::new(Mutex::new(Filter::new()));
-        Ok(Vision {
+        Vision {
             reader: VisionReader {
                 io: ResponseSkip::new(read),
                 user,
@@ -386,12 +393,12 @@ impl Vision {
                 switch_pending: false,
                 staged: None,
             },
-        })
+        }
     }
 }
 
-impl VisionReader {
-    fn tls(&mut self) -> &mut TlsRead {
+impl<R: VisionRead> VisionReader<R> {
+    fn tls(&mut self) -> &mut R {
         self.io.get_mut()
     }
 
@@ -414,7 +421,7 @@ impl VisionReader {
     }
 }
 
-impl VisionWriter {
+impl<W: VisionWrite> VisionWriter<W> {
     fn stage_filtered(&mut self, data: &[u8]) {
         if data.is_empty() {
             apply_padding(
@@ -480,7 +487,7 @@ impl VisionWriter {
             self.write_direct = true;
         }
         while let Some(rest) = self.raw_out.get(self.raw_pos..).filter(|r| !r.is_empty()) {
-            let raw = self.io.get_mut().raw_mut();
+            let raw = self.io.get_mut().raw_write();
             match ready!(Pin::new(&mut *raw).poll_write(cx, rest)) {
                 Ok(0) => return Poll::Ready(Err(io::ErrorKind::WriteZero.into())),
                 Ok(n) => self.raw_pos += n,
@@ -493,7 +500,7 @@ impl VisionWriter {
     }
 }
 
-impl AsyncRead for VisionReader {
+impl<R: VisionRead> AsyncRead for VisionReader<R> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -513,7 +520,7 @@ impl AsyncRead for VisionReader {
                 return Poll::Ready(Ok(()));
             }
             if this.direct_read {
-                let raw = this.tls().raw_mut();
+                let raw = this.tls().raw_read();
                 return Pin::new(&mut *raw).poll_read(cx, out);
             }
             if this.remaining_content > 0 {
@@ -598,7 +605,7 @@ impl AsyncRead for VisionReader {
     }
 }
 
-impl AsyncWrite for VisionWriter {
+impl<W: VisionWrite> AsyncWrite for VisionWriter<W> {
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -617,7 +624,7 @@ impl AsyncWrite for VisionWriter {
             return Poll::Ready(Ok(data.len()));
         }
         if this.write_direct {
-            let raw = this.io.get_mut().raw_mut();
+            let raw = this.io.get_mut().raw_write();
             return Pin::new(&mut *raw).poll_write(cx, data);
         }
         Pin::new(&mut this.io).poll_write(cx, data)
@@ -630,7 +637,7 @@ impl AsyncWrite for VisionWriter {
         }
         ready!(this.drain(cx))?;
         if this.write_direct {
-            let raw = this.io.get_mut().raw_mut();
+            let raw = this.io.get_mut().raw_write();
             return Pin::new(&mut *raw).poll_flush(cx);
         }
         Pin::new(&mut this.io).poll_flush(cx)
@@ -640,14 +647,14 @@ impl AsyncWrite for VisionWriter {
         let this = self.get_mut();
         ready!(this.drain(cx))?;
         if this.write_direct {
-            let raw = this.io.get_mut().raw_mut();
+            let raw = this.io.get_mut().raw_write();
             return Pin::new(&mut *raw).poll_shutdown(cx);
         }
         Pin::new(&mut this.io).poll_shutdown(cx)
     }
 }
 
-impl AsyncRead for Vision {
+impl<R: VisionRead, W: VisionWrite> AsyncRead for Vision<R, W> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -657,7 +664,7 @@ impl AsyncRead for Vision {
     }
 }
 
-impl AsyncWrite for Vision {
+impl<R: VisionRead, W: VisionWrite> AsyncWrite for Vision<R, W> {
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -675,7 +682,7 @@ impl AsyncWrite for Vision {
     }
 }
 
-impl Stream for Vision {
+impl<R: VisionRead, W: VisionWrite> Stream for Vision<R, W> {
     concord_common::stream_policy!(own: into_split;
         default: read_requirements, write_requirements, poll_read_buffer, poll_write_buffer, raw_socket, tcp, peer_addr, needs_handshake, direct, into_tcp);
 

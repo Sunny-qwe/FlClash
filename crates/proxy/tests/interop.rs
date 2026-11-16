@@ -34,10 +34,22 @@ use tokio::net::{TcpListener, UdpSocket};
 
 #[path = "interop/ech_dns.rs"]
 mod ech_dns;
+#[path = "interop/gost.rs"]
+mod gost;
+#[path = "interop/gost_relay.rs"]
+mod gost_relay;
+#[path = "interop/jls.rs"]
+mod jls;
 #[path = "interop/realm.rs"]
 mod realm;
 #[path = "interop/t1.rs"]
 mod t1;
+#[path = "interop/vless_encryption.rs"]
+mod vless_encryption;
+#[path = "interop/xray.rs"]
+mod xray;
+#[path = "interop/xray_front.rs"]
+mod xray_front;
 
 const UUID: &str = "b831381d-6324-4d53-ad4f-8cda48b30811";
 const KEY16: &str = "MDEyMzQ1Njc4OWFiY2RlZg==";
@@ -629,6 +641,7 @@ fn cases(certs: &Certs) -> Vec<Case> {
     ];
     all.extend(quic_cases(certs));
     all.extend(t1::cases(certs));
+    all.extend(jls::cases(certs));
     all.extend(realm::cases(certs));
     all.push(case(
         "socks-open",

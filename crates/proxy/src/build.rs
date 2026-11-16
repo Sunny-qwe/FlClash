@@ -32,6 +32,7 @@ fn build_kind(def: &ProxyDef, ctx: &BuildCtx) -> Result<Arc<dyn Outbound>, Build
         ProxyKind::Dns(_) => Ok(Arc::new(Dns::new(&def.name))),
         ProxyKind::Rematch(opts) => Ok(Arc::new(crate::rematch::Rematch::new(&def.name, opts))),
         ProxyKind::Socks5(opts) => crate::socks5::build(def, opts, ctx),
+        ProxyKind::GostRelay(opts) => crate::gost_relay::build(def, opts, ctx),
         ProxyKind::Http(opts) => crate::http::build(def, opts, ctx),
         ProxyKind::Ss(opts) => crate::ss::build(def, opts, ctx),
         ProxyKind::Vmess(opts) => crate::vmess::build(def, opts, ctx),

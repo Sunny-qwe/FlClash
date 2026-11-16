@@ -77,7 +77,7 @@ fn the_first_v4_frame_is_padded_and_later_ones_are_not() {
     assert_eq!(second.len(), 23 + 1 + 16);
 }
 
-fn build(extra: Value) -> Result<(), crate::ctx::BuildError> {
+pub(super) fn build(extra: Value) -> Result<(), crate::ctx::BuildError> {
     let mut proxy =
         json!({"name": "s", "type": "snell", "server": "127.0.0.1", "port": 1, "psk": "p"});
     if let (Some(base), Some(more)) = (proxy.as_object_mut(), extra.as_object()) {
@@ -100,14 +100,22 @@ fn options_follow_the_go_adapter() {
     assert!(build(json!({"version": 5, "udp": true})).is_ok());
     assert!(build(json!({"version": 1, "udp": true})).is_err());
     assert!(build(json!({"version": 2, "udp": true})).is_err());
-    assert!(matches!(
-        build(json!({"version": 6})),
-        Err(crate::ctx::BuildError::Unsupported(message)) if message.contains("not implemented")
-    ));
+    assert!(build(json!({"version": 6})).is_err());
+    assert!(build(json!({"version": 6, "psk": "snell-v6-test-psk-0123456789"})).is_ok());
     assert!(build(json!({"version": 7})).is_err());
-    for mode in ["restls", "jls"] {
-        let unsupported = build(json!({"obfs-opts": {"mode": mode}})).err().unwrap();
-        assert!(unsupported.is_unsupported(), "{mode}");
+    let unsupported = build(json!({"obfs-opts": {"mode": "restls"}}))
+        .err()
+        .unwrap();
+    assert!(unsupported.is_unsupported());
+    for version in [1, 4, 6] {
+        assert!(
+            build(
+                json!({"version": version, "psk": "snell-jls-psk", "obfs-opts": {
+                    "mode": "jls", "host": "a.test", "username": "name", "password": "secret"
+                }})
+            )
+            .is_ok()
+        );
     }
     for version in 1..=3 {
         let shadow = json!({"obfs-opts": {

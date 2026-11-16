@@ -15,6 +15,7 @@ mod cases;
 mod control;
 mod core;
 mod env;
+mod gost;
 mod isolate;
 mod load;
 mod netstat;
@@ -93,7 +94,7 @@ struct RunArgs {
     #[arg(long = "core")]
     cores: Vec<String>,
     #[arg(
-        help = "The mihomo binary that serves every protocol. Upstream builds start their `listeners:`; some forks of Clash.Meta do not."
+        help = "The mihomo binary that serves the protocol cases; xhttp HTTP/3 uses CONCORD_XRAY. Upstream builds start their `listeners:`; some forks of Clash.Meta do not."
     )]
     #[arg(long, env = "MIHOMO")]
     mihomo: Option<PathBuf>,

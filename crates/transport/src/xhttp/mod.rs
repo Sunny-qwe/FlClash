@@ -1,6 +1,7 @@
 mod browser;
 mod config;
 mod h1;
+mod h3;
 mod packet_up;
 mod padding;
 mod request;
@@ -23,6 +24,19 @@ use transport::{Lease, Maker, Pending, ReuseManager, Transport};
 
 use crate::DialFn;
 use crate::http1::invalid;
+pub use h3::QuicDialFn;
+
+#[derive(Clone)]
+pub enum XhttpDial {
+    Tcp(DialFn),
+    Quic(QuicDialFn),
+}
+
+impl From<DialFn> for XhttpDial {
+    fn from(dial: DialFn) -> Self {
+        Self::Tcp(dial)
+    }
+}
 
 pub(crate) type BoxRead = Box<dyn AsyncRead + Send + Unpin>;
 pub(crate) type BoxWrite = Box<dyn AsyncWrite + Send + Unpin>;
@@ -37,7 +51,7 @@ pub struct XhttpDownload {
     pub reuse: Option<XhttpReuse>,
     pub keep_alive_period: i64,
     pub http1: bool,
-    pub dial: DialFn,
+    pub dial: XhttpDial,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -78,10 +92,13 @@ fn side(
     settings: Settings,
     browser: &browser::Browser,
     http1: bool,
-    dial: DialFn,
+    dial: XhttpDial,
 ) -> io::Result<Side> {
     let period = opts.keep_alive_period;
-    let make: Maker = Arc::new(move || Transport::new(http1, dial.clone(), period));
+    let make: Maker = match dial {
+        XhttpDial::Tcp(dial) => Arc::new(move || Transport::new(http1, dial.clone(), period)),
+        XhttpDial::Quic(dial) => Arc::new(move || Transport::h3(dial.clone())),
+    };
     let manager = opts
         .reuse
         .as_ref()
@@ -97,7 +114,7 @@ fn side(
 impl XhttpClient {
     pub fn new(
         opts: XhttpOptions,
-        dial: DialFn,
+        dial: impl Into<XhttpDial>,
         download: Option<XhttpDownload>,
     ) -> io::Result<Arc<XhttpClient>> {
         let mode = match effective_mode(&opts, download.is_some()) {
@@ -118,7 +135,7 @@ impl XhttpClient {
         let settings = Settings::resolve(&opts)?;
         let ids = session_id_generator(&opts)?;
         let browser = browser::Browser::new();
-        let up = side(&opts, settings.clone(), &browser, opts.http1, dial)?;
+        let up = side(&opts, settings.clone(), &browser, opts.http1, dial.into())?;
         let down = download
             .map(|download| {
                 let mut down_opts = opts.clone();

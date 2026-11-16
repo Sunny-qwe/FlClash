@@ -9,6 +9,7 @@ mod ctx;
 mod dgram;
 mod direct;
 mod dns;
+mod gost_relay;
 mod http;
 mod hysteria;
 mod hysteria2;

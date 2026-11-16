@@ -76,6 +76,7 @@ release `libconcord.so` of the other two Android ABIs against their budgets).
   | Variable | Peer |
   |---|---|
   | `CONCORD_MIHOMO` | An upstream mihomo binary, for protocol interop |
+  | `CONCORD_XRAY` | Xray-core for xhttp over HTTP/3 interop (`--test interop xhttp_h3_talks_to_xray -- --ignored`) and `vless-xhttp-h3-*` bench cases |
   | `CONCORD_WGSERVER` | A WireGuard test server |
   | `CONCORD_SSHD`, `CONCORD_SSH_KEYGEN` | OpenSSH |
   | `CONCORD_SSRCLIENT` | A ShadowsocksR test client |
