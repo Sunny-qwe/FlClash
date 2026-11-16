@@ -24,6 +24,10 @@ env:
   # FlClash's `cargoCore` builds `libconcord.so` with this NDK and API level.
   ANDROID_NDK_VERSION: 28.2.13676358
   ANDROID_API: 24
+  # The interop peer: the mihomo release `.agents/reference-choices.md` names, pinned by hash per architecture.
+  MIHOMO_VERSION: v1.19.33
+  MIHOMO_SHA256_X64: 8ec92e7b2fdc6b853ba00156bab7e4e965c8b0d843b8c4ac8ab98795f02ad524
+  MIHOMO_SHA256_ARM64: ba408b317080ee265c46cb923a50018c1b82cbd708551cdd46a1e3e307396187
 
 jobs:
   check:
@@ -61,6 +65,14 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --locked
 
+      # The workspace build turns these features on, so only a crate built alone goes without them.
+      - name: Check crates without their optional features
+        run: |
+          for crate in concord-common concord-engine concord-mitm; do
+            cargo clippy -p "$crate" --no-default-features --all-targets --locked -- -D warnings
+            cargo test -p "$crate" --no-default-features --locked
+          done
+
       - name: Check crate layers
         run: cargo run --locked -p xtask -- check-layers
 
@@ -81,6 +93,42 @@ jobs:
 
       - name: Check that no tracked file changed
         run: git diff --exit-code -- . ':!assets/ca-certificates.crt'
+
+  interop:
+    name: mihomo interop
+    if: github.event_name == 'workflow_dispatch' || !github.event.repository.private
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Fetch mihomo
+        run: |
+          case "$(uname -m)" in
+            x86_64) asset=mihomo-linux-amd64-v1-$MIHOMO_VERSION.gz sum=$MIHOMO_SHA256_X64 ;;
+            aarch64) asset=mihomo-linux-arm64-$MIHOMO_VERSION.gz sum=$MIHOMO_SHA256_ARM64 ;;
+            *) echo "no pinned mihomo for $(uname -m)" >&2; exit 1 ;;
+          esac
+          peer=$RUNNER_TEMP/mihomo
+          curl -fsSL --retry 3 -o "$peer.gz" \
+            "https://github.com/MetaCubeX/mihomo/releases/download/$MIHOMO_VERSION/$asset"
+          echo "$sum  $peer.gz" | sha256sum -c -
+          gunzip "$peer.gz"
+          chmod +x "$peer"
+          "$peer" -v
+          echo "CONCORD_MIHOMO=$peer" >> "$GITHUB_ENV"
+
+      # The Hysteria v1 case needs its own server, which mihomo does not provide.
+      - name: Run the interop tests
+        run: >-
+          cargo test --locked -p concord-proxy --test interop --
+          --ignored --skip hysteria_talks_to_the_reference_server
 
   macos:
     name: macOS
