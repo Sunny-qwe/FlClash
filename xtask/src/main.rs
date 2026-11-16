@@ -1,4 +1,7 @@
 mod bench;
+mod commits;
+#[cfg(test)]
+mod doc_paths;
 mod layers;
 #[cfg(test)]
 mod public_tree;
@@ -26,8 +29,10 @@ fn main() -> ExitCode {
         Some("schema") => schema::run(args.next().as_deref() == Some("--check")),
         Some("check-size") => size::check(args.next().as_deref(), args.next().as_deref()),
         Some("bench") => bench::run(args.collect()),
+        Some("check-commits") => commits::check(&args.collect::<Vec<_>>()),
         _ => Err(
             "usage: xtask check-layers | schema [--check] | check-size <file> <max-bytes> \
+             | check-commits <git log revisions> \
              | bench [--quick|--full] [--base <rev>|--no-baseline] [--mihomo <path>] [concord-bench run options]"
                 .to_string(),
         ),
