@@ -686,6 +686,22 @@ async fn reads_plain_http_to_any_host_while_a_rule_acts_on_requests() {
 }
 
 #[tokio::test]
+async fn plain_http_leaves_an_excluded_host_alone() {
+    let server = start_server(false, &[], echo()).await;
+    let rig = rig_for(&server, None);
+    rig.config(json!({
+        "enable": true,
+        "hostname": ["-*.bank.test", "-203.0.113.9", "listed.test"],
+        "url-rewrite": [r"^http://other\.test/never _ reject"],
+    }));
+    let engine = rig.mitm.engine().unwrap();
+    assert!(!engine.match_tcp(&flow("www.bank.test", 80)));
+    assert!(!engine.match_tcp(&flow_of(InboundKind::Tun, Address::new("203.0.113.9", 80))));
+    assert!(engine.match_tcp(&flow("other.test", 80)));
+    assert!(engine.match_tcp(&flow_of(InboundKind::Tun, Address::new("203.0.113.10", 80))));
+}
+
+#[tokio::test]
 async fn plain_http_to_an_unlisted_host_is_not_peeked_without_a_rule() {
     let server = start_server(false, &[], echo()).await;
     let rig = rig_for(&server, None);

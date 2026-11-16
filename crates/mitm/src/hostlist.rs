@@ -39,19 +39,29 @@ impl HostList {
         self.find(host, port, true)
     }
 
+    /// Whether the first entry that covers `host` on `port` carves it out.
+    pub fn excludes(&self, host: &str, port: u16) -> bool {
+        self.first(host, port, false)
+            .is_some_and(|entry| entry.exclude)
+    }
+
     pub fn includes_any(&self) -> bool {
         self.0.iter().any(|entry| !entry.exclude)
     }
 
     fn find(&self, host: &str, port: u16, sniffed: bool) -> bool {
+        self.first(host, port, sniffed)
+            .is_some_and(|entry| !entry.exclude)
+    }
+
+    fn first(&self, host: &str, port: u16, sniffed: bool) -> Option<&HostEntry> {
         let host = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
         if host.is_empty() {
-            return false;
+            return None;
         }
         self.0
             .iter()
             .find(|entry| entry.covers(port, sniffed) && glob(&entry.pattern, &host))
-            .is_some_and(|entry| !entry.exclude)
     }
 
     pub(crate) fn extend(&mut self, other: HostList) {
