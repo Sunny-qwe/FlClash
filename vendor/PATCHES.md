@@ -28,6 +28,7 @@ crate's directory, its `[patch.crates-io]` entry and its lines in `UPSTREAM.sha2
 | Crate | Change | Upstream | Route |
 |---|---|---|---|
 | boring | Read-only `SslRef` record-layer accessors | None | None planned: the change stays in the vendored copy |
+| h3 | Bound frame and DATA read-ahead | hyperium/h3#344, `c916ed5a` (frame headers); #328 and #386 are related | Backport #344; propose the DATA-body extension to hyperium/h3 |
 | h3 | Opt-in draft-00 datagram SETTINGS for WARP | None | Propose the default-off client builder switch to hyperium/h3 |
 | h2 | Ignore DATA and HEADERS on forgotten client streams | None as of 0.4.20 | Issue and PR to hyperium/h2 with the delayed-DATA-after-reset transport test |
 | mio | High-resolution timed waits on Windows | None | PR to tokio-rs/mio, citing Go's default poller path |
@@ -228,6 +229,18 @@ Upgrade `quinn`, `quinn-proto` and `quinn-udp` together; replay these changes an
 ## h3 0.0.8
 
 The package archive checksum is `10872b55cfb02a821b69dc7cf8dc6a71d6af25eb9a79662bec4a9d016056b3be`.
+
+- `src/frame.rs`: backport the decode-before-read ordering from upstream
+  [PR #344](https://github.com/hyperium/h3/pull/344), commit
+  [`c916ed5af1c6818c74fb86cc05a18e51ecc1fcb1`](https://github.com/hyperium/h3/commit/c916ed5af1c6818c74fb86cc05a18e51ecc1fcb1).
+  Extend the same backpressure to DATA bodies: drain buffered bytes before polling QUIC again, preventing
+  accumulating read-ahead and quadratic cursor walks. Upstream's changelog still ends at 0.0.8; master contains
+  #344 but still polls QUIC first in `poll_data`. The broader [PR #328](https://github.com/hyperium/h3/pull/328)
+  reworks buffering; [issue #386](https://github.com/hyperium/h3/issues/386) tracks truncated DATA. Propose the
+  DATA-body extension upstream; it has not been submitted. Drop the frame-header backport when upgrading past
+  #344, and recheck the DATA extension separately. Truncated finite DATA returns `H3_FRAME_ERROR` rather than
+  clean EOF (RFC 9114 section 7.1); an explicit unframed marker preserves WebTransport EOF. Public-API regressions
+  are in `crates/proxy/tests/h3_read_ahead.rs`; xhttp's lifecycle test checks error propagation without a panic.
 
 - `src/config.rs`, `src/client/builder.rs`: a default-off legacy HTTP datagram switch advertises `0x276: 1`
   for MASQUE peers, alongside the standard setting. The default encoding is unchanged. The byte-level QUIC

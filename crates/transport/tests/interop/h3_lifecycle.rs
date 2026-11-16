@@ -214,3 +214,33 @@ async fn xhttp_h3_peer_reset_preserves_connection_reset_kind() {
     serve.await.unwrap();
     peer.abort();
 }
+
+#[tokio::test]
+async fn xhttp_h3_truncated_data_is_an_error_without_a_panic() {
+    let (dial, mut connections, _, peer) = manual_peer();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let serve = tokio::spawn(async move {
+        let conn = connections.recv().await.unwrap();
+        let mut control = conn.open_uni().await.unwrap();
+        control.write_all(&[0, 4, 0]).await.unwrap();
+        let (mut send, _recv) = conn.accept_bi().await.unwrap();
+        // RFC 9204 static :status=200, then DATA declaring 16 bytes but carrying only ten.
+        send.write_all(&[1, 3, 0, 0, 0xd9, 0, 16]).await.unwrap();
+        send.write_all(&[42; 10]).await.unwrap();
+        send.finish().unwrap();
+        let _ = release_rx.await;
+    });
+    let client = client(dial, "stream-one");
+    let mut stream = client.dial().await.unwrap();
+    let mut body = Vec::new();
+    let err = tokio::time::timeout(Duration::from_secs(10), stream.read_to_end(&mut body))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(err.to_string().contains("H3_FRAME_ERROR"), "{err}");
+    let _ = release_tx.send(());
+    drop(stream);
+    client.close();
+    serve.await.unwrap();
+    peer.abort();
+}

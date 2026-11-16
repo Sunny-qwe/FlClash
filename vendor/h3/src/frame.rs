@@ -25,6 +25,8 @@ pub struct FrameStream<S, B> {
     // Already read data from the stream
     decoder: FrameDecoder,
     remaining_data: usize,
+    // Concord: lazy reads must distinguish truncated DATA from unframed WebTransport EOF.
+    unframed: bool,
 }
 
 impl<S, B> FrameStream<S, B> {
@@ -33,6 +35,7 @@ impl<S, B> FrameStream<S, B> {
             stream,
             decoder: FrameDecoder::default(),
             remaining_data: 0,
+            unframed: false,
         }
     }
 
@@ -60,33 +63,36 @@ where
         );
 
         loop {
-            let end = self.try_recv(cx)?;
-
-            return match self.decoder.decode(self.stream.buf_mut())? {
+            // Concord: eager transport reads accumulate chunks and make Cursor walks grow with the stream.
+            match self.decoder.decode(self.stream.buf_mut())? {
                 Some(Frame::Data(PayloadLen(len))) => {
                     self.remaining_data = len;
-                    Poll::Ready(Ok(Some(Frame::Data(PayloadLen(len)))))
+                    self.unframed = false;
+                    return Poll::Ready(Ok(Some(Frame::Data(PayloadLen(len)))));
                 }
                 frame @ Some(Frame::WebTransportStream(_)) => {
                     self.remaining_data = usize::MAX;
-                    Poll::Ready(Ok(frame))
+                    self.unframed = true;
+                    return Poll::Ready(Ok(frame));
                 }
-                Some(frame) => Poll::Ready(Ok(Some(frame))),
-                None => match end {
-                    // Received a chunk but frame is incomplete, poll until we get `Pending`.
-                    Poll::Ready(false) => continue,
-                    Poll::Pending => Poll::Pending,
-                    Poll::Ready(true) => {
-                        if self.stream.buf_mut().has_remaining() {
-                            // Reached the end of receive stream, but there is still some data:
-                            // The frame is incomplete.
-                            Poll::Ready(Err(FrameStreamError::UnexpectedEnd))
-                        } else {
-                            Poll::Ready(Ok(None))
-                        }
+                Some(frame) => return Poll::Ready(Ok(Some(frame))),
+                None => {}
+            }
+
+            match self.try_recv(cx)? {
+                // Received a chunk but the frame is incomplete, poll until we get `Pending`.
+                Poll::Ready(false) => continue,
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(true) => {
+                    if self.stream.buf_mut().has_remaining() {
+                        // Reached the end of receive stream, but there is still some data:
+                        // The frame is incomplete.
+                        return Poll::Ready(Err(FrameStreamError::UnexpectedEnd));
+                    } else {
+                        return Poll::Ready(Ok(None));
                     }
-                },
-            };
+                }
+            }
         }
     }
 
@@ -102,24 +108,33 @@ where
             return Poll::Ready(Ok(None));
         };
 
-        let end = match self.try_recv(cx) {
-            Poll::Ready(Ok(end)) => end,
-            Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-            Poll::Pending => false,
+        // Concord: do not add a transport chunk for every already-buffered DATA fragment.
+        let end = if self.stream.buf().has_remaining() {
+            self.stream.is_eos()
+        } else {
+            match self.try_recv(cx) {
+                Poll::Ready(Ok(end)) => end,
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                Poll::Pending => false,
+            }
         };
         let data = self.stream.buf_mut().take_chunk(self.remaining_data);
 
         match (data, end) {
-            (None, true) => Poll::Ready(Ok(None)),
+            (None, true) if self.unframed => Poll::Ready(Ok(None)),
+            (None, true) => Poll::Ready(Err(FrameStreamError::UnexpectedEnd)),
             (None, false) => Poll::Pending,
             (Some(d), true)
-                if d.remaining() < self.remaining_data
+                if !self.unframed
+                    && d.remaining() < self.remaining_data
                     && !self.stream.buf_mut().has_remaining() =>
             {
                 Poll::Ready(Err(FrameStreamError::UnexpectedEnd))
             }
             (Some(d), _) => {
-                self.remaining_data -= d.remaining();
+                if !self.unframed {
+                    self.remaining_data -= d.remaining();
+                }
                 Poll::Ready(Ok(Some(d)))
             }
         }
@@ -192,11 +207,13 @@ where
                 stream: send,
                 decoder: FrameDecoder::default(),
                 remaining_data: 0,
+                unframed: false,
             },
             FrameStream {
                 stream: recv,
                 decoder: self.decoder,
                 remaining_data: self.remaining_data,
+                unframed: self.unframed,
             },
         )
     }
