@@ -2,6 +2,7 @@ mod bbr;
 mod congestion;
 mod datagram;
 mod obfs;
+mod shared;
 mod socket;
 
 use std::io;
@@ -33,6 +34,7 @@ pub(crate) use self::bbr::{BbrProfile, factory as bbr_factory};
 pub(crate) use self::congestion::{Brutal, SwitchFactory};
 use self::datagram::CappedFrame;
 use self::obfs::{Gecko, Salamander, WeChat, XPlus};
+pub(crate) use self::shared::{DatagramHub, SharedConn};
 pub(crate) use self::socket::Hop;
 use self::socket::Obfs;
 use self::socket::WrappedSocket;

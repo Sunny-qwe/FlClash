@@ -20,7 +20,6 @@ use concord_config::proxy::{HysteriaOpts, ProxyDef};
 use quinn::congestion::ControllerFactory;
 use quinn::{IdleTimeout, SendStream, TransportConfig, VarInt};
 use tokio::io::AsyncWriteExt;
-use tokio::task::JoinHandle;
 
 use self::stream::FastOpen;
 use self::udp::{Hub, Hy1Packets};
@@ -29,9 +28,10 @@ use crate::ctx::{BuildCtx, BuildError};
 use crate::link::EnvSlot;
 use crate::node::{Egress, info_for};
 use crate::quic::{
-    Brutal, Hop, ObfsSpec, QuicConn, QuicLink, QuicStream, SwitchFactory, io_error, quic_crypto,
+    Brutal, Hop, ObfsSpec, QuicConn, QuicLink, QuicStream, SharedConn, SwitchFactory, io_error,
+    quic_crypto,
 };
-use crate::session_slot::{SessionSlot, overtaken};
+use crate::session_slot::SessionSlot;
 use crate::tlsmap::{TlsSpec, tls_options};
 use crate::util::{parse_bps, parse_ports};
 
@@ -53,22 +53,17 @@ const CLOSE_PROTOCOL: u32 = 1;
 const CLOSE_AUTH: u32 = 2;
 
 struct Hy1Conn {
-    quic: QuicConn,
-    hub: Arc<Hub>,
-    reader: JoinHandle<()>,
+    shared: SharedConn<Hub>,
     _control: QuicStream,
-}
-
-impl Drop for Hy1Conn {
-    fn drop(&mut self) {
-        self.reader.abort();
-        self.hub.close_all();
-    }
 }
 
 impl Hy1Conn {
     fn alive(&self) -> bool {
-        self.quic.conn.close_reason().is_none()
+        self.shared.alive()
+    }
+
+    fn close(&self) {
+        self.shared.close();
     }
 }
 
@@ -121,39 +116,21 @@ impl Hysteria {
                 return Err(err);
             }
         };
-        let hub = Arc::new(Hub::default());
-        let reader = {
-            let (conn, hub) = (quic.conn.clone(), hub.clone());
-            tokio::spawn(async move {
-                while let Ok(datagram) = conn.read_datagram().await {
-                    hub.dispatch(&datagram);
-                }
-                hub.close_all();
-            })
-        };
         Ok(Arc::new(Hy1Conn {
-            quic,
-            hub,
-            reader,
+            shared: SharedConn::new(quic, Hub::default()),
             _control: control,
         }))
     }
 
     async fn offer(&self, cx: &DialCx<'_>) -> io::Result<Arc<Hy1Conn>> {
-        if let (Some(conn), _) = self.current.get(Hy1Conn::alive) {
-            return Ok(conn);
-        }
-        let _turn = self.connecting.lock().await;
-        let (held, ticket) = self.current.get(Hy1Conn::alive);
-        if let Some(conn) = held {
-            return Ok(conn);
-        }
-        let conn = self.establish(cx).await?;
-        if !self.current.keep(ticket, &conn) {
-            conn.quic.conn.close(VarInt::from_u32(0), b"");
-            return Err(overtaken());
-        }
-        Ok(conn)
+        self.current
+            .offer(
+                &self.connecting,
+                Hy1Conn::alive,
+                || self.establish(cx),
+                Hy1Conn::close,
+            )
+            .await
     }
 
     fn forget(&self, conn: &Arc<Hy1Conn>) {
@@ -169,7 +146,7 @@ impl Hysteria {
         let mut last = None;
         for _ in 0..2 {
             let conn = self.offer(cx).await?;
-            match conn.quic.conn.open_bi().await {
+            match conn.shared.quic.conn.open_bi().await {
                 Ok((send, recv)) => return Ok((conn, send, recv)),
                 Err(err) => {
                     self.forget(&conn);
@@ -231,8 +208,8 @@ impl Outbound for Hysteria {
             )));
         }
         Ok(Arc::new(Hy1Packets::new(
-            conn.quic.conn.clone(),
-            conn.hub.clone(),
+            conn.shared.quic.conn.clone(),
+            conn.shared.hub.clone(),
             response.session,
             stream,
             conn,
@@ -241,7 +218,7 @@ impl Outbound for Hysteria {
 
     fn reset_sessions(&self) {
         if let Some(conn) = self.current.reset() {
-            conn.quic.conn.close(VarInt::from_u32(0), b"");
+            conn.close();
         }
     }
 }

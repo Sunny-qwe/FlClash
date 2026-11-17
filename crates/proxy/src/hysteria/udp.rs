@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use super::wire::{Defrag, UdpHeader, parse_udp, put_udp_header, udp_header_len};
-use crate::quic::QuicStream;
+use crate::quic::{DatagramHub, QuicStream};
 use crate::util::lock;
 
 const QUEUE: usize = 64;
@@ -36,12 +36,14 @@ impl Hub {
     pub(super) fn remove(&self, id: u32) {
         lock(&self.sessions).remove(&id);
     }
+}
 
-    pub(super) fn close_all(&self) {
+impl DatagramHub for Hub {
+    fn close_all(&self) {
         lock(&self.sessions).clear();
     }
 
-    pub(super) fn dispatch(&self, datagram: &[u8]) {
+    fn dispatch(&self, datagram: &Bytes) {
         let Ok(message) = parse_udp(datagram) else {
             return;
         };

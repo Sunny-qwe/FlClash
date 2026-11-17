@@ -31,7 +31,7 @@ use crate::quic::{
     BbrProfile, Brutal, Crypto, ObfsSpec, QuicConn, QuicLink, QuicStream, SwitchFactory,
     bbr_factory, io_error,
 };
-use crate::session_slot::{SessionSlot, overtaken};
+use crate::session_slot::SessionSlot;
 use crate::util::parse_bps;
 
 const DEFAULT_STREAM_WINDOW: u64 = 15_728_640;
@@ -174,20 +174,14 @@ impl ShadowQuic {
     }
 
     async fn offer(&self, cx: &DialCx<'_>) -> io::Result<Arc<SqConn>> {
-        if let (Some(conn), _) = self.current.get(SqConn::alive) {
-            return Ok(conn);
-        }
-        let _turn = self.connecting.lock().await;
-        let (held, ticket) = self.current.get(SqConn::alive);
-        if let Some(conn) = held {
-            return Ok(conn);
-        }
-        let conn = self.establish(cx).await?;
-        if !self.current.keep(ticket, &conn) {
-            conn.quic.conn.close(VarInt::from_u32(0), b"");
-            return Err(overtaken());
-        }
-        Ok(conn)
+        self.current
+            .offer(
+                &self.connecting,
+                SqConn::alive,
+                || self.establish(cx),
+                |conn| conn.quic.conn.close(VarInt::from_u32(0), b""),
+            )
+            .await
     }
 
     fn forget(&self, conn: &Arc<SqConn>) {

@@ -17,7 +17,6 @@ use concord_config::proxy::{Hysteria2Opts, ProxyDef};
 use quinn::congestion::ControllerFactory;
 use quinn::{IdleTimeout, TransportConfig, VarInt};
 use tokio::sync::watch;
-use tokio::task::JoinHandle;
 
 use self::realm::Realm;
 use self::stream::Hy2Stream;
@@ -27,10 +26,10 @@ use crate::lazy::{HeadFirst, Kick};
 use crate::link::EnvSlot;
 use crate::node::{Egress, info_for};
 use crate::quic::{
-    BbrProfile, Brutal, Hop, ObfsSpec, QuicConn, QuicLink, QuicStream, SwitchFactory, bbr_factory,
-    io_error, quic_crypto,
+    BbrProfile, Brutal, Hop, ObfsSpec, QuicLink, QuicStream, SharedConn, SwitchFactory,
+    bbr_factory, io_error, quic_crypto,
 };
-use crate::session_slot::{SessionSlot, Ticket, overtaken};
+use crate::session_slot::{SessionSlot, Ticket};
 use crate::tlsmap::{TlsSpec, tls_options};
 use crate::util::{lock, parse_bps, parse_ports};
 
@@ -48,22 +47,17 @@ const AUTH_OK: u16 = 233;
 const DEFAULT_CWND: u32 = 32;
 
 struct Hy2Conn {
-    quic: QuicConn,
-    hub: Arc<Hub>,
+    shared: SharedConn<Hub>,
     udp: bool,
-    reader: JoinHandle<()>,
-}
-
-impl Drop for Hy2Conn {
-    fn drop(&mut self) {
-        self.reader.abort();
-        self.hub.close_all();
-    }
 }
 
 impl Hy2Conn {
     fn alive(&self) -> bool {
-        self.quic.conn.close_reason().is_none()
+        self.shared.alive()
+    }
+
+    fn close(&self) {
+        self.shared.close();
     }
 }
 
@@ -176,46 +170,28 @@ impl Hysteria2 {
         {
             switch.replace_brutal(Brutal::hysteria2(rate, quic.conn.rtt(), Instant::now()));
         }
-        let hub = Arc::new(Hub::default());
-        let reader = {
-            let (conn, hub) = (quic.conn.clone(), hub.clone());
-            tokio::spawn(async move {
-                while let Ok(datagram) = conn.read_datagram().await {
-                    hub.dispatch(&datagram);
-                }
-                hub.close_all();
-            })
-        };
         Ok(Arc::new(Hy2Conn {
-            quic,
-            hub,
+            shared: SharedConn::new(quic, Hub::default()),
             udp: reply.udp,
-            reader,
         }))
     }
 
-    fn live(&self) -> Option<Arc<Hy2Conn>> {
-        self.current.get(Hy2Conn::alive).0
-    }
-
     async fn offer(&self, cx: &DialCx<'_>) -> io::Result<Arc<Hy2Conn>> {
-        if let Some(conn) = self.live() {
+        let Some(limit) = self.handshake_timeout else {
+            return self
+                .current
+                .offer(
+                    &self.connecting,
+                    Hy2Conn::alive,
+                    || self.establish(cx),
+                    Hy2Conn::close,
+                )
+                .await;
+        };
+        if let (Some(conn), _) = self.current.get(Hy2Conn::alive) {
             return Ok(conn);
         }
-        if let Some(limit) = self.handshake_timeout {
-            return self.shared_offer(cx, limit).await;
-        }
-        let _turn = self.connecting.lock().await;
-        let (held, ticket) = self.current.get(Hy2Conn::alive);
-        if let Some(conn) = held {
-            return Ok(conn);
-        }
-        let conn = self.establish(cx).await?;
-        if !self.current.keep(ticket, &conn) {
-            conn.quic.conn.close(VarInt::from_u32(0), b"");
-            return Err(overtaken());
-        }
-        Ok(conn)
+        self.shared_offer(cx, limit).await
     }
 
     /// sing-quic's offer with a handshake timeout: the handshake runs on its own under
@@ -263,14 +239,9 @@ impl Hysteria2 {
             let result = tokio::time::timeout(limit, me.establish(&cx))
                 .await
                 .unwrap_or_else(|_| Err(io::Error::from(io::ErrorKind::TimedOut)));
-            let outcome = match result {
-                Ok(conn) if me.current.keep(ticket, &conn) => Ok(conn),
-                Ok(conn) => {
-                    conn.quic.conn.close(VarInt::from_u32(0), b"");
-                    Err(Arc::new(overtaken()))
-                }
-                Err(err) => Err(Arc::new(err)),
-            };
+            let outcome = result
+                .and_then(|conn| me.current.adopt(ticket, conn, Hy2Conn::close))
+                .map_err(Arc::new);
             {
                 let mut pending = lock(&me.pending);
                 if pending
@@ -294,7 +265,7 @@ impl Outbound for Hysteria2 {
 
     async fn connect(&self, cx: &DialCx<'_>, dst: &Address) -> io::Result<BoxStream> {
         let conn = self.offer(cx).await?;
-        let (send, recv) = conn.quic.conn.open_bi().await.map_err(io_error)?;
+        let (send, recv) = conn.shared.quic.conn.open_bi().await.map_err(io_error)?;
         let head = wire::tcp_request(&dst.to_string());
         let stream = HeadFirst::new(QuicStream::new(send, recv, Box::new(conn)), head);
         Ok(Box::new(Kick::new(Hy2Stream::new(stream))))
@@ -310,8 +281,8 @@ impl Outbound for Hysteria2 {
             return Err(io::Error::other("UDP disabled by server"));
         }
         Ok(Arc::new(Hy2Packets::new(
-            conn.quic.conn.clone(),
-            conn.hub.clone(),
+            conn.shared.quic.conn.clone(),
+            conn.shared.hub.clone(),
             self.udp_mtu,
             conn,
         )))
@@ -320,7 +291,7 @@ impl Outbound for Hysteria2 {
     fn reset_sessions(&self) {
         *lock(&self.pending) = None;
         if let Some(conn) = self.current.reset() {
-            conn.quic.conn.close(VarInt::from_u32(0), b"");
+            conn.close();
         }
     }
 }
