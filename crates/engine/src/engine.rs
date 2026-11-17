@@ -44,9 +44,9 @@ use crate::probe::{Prober, RouteHit};
 use crate::probe_env::TunnelProbes;
 use crate::resources::{self, GeoUpdater, GeoUrls, TunnelFetcher};
 use crate::route::RouteCounters;
-use crate::tun::{KeepOffDevice, congestion_of, options_of, start_runner, stop_runner};
 #[cfg(unix)]
-use crate::tun::{VpnTunRequest, vpn_options};
+use crate::tun::{InheritedTun, vpn_options};
+use crate::tun::{KeepOffDevice, congestion_of, options_of, start_runner, stop_runner};
 use crate::views::*;
 
 #[cfg_attr(not(feature = "mitm"), path = "engine/mitm_disabled.rs")]
@@ -78,6 +78,7 @@ pub struct TunPatch {
     pub auto_route: Option<bool>,
 }
 
+#[derive(Default)]
 pub struct UpdateRequest {
     pub tun: Option<TunPatch>,
     pub allow_lan: Option<bool>,
@@ -621,13 +622,12 @@ impl Engine {
 
     /// `handleStartTun`. Takes the descriptor: it is closed on every failing path.
     #[cfg(unix)]
-    pub async fn start_vpn_tun(&self, fd: OwnedFd, request: VpnTunRequest) -> bool {
+    pub(crate) async fn start_vpn_tun(&self, fd: OwnedFd, tun: &InheritedTun) -> bool {
         self.shared.sockets.protect_held().await;
         let started = {
             let mut slot = self.tun.lock().await;
             self.close_tun(&mut slot).await;
-            let built = vpn_options(&request);
-            match built {
+            match vpn_options(tun) {
                 Ok((options, congestion)) => {
                     match start_runner(
                         &self.shared.tunnel,

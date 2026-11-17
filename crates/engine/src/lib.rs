@@ -31,7 +31,8 @@ pub use faults::{Service, ServiceFault};
 pub use probe::RouteHit;
 pub use route::RouteCounters;
 #[cfg(unix)]
-pub use tun::VpnTunRequest;
+pub use tun::InheritedTun;
+pub use tun::TunStartError;
 pub use views::*;
 
 pub use concord_tunnel::ExplainFlow;

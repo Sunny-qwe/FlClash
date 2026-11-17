@@ -360,28 +360,6 @@ impl Rig {
     }
 }
 
-fn empty_update() -> UpdateRequest {
-    UpdateRequest {
-        tun: None,
-        allow_lan: None,
-        bind_address: None,
-        lan_allowed_ips: None,
-        lan_disallowed_ips: None,
-        mixed_port: None,
-        find_process_mode: None,
-        mode: None,
-        log_level: None,
-        ipv6: None,
-        tcp_concurrent: None,
-        unified_delay: None,
-        authentication: None,
-        geo_auto_update: None,
-        geo_update_interval: None,
-        geox_url: BTreeMap::new(),
-        options: None,
-    }
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_flow_goes_direct_and_shows_in_the_connection_table() {
     let echo = tcp_echo().await;
@@ -1125,8 +1103,10 @@ async fn a_live_update_changes_the_mode_and_the_route_stamp() {
     assert!(refused(rig.mixed, echo).await);
 
     let before = rig.engine.watch_route(true).stamp;
-    let mut request = empty_update();
-    request.mode = Some("direct".to_string());
+    let request = UpdateRequest {
+        mode: Some("direct".to_string()),
+        ..UpdateRequest::default()
+    };
     rig.engine.update(request).await.unwrap();
     let after = rig.engine.watch_route(true).stamp;
     assert_eq!(after.epoch, before.epoch);
@@ -1135,8 +1115,10 @@ async fn a_live_update_changes_the_mode_and_the_route_stamp() {
     let mut stream = socks_connect(rig.mixed, echo).await.unwrap();
     round_trip(&mut stream).await;
 
-    let mut request = empty_update();
-    request.ipv6 = Some(false);
+    let request = UpdateRequest {
+        ipv6: Some(false),
+        ..UpdateRequest::default()
+    };
     rig.engine.update(request).await.unwrap();
     let moved = rig.engine.watch_route(false).stamp;
     assert_eq!(
@@ -1169,27 +1151,35 @@ async fn the_lan_keys_bind_and_filter_the_listeners() {
     let mut stream = socks_connect(rig.mixed, echo).await.unwrap();
     round_trip(&mut stream).await;
 
-    let mut request = empty_update();
-    request.lan_disallowed_ips = Some(vec!["127.0.0.1/32".to_string()]);
+    let request = UpdateRequest {
+        lan_disallowed_ips: Some(vec!["127.0.0.1/32".to_string()]),
+        ..UpdateRequest::default()
+    };
     rig.engine.update(request).await.unwrap();
     assert!(refused(rig.mixed, echo).await, "the deny list wins");
 
-    let mut request = empty_update();
-    request.allow_lan = Some(false);
-    request.bind_address = Some("192.0.2.1".to_string());
+    let request = UpdateRequest {
+        allow_lan: Some(false),
+        bind_address: Some("192.0.2.1".to_string()),
+        ..UpdateRequest::default()
+    };
     rig.engine.update(request).await.unwrap();
     assert!(
         refused(rig.mixed, echo).await,
         "the lists hold without the LAN"
     );
-    let mut request = empty_update();
-    request.lan_disallowed_ips = Some(Vec::new());
+    let request = UpdateRequest {
+        lan_disallowed_ips: Some(Vec::new()),
+        ..UpdateRequest::default()
+    };
     rig.engine.update(request).await.unwrap();
     let mut stream = socks_connect(rig.mixed, echo).await.unwrap();
     round_trip(&mut stream).await;
 
-    let mut request = empty_update();
-    request.lan_allowed_ips = Some(vec!["10.0.0.0/8".to_string(), "127.0.0.1".to_string()]);
+    let request = UpdateRequest {
+        lan_allowed_ips: Some(vec!["10.0.0.0/8".to_string(), "127.0.0.1".to_string()]),
+        ..UpdateRequest::default()
+    };
     let failure = rig.engine.update(request).await.unwrap_err();
     assert_eq!(failure.code, "invalid_arguments");
     let general = rig.engine.general().await.unwrap();
@@ -1201,7 +1191,11 @@ async fn the_lan_keys_bind_and_filter_the_listeners() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_update_before_any_config_is_refused() {
     let rig = Rig::new();
-    let failure = rig.engine.update(empty_update()).await.unwrap_err();
+    let failure = rig
+        .engine
+        .update(UpdateRequest::default())
+        .await
+        .unwrap_err();
     assert_eq!(failure.message, "config is not applied");
     rig.engine.shutdown().await;
 }

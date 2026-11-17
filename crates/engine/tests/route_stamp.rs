@@ -86,28 +86,6 @@ impl Rig {
     }
 }
 
-fn empty_update() -> UpdateRequest {
-    UpdateRequest {
-        tun: None,
-        allow_lan: None,
-        bind_address: None,
-        lan_allowed_ips: None,
-        lan_disallowed_ips: None,
-        mixed_port: None,
-        find_process_mode: None,
-        mode: None,
-        log_level: None,
-        ipv6: None,
-        tcp_concurrent: None,
-        unified_delay: None,
-        authentication: None,
-        geo_auto_update: None,
-        geo_update_interval: None,
-        geox_url: BTreeMap::new(),
-        options: None,
-    }
-}
-
 async fn http_body(body: &'static str) -> SocketAddr {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -203,8 +181,10 @@ async fn repeating_a_mode_moves_the_route_once_and_a_pick_never_moves_the_epoch(
     let before = rig.stamp();
 
     for _ in 0..2 {
-        let mut request = empty_update();
-        request.mode = Some("global".to_string());
+        let request = UpdateRequest {
+            mode: Some("global".to_string()),
+            ..UpdateRequest::default()
+        };
         rig.engine.update(request).await.unwrap();
     }
     let after_mode = rig.stamp();

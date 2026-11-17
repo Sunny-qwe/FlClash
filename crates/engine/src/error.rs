@@ -30,6 +30,14 @@ impl Failure {
     }
 }
 
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Failure {}
+
 impl From<std::io::Error> for Failure {
     fn from(err: std::io::Error) -> Self {
         Failure::core(err.to_string())
