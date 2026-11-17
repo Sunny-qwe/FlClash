@@ -17,6 +17,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use crate::client::{BoxIo, Client, Params, checked, decode, encode, with_random_id, with_timeout};
 use crate::dialer::{Connector, Cx};
 use crate::dot::{server_name, tls_connector};
+use crate::session::SessionSlot;
 
 const MAX_BODY: usize = 65_535;
 const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -83,7 +84,7 @@ pub(crate) struct DohClient {
     target: DohTarget,
     connector: Arc<Connector>,
     tls: Option<tokio_rustls::TlsConnector>,
-    h2: Mutex<Option<http2::SendRequest<Body>>>,
+    h2: SessionSlot<http2::SendRequest<Body>>,
     h1: Mutex<Vec<http1::SendRequest<Body>>>,
 }
 
@@ -107,27 +108,40 @@ impl DohClient {
             target,
             connector,
             tls,
-            h2: Mutex::new(None),
+            h2: SessionSlot::new(),
             h1: Mutex::new(Vec::new()),
         })
     }
 
-    fn cached(&self) -> Option<Sender> {
-        {
-            let mut slot = lock(&self.h2);
-            match slot.as_ref() {
-                Some(sender) if !sender.is_closed() => return Some(Sender::H2(sender.clone())),
-                Some(_) => *slot = None,
-                None => {}
-            }
-        }
-        let mut idle = lock(&self.h1);
-        while let Some(sender) = idle.pop() {
-            if !sender.is_closed() {
-                return Some(Sender::H1(sender));
-            }
-        }
-        None
+    async fn sender(&self, cx: Cx) -> io::Result<(Sender, bool)> {
+        self.h2
+            .get(
+                |slot| {
+                    match slot.as_ref() {
+                        Some(sender) if !sender.is_closed() => {
+                            return Some(Sender::H2(sender.clone()));
+                        }
+                        Some(_) => *slot = None,
+                        None => {}
+                    }
+                    let mut idle = lock(&self.h1);
+                    while let Some(sender) = idle.pop() {
+                        if !sender.is_closed() {
+                            return Some(Sender::H1(sender));
+                        }
+                    }
+                    None
+                },
+                async {
+                    let sender = self.dial(cx).await?;
+                    let session = match &sender {
+                        Sender::H2(sender) => Some(sender.clone()),
+                        Sender::H1(_) => None,
+                    };
+                    Ok((sender, session))
+                },
+            )
+            .await
     }
 
     async fn dial(&self, cx: Cx) -> io::Result<Sender> {
@@ -157,10 +171,6 @@ impl DohClient {
             tokio::spawn(async move {
                 let _ = conn.await;
             });
-            {
-                let mut slot = lock(&self.h2);
-                *slot = Some(sender.clone());
-            }
             Ok(Sender::H2(sender))
         } else {
             let (sender, conn) = http1::handshake(TokioIo::new(io))
@@ -232,13 +242,10 @@ impl Client for DohClient {
         query.metadata.id = 0;
         let bytes = encode(&query)?;
         with_timeout(async {
-            let mut sender = self.cached();
             let mut attempts = 0;
             loop {
-                let (current, reused) = match sender.take() {
-                    Some(current) => (current, true),
-                    None => (self.dial(cx).await?, false),
-                };
+                let (current, cached) = self.sender(cx).await?;
+                let reused = attempts == 0 && cached;
                 let answer = self
                     .round_trip(current, &bytes)
                     .await
@@ -273,10 +280,7 @@ impl Client for DohClient {
     }
 
     fn reset(&self) {
-        {
-            let mut slot = lock(&self.h2);
-            *slot = None;
-        }
+        self.h2.take();
         {
             let mut idle = lock(&self.h1);
             idle.clear();

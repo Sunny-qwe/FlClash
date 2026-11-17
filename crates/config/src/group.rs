@@ -1,12 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
+use serde_json::Value;
 
 use crate::Map;
 use crate::error::{ConfigError, Result};
 use crate::filter;
 use crate::lenient::{Fields, Ignored};
 use crate::net::parse_unsigned_ranges;
+use crate::proxy::ProxyDef;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroupKind {
@@ -52,10 +54,15 @@ pub struct GroupDef {
     pub use_providers: Vec<String>,
     pub use_position: IndexMap<String, i32>,
     pub url: String,
+    /// Only a nonempty YAML string overrides the runtime's test URL.
+    pub explicit_url: Option<String>,
     pub interval: u32,
+    /// Kept before group defaults; base-0 strings and floats are not decimal zero here.
+    pub interval_is_zero: bool,
     pub timeout: u32,
     pub max_failed_times: u32,
     pub empty_fallback: String,
+    pub explicit_empty_fallback: bool,
     pub lazy: bool,
     pub disable_udp: bool,
     pub filter: String,
@@ -73,11 +80,25 @@ pub struct GroupDef {
     pub hash_key: String,
     /// Keys a group does not have, which mihomo logs and drops.
     pub ignored: Vec<Ignored>,
-    pub raw: Map,
+    pub builtin_global: bool,
 }
 
 fn format_error() -> ConfigError {
     ConfigError::new("format error")
+}
+
+fn interval_is_zero(map: &Map) -> bool {
+    match map.get("interval") {
+        None | Some(Value::Null) => true,
+        Some(Value::String(text)) => text.trim().parse::<u64>().is_ok_and(|n| n == 0),
+        Some(value) => value.as_u64() == Some(0),
+    }
+}
+
+fn explicit_text<'a>(map: &'a Map, key: &str) -> Option<&'a str> {
+    map.get(key)
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
 }
 
 pub fn parse_group(map: &Map) -> Result<GroupDef> {
@@ -110,10 +131,13 @@ pub fn parse_group(map: &Map) -> Result<GroupDef> {
         use_providers: f.strings("use").map_err(decode)?,
         use_position,
         url: f.string("url").map_err(decode)?,
+        explicit_url: explicit_text(map, "url").map(str::to_string),
         interval: f.u32("interval").map_err(decode)?,
+        interval_is_zero: interval_is_zero(map),
         timeout: f.u32("timeout").map_err(decode)?,
         max_failed_times: f.u32("max-failed-times").map_err(decode)?,
         empty_fallback: f.string("empty-fallback").map_err(decode)?,
+        explicit_empty_fallback: explicit_text(map, "empty-fallback").is_some(),
         lazy: f.opt_bool("lazy").map_err(decode)?.unwrap_or(true),
         disable_udp: f.boolean("disable-udp").map_err(decode)?,
         filter: f.string("filter").map_err(decode)?,
@@ -130,7 +154,7 @@ pub fn parse_group(map: &Map) -> Result<GroupDef> {
         strategy: LbStrategy::default(),
         hash_key: String::new(),
         ignored: Vec::new(),
-        raw: map.clone(),
+        builtin_global: false,
     };
     def.kind = match type_name.as_str() {
         "select" => GroupKind::Select,
@@ -187,11 +211,10 @@ pub fn parse_group(map: &Map) -> Result<GroupDef> {
     }
     parse_unsigned_ranges(&def.expected_status, u64::from(u16::MAX))
         .map_err(|err| ConfigError::new(format!("{name}: {}", err.message)))?;
-    if def.expected_status.trim().is_empty() {
-        def.expected_status = "*".to_string();
-    } else {
-        def.expected_status = def.expected_status.trim().to_string();
-    }
+    def.expected_status = match def.expected_status.trim() {
+        "" => "*".to_string(),
+        text => text.to_string(),
+    };
     for key in ["routing-mark", "interface-name", "dialer-proxy"] {
         f.ignore(key, "a group does not dial, so set it on the nodes");
     }
@@ -200,6 +223,44 @@ pub fn parse_group(map: &Map) -> Result<GroupDef> {
 }
 
 impl GroupDef {
+    pub(crate) fn global(proxies: &[ProxyDef], groups: &[GroupDef], url: &str) -> Self {
+        let mut members = vec!["DIRECT".to_string(), "REJECT".to_string()];
+        members.extend(proxies.iter().map(|p| p.name.clone()));
+        members.extend(groups.iter().map(|g| g.name.clone()));
+        GroupDef {
+            name: "GLOBAL".to_string(),
+            kind: GroupKind::Select,
+            proxies: members,
+            use_providers: Vec::new(),
+            use_position: IndexMap::new(),
+            url: url.to_string(),
+            explicit_url: None,
+            interval: 0,
+            interval_is_zero: true,
+            timeout: 0,
+            max_failed_times: 0,
+            empty_fallback: "COMPATIBLE".to_string(),
+            explicit_empty_fallback: false,
+            lazy: true,
+            disable_udp: false,
+            filter: String::new(),
+            exclude_filter: String::new(),
+            exclude_type: String::new(),
+            expected_status: "*".to_string(),
+            include_all: false,
+            include_all_proxies: false,
+            include_all_providers: false,
+            hidden: false,
+            icon: String::new(),
+            tolerance: 0,
+            default_selected: String::new(),
+            strategy: Default::default(),
+            hash_key: String::new(),
+            ignored: Vec::new(),
+            builtin_global: true,
+        }
+    }
+
     /// Adds the nodes `include-all` takes and returns the set-aside ones it matched, which mihomo would hold.
     pub fn take_all_proxies(
         &mut self,

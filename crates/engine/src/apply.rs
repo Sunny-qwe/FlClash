@@ -440,6 +440,8 @@ pub(crate) enum ApplyError {
     },
     #[error(transparent)]
     Outbounds(#[from] GroupError),
+    #[error(transparent)]
+    Build(#[from] tokio::task::JoinError),
 }
 
 pub(crate) async fn load_profile(
@@ -581,8 +583,8 @@ pub(crate) async fn build(
     let dns = build_dns(shared, home, &profile, &rules, &trust, &opts).await?;
 
     let sniffer = Arc::new(sniffer_of(&profile.sniffer, rules.as_ref())?);
-
-    let outbounds = build_outbounds(shared, home, &mut profile, selections, &dns, &trust, &opts)?;
+    let (profile, outbounds) =
+        build_outbounds(shared, home, profile, selections, &dns, &trust, &opts).await?;
 
     shared.sockets.set_ip4p(profile.dialer_ip4p_convert);
     shared
@@ -684,15 +686,15 @@ fn carry_rule_sets(providers: &RuleProviders, previous: &RuleProviders) {
     }
 }
 
-fn build_outbounds(
+async fn build_outbounds(
     shared: &Shared,
     home: &Arc<HomeDir>,
-    profile: &mut Profile,
+    mut profile: Profile,
     selections: Arc<SelectionStore>,
     dns: &Arc<Resolver>,
     trust: &Arc<TrustStore>,
     opts: &SockOpts,
-) -> Result<Arc<Outbounds>, ApplyError> {
+) -> Result<(Profile, Arc<Outbounds>), ApplyError> {
     let env_factory: EnvFactory = {
         let sockets = shared.sockets.clone();
         let resolver: Arc<dyn HostResolver> = dns.clone();
@@ -709,27 +711,27 @@ fn build_outbounds(
             ipv6,
         })
     };
-    let mut ctx = BuildCtx::new(trust.clone()).with_clock({
-        let clock = shared.clock.clone();
-        Arc::new(move || clock.now())
-    });
+    let clock = shared.clock.clone();
+    let mut ctx = BuildCtx::new(trust.clone())
+        .with_home(home.clone())
+        .with_clock(Arc::new(move || clock.now()));
     ctx.loopback = shared.loopback.clone();
-    let ctx = ctx.with_home(home.clone());
-    Outbounds::build(
-        profile,
-        GroupDeps {
-            selections,
-            env: env_factory,
-            fetcher: shared.fetcher.clone(),
-            events: shared.events.clone(),
-            route: Arc::new(Moved(shared.route.clone())),
-            options: shared.options.clone(),
-            home: home.clone(),
-            trust: trust.clone(),
-            factory: Arc::new(ProxyFactory::new(ctx, capabilities())),
-        },
-    )
-    .map_err(ApplyError::from)
+    let deps = GroupDeps {
+        selections,
+        env: env_factory,
+        fetcher: shared.fetcher.clone(),
+        events: shared.events.clone(),
+        route: Arc::new(Moved(shared.route.clone())),
+        options: shared.options.clone(),
+        home: home.clone(),
+        trust: trust.clone(),
+        factory: Arc::new(ProxyFactory::new(ctx, capabilities())),
+    };
+    tokio::task::spawn_blocking(move || {
+        let outbounds = Outbounds::build(&mut profile, deps)?;
+        Ok((profile, outbounds))
+    })
+    .await?
 }
 
 /// Everything an apply of `profile` warns about; `concord -t` reports the same list.

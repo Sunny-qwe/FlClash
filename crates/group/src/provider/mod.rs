@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, SystemTime};
 
 use arc_swap::ArcSwap;
-use concord_common::backoff::provider_backoff as backoff;
+use concord_common::backoff::{provider_backoff as backoff, retry_until_loaded};
 use concord_common::sync::lock;
 use concord_common::{CoreEvent, Fetch, Refresh, ResourceKind, ResourcePhase, ResourceUpdate};
 use concord_config::provider::{ProxyProviderDef, ProxySource, parse_provider_content};
@@ -708,8 +708,21 @@ pub(crate) async fn run(
         }
         (loaded, strong.interval())
     };
-    if initial.is_err() && !retry_until_loaded(&provider, interval, &stop).await {
-        return;
+    if initial.is_err() {
+        let loaded = retry_until_loaded(interval, &stop, || async {
+            let strong = provider.upgrade()?;
+            match strong.reported(strong.pull()).await {
+                Ok(_) => Some(true),
+                Err(err) => {
+                    tracing::warn!("[Provider] {} pull error: {err}", strong.name);
+                    Some(false)
+                }
+            }
+        })
+        .await;
+        if !loaded {
+            return;
+        }
     }
     if interval.is_zero() {
         return;
@@ -739,31 +752,6 @@ pub(crate) async fn run(
         };
         strong.update_with_log().await;
         delay = strong.pull_delay(interval);
-    }
-}
-
-async fn retry_until_loaded(
-    provider: &Weak<ProxyProvider>,
-    interval: Duration,
-    stop: &CancellationToken,
-) -> bool {
-    if interval.is_zero() {
-        return false;
-    }
-    let mut attempt = 0;
-    loop {
-        tokio::select! {
-            _ = stop.cancelled() => return false,
-            _ = tokio::time::sleep(backoff(attempt, interval)) => {}
-        }
-        let Some(strong) = provider.upgrade() else {
-            return false;
-        };
-        match strong.reported(strong.pull()).await {
-            Ok(_) => return true,
-            Err(err) => tracing::warn!("[Provider] {} pull error: {err}", strong.name),
-        }
-        attempt += 1;
     }
 }
 

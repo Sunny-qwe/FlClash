@@ -114,9 +114,14 @@ delivery.
 
 ## Pending Restructure
 
-Still open: move QUIC infrastructure into its own crate; fold `udprelay::UdpCodec` into `dgram`; move the two
-`lock` helpers left in `proxy/src/quic` (`congestion.rs`, `socket.rs`) onto `concord_common::sync::lock`, which the
-rest of the workspace uses. mieru's and AmneziaWG's `invalid` add a protocol prefix and stay local.
+Still open:
+
+- Proxy and transport owners: move the QUIC infrastructure in `proxy/src/quic` into its own crate, preserving
+  the transport and DNS users' dependency direction.
+- Proxy owners: fold `udprelay::UdpCodec` into `dgram`.
+
+`proxy/src/quic/congestion.rs` and `proxy/src/quic/socket.rs` already use `concord_common::sync::lock`.
+mieru's and AmneziaWG's `invalid` add a protocol prefix and stay local.
 
 Settled, not pending: `ss::crypto::CryptoIo` and `SsKey` stay in `ss`, because Trojan's `ss` option is the Shadowsocks
 AEAD stream itself, not a general AEAD layer. The per-protocol counting nonces stay separate: mieru increments
@@ -132,9 +137,6 @@ Found in the structure survey and left to their owners:
 
 - `proxy/src/lazy.rs` spreads the deferred-header state across `HeadFirst`'s stage and `Kick`'s four states. Low
   priority: one state machine when the file next changes.
-- Data-path size and timing constants still without a `reference-choices.md` row (tunnel `FIRST_BYTES_WINDOW`,
-  sniff waits, h2io `PING_TIMEOUT`, xhttp `CHROME_H2_KEEP_ALIVE`). Each protocol's owner: add the row when the
-  constant is next touched.
-- tunnel `MeteredStream` forwards the owned write but leaves `poll_read_buffer` at the copying default; it wraps
-  only the core's own inner dials and the MITM upstream. Tunnel owner: forward the owned read and meter the returned
-  buffer.
+
+The tunnel first-byte window and sniff waits, h2io ping timeout and xhttp keepalive period are registered in
+`reference-choices.md`. `tunnel::tcp::MeteredStream` forwards both owned reads and writes and meters their bytes.

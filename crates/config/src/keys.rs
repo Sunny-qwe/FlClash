@@ -54,6 +54,40 @@ pub const SNIFFER: Tiers = tiers(SNIFFER_T0, SNIFFER_T1, SNIFFER_T2, &[]);
 pub const NTP: Tiers = tiers(NTP_KEYS, &[], &[], &[]);
 pub const GEOX: Tiers = tiers(GEOX_KEYS, &[], GEOX_T2, &[]);
 pub const PROFILE: Tiers = tiers(&["store-fake-ip"], &[], &[], PROFILE_INERT);
+pub const GROUP: Tiers = tiers(
+    GROUP_T0,
+    &[],
+    &["routing-mark", "interface-name", "dialer-proxy"],
+    &[],
+);
+
+pub const GROUP_T0: &[&str] = &[
+    "name",
+    "type",
+    "proxies",
+    "use",
+    "use-position",
+    "url",
+    "interval",
+    "timeout",
+    "max-failed-times",
+    "empty-fallback",
+    "lazy",
+    "disable-udp",
+    "filter",
+    "exclude-filter",
+    "exclude-type",
+    "expected-status",
+    "include-all",
+    "include-all-proxies",
+    "include-all-providers",
+    "hidden",
+    "icon",
+    "tolerance",
+    "default-selected",
+    "strategy",
+    "hash-key",
+];
 
 pub const SECTIONS: [(&str, &Tiers); 8] = [
     ("", &TOP),

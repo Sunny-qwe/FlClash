@@ -18,6 +18,7 @@ mod plain;
 mod query;
 mod record;
 mod resolver;
+mod session;
 mod system;
 #[cfg(test)]
 mod tests;

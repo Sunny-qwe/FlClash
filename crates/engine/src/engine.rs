@@ -22,7 +22,6 @@ use concord_group::{NodeStateView, Outbounds, ProxyViews, SelectionStore, Status
 use concord_inbound::{ListenSpec, Listeners};
 use concord_net::{LoopbackGuard, Sockets};
 use concord_platform::{HomeDir, Platform, mmap};
-use concord_rules::compile_rule_set;
 use concord_rules::geo::GeoStore;
 use concord_tls::TrustStore;
 use concord_tun::{Congestion, DeviceSource, Prefix, TunRunner};
@@ -1117,19 +1116,15 @@ impl Engine {
         let source = home.join("providers").join("rules").join(name);
         let downloaded = !url.is_empty();
         let bytes = if downloaded {
-            resources::download(&*self.shared.fetcher, resources::rule_set_request(url))
-                .await
-                .map_err(|err| request_failure(&err, json!({})))?
+            Some(
+                resources::download(&*self.shared.fetcher, resources::rule_set_request(url))
+                    .await
+                    .map_err(|err| request_failure(&err, json!({})))?,
+            )
         } else {
-            std::fs::read(&source).map_err(Failure::from)?
+            None
         };
-        let allow_empty = !downloaded;
-        let (bytes, compiled) = ops::on_parse_stack(move || {
-            let compiled = compile_rule_set(&bytes, allow_empty);
-            (bytes, compiled)
-        })
-        .await?;
-        let compiled = compiled.map_err(|err| Failure::new(err.code(), err.to_string()))?;
+        let (bytes, compiled) = ops::compile_rule_set(source.clone(), bytes, !downloaded).await?;
         if downloaded {
             home.write_atomic(&source, &bytes)?;
         }

@@ -32,7 +32,6 @@ use crate::shared::Shared;
 use crate::strategy::Strategy;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-const GLOBAL: &str = "GLOBAL";
 
 pub(crate) enum Entry {
     Leaf(Arc<Leaf>),
@@ -134,14 +133,6 @@ fn compile_parts(text: &str, sep: char) -> Result<Vec<Matcher>, GroupError> {
         .collect()
 }
 
-fn raw_interval_is_zero(raw: &concord_config::Map) -> bool {
-    match raw.get("interval") {
-        None | Some(Value::Null) => true,
-        Some(Value::String(text)) => text.trim().parse::<u64>().is_ok_and(|n| n == 0),
-        Some(value) => value.as_u64() == Some(0),
-    }
-}
-
 pub(crate) fn dummy_flow(dst: Address, network: Network) -> FlowMeta {
     FlowMeta {
         dscp: 0,
@@ -225,15 +216,7 @@ impl Builder<'_> {
         }
 
         let shared = self.shared.clone();
-        let raw_text = |key: &str| {
-            def.raw
-                .get(key)
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string()
-        };
-        let explicit_url = raw_text("url");
-        let url = if !explicit_url.is_empty() {
+        let url = if let Some(explicit_url) = &def.explicit_url {
             explicit_url.clone()
         } else {
             uses.iter()
@@ -247,7 +230,7 @@ impl Builder<'_> {
             Some(Entry::Leaf(leaf)) => Some(leaf.clone()),
             _ => None,
         };
-        let explicit_fallback = !raw_text("empty-fallback").is_empty() && fallback_leaf.is_some();
+        let explicit_fallback = def.explicit_empty_fallback && fallback_leaf.is_some();
         let empty_fallback = match fallback_leaf {
             Some(leaf) => leaf,
             None => match self.table.get("COMPATIBLE") {
@@ -299,19 +282,19 @@ impl Builder<'_> {
                 Source::Static(nodes),
             ))
         };
-        if !uses.is_empty() && !explicit_url.is_empty() {
-            let interval = if !own.is_empty()
-                && def.kind != GroupKind::Select
-                && raw_interval_is_zero(&def.raw)
-            {
-                0
-            } else {
-                def.interval
-            };
+        if let Some(explicit_url) = &def.explicit_url
+            && !uses.is_empty()
+        {
+            let interval =
+                if !own.is_empty() && def.kind != GroupKind::Select && def.interval_is_zero {
+                    0
+                } else {
+                    def.interval
+                };
             for provider in &uses {
                 provider
                     .check()
-                    .register_extra(&explicit_url, &expected, &def.filter, interval);
+                    .register_extra(explicit_url, &expected, &def.filter, interval);
             }
         }
 
@@ -432,11 +415,6 @@ impl Outbounds {
             groups.push(builder.group(&def.name)?);
         }
         let table = builder.table;
-        let builtin_global = profile
-            .groups
-            .iter()
-            .any(|def| def.name == GLOBAL && def.raw.is_empty());
-
         let mut checks: Vec<Arc<Check>> = Vec::new();
         for group in &groups {
             checks.extend(group.own_check().cloned());
@@ -451,7 +429,7 @@ impl Outbounds {
                 shared,
                 table,
                 groups,
-                builtin_global,
+                builtin_global: profile.groups.iter().any(|def| def.builtin_global),
                 node_order,
                 providers,
                 checks,

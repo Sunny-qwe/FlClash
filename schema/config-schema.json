@@ -453,5 +453,42 @@
     "url-test",
     "fallback",
     "load-balance"
-  ]
+  ],
+  "proxy-groups": {
+    "t0": [
+      "name",
+      "type",
+      "proxies",
+      "use",
+      "use-position",
+      "url",
+      "interval",
+      "timeout",
+      "max-failed-times",
+      "empty-fallback",
+      "lazy",
+      "disable-udp",
+      "filter",
+      "exclude-filter",
+      "exclude-type",
+      "expected-status",
+      "include-all",
+      "include-all-proxies",
+      "include-all-providers",
+      "hidden",
+      "icon",
+      "tolerance",
+      "default-selected",
+      "strategy",
+      "hash-key"
+    ],
+    "t1": [],
+    "t2": [
+      "routing-mark",
+      "interface-name",
+      "dialer-proxy"
+    ],
+    "inert": [],
+    "defaults": {}
+  }
 }

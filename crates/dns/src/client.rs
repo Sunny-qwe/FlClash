@@ -40,9 +40,7 @@ pub(crate) fn timed_out() -> io::Error {
 }
 
 pub(crate) async fn with_timeout<T>(fut: impl Future<Output = io::Result<T>>) -> io::Result<T> {
-    tokio::time::timeout(EXCHANGE_TIMEOUT, fut)
-        .await
-        .map_err(|_| timed_out())?
+    concord_common::timeout::with_timeout(EXCHANGE_TIMEOUT, fut, "dns exchange timed out").await
 }
 
 pub(crate) fn with_random_id(req: &Message) -> Message {

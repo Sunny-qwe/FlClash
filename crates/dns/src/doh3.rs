@@ -13,6 +13,7 @@ use crate::client::{
 };
 use crate::dialer::{Connector, Cx};
 use crate::doh::DohTarget;
+use crate::session::SessionSlot;
 
 const ALPN: &str = "h3";
 const MAX_BODY: usize = 65_535;
@@ -30,7 +31,7 @@ pub(crate) struct Doh3Client {
     target: DohTarget,
     connector: Arc<Connector>,
     config: quinn::ClientConfig,
-    session: Mutex<Option<Session>>,
+    session: SessionSlot<Session>,
 }
 
 impl Doh3Client {
@@ -55,21 +56,30 @@ impl Doh3Client {
             target,
             connector,
             config: quinn::ClientConfig::new(Arc::new(crypto)),
-            session: Mutex::new(None),
+            session: SessionSlot::new(),
         })
     }
 
-    fn cached(&self) -> Option<Requests> {
-        let slot = lock(&self.session);
-        let session = slot.as_ref()?;
-        session
-            .conn
-            .close_reason()
-            .is_none()
-            .then(|| session.requests.clone())
+    async fn requests(&self, cx: Cx) -> io::Result<(Requests, bool)> {
+        self.session
+            .get(
+                |slot| {
+                    let session = slot.as_ref()?;
+                    session
+                        .conn
+                        .close_reason()
+                        .is_none()
+                        .then(|| session.requests.clone())
+                },
+                async {
+                    let session = self.dial(cx).await?;
+                    Ok((session.requests.clone(), Some(session)))
+                },
+            )
+            .await
     }
 
-    async fn dial(&self, cx: Cx) -> io::Result<Requests> {
+    async fn dial(&self, cx: Cx) -> io::Result<Session> {
         let (socket, peer) = self
             .connector
             .quic_socket(&self.target.host, self.target.port, cx)
@@ -92,15 +102,11 @@ impl Doh3Client {
         tokio::spawn(async move {
             let _ = driver.wait_idle().await;
         });
-        {
-            let mut slot = lock(&self.session);
-            *slot = Some(Session {
-                _endpoint: endpoint,
-                conn,
-                requests: requests.clone(),
-            });
-        }
-        Ok(requests)
+        Ok(Session {
+            _endpoint: endpoint,
+            conn,
+            requests,
+        })
     }
 
     async fn round_trip(&self, mut requests: Requests, query: &[u8]) -> io::Result<Message> {
@@ -139,13 +145,8 @@ impl Client for Doh3Client {
         with_timeout(async {
             let mut reused = true;
             loop {
-                let requests = match self.cached() {
-                    Some(requests) => requests,
-                    None => {
-                        reused = false;
-                        self.dial(cx).await?
-                    }
-                };
+                let (requests, cached) = self.requests(cx).await?;
+                reused &= cached;
                 let answer = self
                     .round_trip(requests, &bytes)
                     .await
@@ -173,7 +174,7 @@ impl Client for Doh3Client {
     }
 
     fn reset(&self) {
-        let taken = lock(&self.session).take();
+        let taken = self.session.take();
         if let Some(session) = taken {
             session.conn.close(0u32.into(), b"");
         }

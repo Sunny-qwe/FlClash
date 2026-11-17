@@ -35,6 +35,23 @@ pub(crate) async fn on_parse_stack<T: Send + 'static>(
     }
 }
 
+pub(crate) async fn compile_rule_set(
+    path: std::path::PathBuf,
+    bytes: Option<Vec<u8>>,
+    allow_empty: bool,
+) -> Result<(Vec<u8>, concord_rules::CompiledRuleSet), Failure> {
+    on_parse_stack(move || {
+        let bytes = match bytes {
+            Some(bytes) => bytes,
+            None => std::fs::read(path).map_err(Failure::from)?,
+        };
+        let compiled = concord_rules::compile_rule_set(&bytes, allow_empty)
+            .map_err(|err| Failure::new(err.code(), err.to_string()))?;
+        Ok((bytes, compiled))
+    })
+    .await?
+}
+
 pub(crate) fn read_file(path: &str) -> Result<Vec<u8>, Failure> {
     std::fs::read(path).map_err(|err| Failure::core(format!("open {path}: {}", io_message(&err))))
 }

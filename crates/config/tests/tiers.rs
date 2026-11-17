@@ -378,3 +378,29 @@ fn every_tier_is_listed_once() {
     }
     assert_eq!(SECTIONS[0].1.of("geodata-loader"), Some(Tier::Inert));
 }
+
+#[test]
+fn group_health_keys_have_applied_tiers_and_change_typed_definitions() {
+    let schema = concord_config::config_schema();
+    let text = |options: &str| {
+        format!("proxy-groups: [{{name: g, type: url-test, proxies: [DIRECT], {options}}}]")
+    };
+    let base = load_str(&text(""), &LoadOptions::default()).unwrap();
+    for (key, value) in [
+        ("url", "https://probe.test/"),
+        ("interval", "90"),
+        ("empty-fallback", "DIRECT"),
+    ] {
+        assert_eq!(concord_config::keys::GROUP.of(key), Some(Tier::T0));
+        assert!(
+            schema["proxy-groups"]["t0"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == key)
+        );
+        let changed = load_str(&text(&format!("{key}: {value}")), &LoadOptions::default()).unwrap();
+        assert_ne!(changed.groups[0], base.groups[0], "{key}");
+        assert!(changed.report.warnings.is_empty(), "{key}");
+    }
+}

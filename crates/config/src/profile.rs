@@ -408,41 +408,6 @@ fn resolve_groups(
     Ok((groups, refused))
 }
 
-fn global_group(proxies: &[ProxyDef], groups: &[GroupDef]) -> GroupDef {
-    let mut members = vec!["DIRECT".to_string(), "REJECT".to_string()];
-    members.extend(proxies.iter().map(|p| p.name.clone()));
-    members.extend(groups.iter().map(|g| g.name.clone()));
-    GroupDef {
-        name: "GLOBAL".to_string(),
-        kind: GroupKind::Select,
-        proxies: members,
-        use_providers: Vec::new(),
-        use_position: IndexMap::new(),
-        url: DEFAULT_TEST_URL.to_string(),
-        interval: 0,
-        timeout: 0,
-        max_failed_times: 0,
-        empty_fallback: "COMPATIBLE".to_string(),
-        lazy: true,
-        disable_udp: false,
-        filter: String::new(),
-        exclude_filter: String::new(),
-        exclude_type: String::new(),
-        expected_status: "*".to_string(),
-        include_all: false,
-        include_all_proxies: false,
-        include_all_providers: false,
-        hidden: false,
-        icon: String::new(),
-        tolerance: 0,
-        default_selected: String::new(),
-        strategy: Default::default(),
-        hash_key: String::new(),
-        ignored: Vec::new(),
-        raw: Map::new(),
-    }
-}
-
 fn cond_types(cond: &Cond, out: &mut Vec<&'static str>) {
     if let Cond::Flagged { cond: inner, .. } = cond {
         return cond_types(inner, out);
@@ -786,7 +751,7 @@ pub fn load_raw(mut raw: RawConfig, options: &LoadOptions) -> Result<Profile> {
     )?;
     validate_dialers(&proxies, &names)?;
     if !names.groups.contains("GLOBAL") {
-        let global = global_group(&proxies, &groups);
+        let global = GroupDef::global(&proxies, &groups, DEFAULT_TEST_URL);
         groups.push(global);
     }
 

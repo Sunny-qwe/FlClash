@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use bytes::Bytes;
-use concord_common::backoff::{GEO_RETRY_CAP, provider_backoff};
+use concord_common::backoff::{GEO_RETRY_CAP, provider_backoff, retry_until_loaded};
 use concord_common::sync::lock;
 use concord_common::{
     CoreError, CoreEvent, CoreOptions, EventSink, Fetch, Refresh, ResourceKind, ResourcePhase,
@@ -545,7 +545,7 @@ impl RuleProviders {
             tasks.spawn(async move {
                 tokio::select! {
                     () = stop.cancelled() => {}
-                    () = providers.run(&provider, &answered, &loading) => {}
+                    () = providers.run(&provider, &answered, &loading, &stop) => {}
                 }
             });
         }
@@ -556,6 +556,7 @@ impl RuleProviders {
         provider: &RuleProvider,
         answered: &CancellationToken,
         loading: &AtomicUsize,
+        stop: &CancellationToken,
     ) {
         let report = |phase| self.report(provider, phase);
         let (fetch, initial) = {
@@ -582,7 +583,11 @@ impl RuleProviders {
                 tracing::error!("initial rule provider {} error: {err}", provider.def.name);
                 fetch.finish(ResourcePhase::Failed(err.to_string()));
                 if matches!(provider.def.source, RuleSource::Http(_)) && provider.def.interval > 0 {
-                    self.retry_until_loaded(provider).await;
+                    let interval = Duration::from_secs(u64::from(provider.def.interval));
+                    retry_until_loaded(interval, stop, || async {
+                        Some(self.pull_with_log(provider).await)
+                    })
+                    .await;
                 }
                 false
             }
@@ -613,18 +618,6 @@ impl RuleProviders {
         loop {
             self.pull_with_log(provider).await;
             sleep(interval).await;
-        }
-    }
-
-    async fn retry_until_loaded(&self, provider: &RuleProvider) {
-        let interval = Duration::from_secs(u64::from(provider.def.interval));
-        let mut failures = 0;
-        loop {
-            sleep(provider_backoff(failures, interval)).await;
-            if self.pull_with_log(provider).await {
-                return;
-            }
-            failures = failures.saturating_add(1);
         }
     }
 

@@ -274,7 +274,7 @@ impl Control {
                 },
             })
             .await;
-        let _ = std::fs::remove_file(&staged);
+        let _ = tokio::fs::remove_file(&staged).await;
         if let Some(issue) = validated?.issues.into_iter().next() {
             return Err(ApiError::invalid_field("profile", issue.message));
         }

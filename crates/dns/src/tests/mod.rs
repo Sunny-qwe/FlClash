@@ -1,4 +1,5 @@
 mod alloc;
+mod session;
 mod support;
 
 use std::net::{IpAddr, Ipv4Addr};

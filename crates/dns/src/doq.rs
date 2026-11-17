@@ -1,14 +1,14 @@
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use concord_common::sync::lock;
 use concord_tls::TlsOptions;
 use hickory_proto::op::Message;
 use quinn::crypto::rustls::QuicClientConfig;
 
 use crate::client::{Client, Params, checked, decode, encode, with_random_id, with_timeout};
 use crate::dialer::{Connector, Cx};
+use crate::session::SessionSlot;
 
 const ALPN: &str = "doq";
 const MAX_RESPONSE: usize = 65_535;
@@ -21,7 +21,7 @@ pub(crate) struct DoqClient {
     port: u16,
     connector: Arc<Connector>,
     config: quinn::ClientConfig,
-    session: Mutex<Option<Session>>,
+    session: SessionSlot<Session>,
 }
 
 impl DoqClient {
@@ -48,17 +48,26 @@ impl DoqClient {
             port,
             connector,
             config: quinn::ClientConfig::new(Arc::new(crypto)),
-            session: Mutex::new(None),
+            session: SessionSlot::new(),
         })
     }
 
-    fn cached(&self) -> Option<quinn::Connection> {
-        let slot = lock(&self.session);
-        let (_, conn) = slot.as_ref()?;
-        conn.close_reason().is_none().then(|| conn.clone())
+    async fn connection(&self, cx: Cx) -> io::Result<(quinn::Connection, bool)> {
+        self.session
+            .get(
+                |slot| {
+                    let (_, conn) = slot.as_ref()?;
+                    conn.close_reason().is_none().then(|| conn.clone())
+                },
+                async {
+                    let session = self.dial(cx).await?;
+                    Ok((session.1.clone(), Some(session)))
+                },
+            )
+            .await
     }
 
-    async fn dial(&self, cx: Cx) -> io::Result<quinn::Connection> {
+    async fn dial(&self, cx: Cx) -> io::Result<Session> {
         let (socket, peer) = self
             .connector
             .quic_socket(&self.host, self.port, cx)
@@ -75,11 +84,7 @@ impl DoqClient {
             .map_err(io::Error::other)?
             .await
             .map_err(io::Error::other)?;
-        {
-            let mut slot = lock(&self.session);
-            *slot = Some((endpoint, conn.clone()));
-        }
-        Ok(conn)
+        Ok((endpoint, conn))
     }
 
     async fn round_trip(conn: &quinn::Connection, query: &[u8]) -> io::Result<Message> {
@@ -112,13 +117,8 @@ impl Client for DoqClient {
         with_timeout(async {
             let mut reused = true;
             loop {
-                let conn = match self.cached() {
-                    Some(conn) => conn,
-                    None => {
-                        reused = false;
-                        self.dial(cx).await?
-                    }
-                };
+                let (conn, cached) = self.connection(cx).await?;
+                reused &= cached;
                 let answer = Self::round_trip(&conn, &bytes)
                     .await
                     .and_then(|resp| checked(&query, resp));
@@ -145,7 +145,7 @@ impl Client for DoqClient {
     }
 
     fn reset(&self) {
-        let taken = lock(&self.session).take();
+        let taken = self.session.take();
         if let Some((_, conn)) = taken {
             conn.close(0u32.into(), b"");
         }
