@@ -7,7 +7,6 @@ use std::io;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
-use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
 use concord_common::{
     Address, BoxStream, DialCx, DialEnv, Initiator, Outbound, OutboundInfo, OutboundKind,
@@ -23,14 +22,12 @@ use self::stream::Hy2Stream;
 use self::udp::{Hub, Hy2Packets};
 use crate::ctx::{BuildCtx, BuildError};
 use crate::lazy::{HeadFirst, Kick};
-use crate::link::EnvSlot;
 use crate::node::{Egress, info_for};
 use crate::quic::{
     BbrProfile, Brutal, Hop, ObfsSpec, QuicLink, QuicStream, SharedConn, SwitchFactory,
-    bbr_factory, io_error, quic_crypto,
+    bbr_factory, io_error, node_crypto,
 };
 use crate::session_slot::{SessionSlot, Ticket};
-use crate::tlsmap::{TlsSpec, tls_options};
 use crate::util::{lock, parse_bps, parse_ports};
 
 /// quic-go's MaxDatagramSize, the `max_datagram_frame_size` a Hysteria2 server sees from
@@ -177,21 +174,22 @@ impl Hysteria2 {
     }
 
     async fn offer(&self, cx: &DialCx<'_>) -> io::Result<Arc<Hy2Conn>> {
-        let Some(limit) = self.handshake_timeout else {
-            return self
-                .current
-                .offer(
-                    &self.connecting,
-                    Hy2Conn::alive,
-                    || self.establish(cx),
-                    Hy2Conn::close,
-                )
-                .await;
-        };
-        if let (Some(conn), _) = self.current.get(Hy2Conn::alive) {
-            return Ok(conn);
+        match self.handshake_timeout {
+            None => {
+                self.current
+                    .offer(
+                        &self.connecting,
+                        Hy2Conn::alive,
+                        || self.establish(cx),
+                        Hy2Conn::close,
+                    )
+                    .await
+            }
+            Some(limit) => match self.current.get(Hy2Conn::alive) {
+                (Some(conn), _) => Ok(conn),
+                (None, _) => self.shared_offer(cx, limit).await,
+            },
         }
-        self.shared_offer(cx, limit).await
     }
 
     /// sing-quic's offer with a handshake timeout: the handshake runs on its own under
@@ -410,28 +408,7 @@ fn build_hy2(
         let (min, max) = hop_interval(&opts.hop_interval)?;
         Some(Hop { ports, min, max })
     };
-    let server_name = if opts.tls.server_name.is_empty() {
-        opts.server.clone()
-    } else {
-        opts.tls.server_name.clone()
-    };
-    let alpn = if opts.tls.alpn.is_empty() {
-        vec!["h3".to_string()]
-    } else {
-        opts.tls.alpn.clone()
-    };
-    let env_slot: EnvSlot = Arc::new(ArcSwapOption::empty());
-    let tls_opts = tls_options(
-        &opts.tls,
-        TlsSpec {
-            sni: server_name.clone(),
-            alpn: alpn.clone(),
-        },
-        ctx,
-        Some(&env_slot),
-    )?;
-    let alpn_refs: Vec<&str> = alpn.iter().map(String::as_str).collect();
-    let tls = quic_crypto(&tls_opts, ctx.trust.clone(), &alpn_refs, env_slot)?;
+    let (server_name, tls) = node_crypto(&opts.tls, &opts.server, "h3", ctx)?;
     let controllers = SwitchFactory::new(initial_controller(opts));
     let port = if opts.port == 0 {
         hop.as_ref()

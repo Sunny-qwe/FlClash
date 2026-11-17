@@ -10,6 +10,8 @@ use super::QuicConn;
 pub(crate) trait DatagramHub: Send + Sync + 'static {
     fn dispatch(&self, datagram: &Bytes);
 
+    /// Ends every session. Runs when the connection stops yielding datagrams and again when
+    /// the `SharedConn` drops, so a second call must be harmless.
     fn close_all(&self);
 }
 

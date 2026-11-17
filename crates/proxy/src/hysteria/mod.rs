@@ -9,7 +9,6 @@ use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -25,14 +24,12 @@ use self::stream::FastOpen;
 use self::udp::{Hub, Hy1Packets};
 use self::wire::{client_hello, client_request, read_server_hello, read_server_response};
 use crate::ctx::{BuildCtx, BuildError};
-use crate::link::EnvSlot;
 use crate::node::{Egress, info_for};
 use crate::quic::{
     Brutal, Hop, ObfsSpec, QuicConn, QuicLink, QuicStream, SharedConn, SwitchFactory, io_error,
-    quic_crypto,
+    node_crypto,
 };
 use crate::session_slot::SessionSlot;
-use crate::tlsmap::{TlsSpec, tls_options};
 use crate::util::{parse_bps, parse_ports};
 
 const DEFAULT_STREAM_WINDOW: u64 = 15_728_640;
@@ -332,28 +329,7 @@ pub(crate) fn build(
             max: every,
         }
     });
-    let server_name = if opts.tls.server_name.is_empty() {
-        opts.server.clone()
-    } else {
-        opts.tls.server_name.clone()
-    };
-    let alpn = if opts.tls.alpn.is_empty() {
-        vec!["hysteria".to_string()]
-    } else {
-        opts.tls.alpn.clone()
-    };
-    let env_slot: EnvSlot = Arc::new(ArcSwapOption::empty());
-    let tls_opts = tls_options(
-        &opts.tls,
-        TlsSpec {
-            sni: server_name.clone(),
-            alpn: alpn.clone(),
-        },
-        ctx,
-        Some(&env_slot),
-    )?;
-    let alpn_refs: Vec<&str> = alpn.iter().map(String::as_str).collect();
-    let tls = quic_crypto(&tls_opts, ctx.trust.clone(), &alpn_refs, env_slot)?;
+    let (server_name, tls) = node_crypto(&opts.tls, &opts.server, "hysteria", ctx)?;
     let initial: Arc<dyn ControllerFactory + Send + Sync> = Arc::new(crate::quic::cubic());
     let controllers = SwitchFactory::new(initial);
     let port = if opts.port == 0 {

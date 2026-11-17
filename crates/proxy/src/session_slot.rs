@@ -76,8 +76,8 @@ impl<T> SessionSlot<T> {
         true
     }
 
-    /// Holds `conn` unless a reset ran since `ticket`; otherwise `discard` tears it down and the
-    /// dial fails.
+    /// `offer`'s last step, for a dial that runs outside it, such as a handshake its callers
+    /// share from a task of its own.
     pub(crate) fn adopt(
         &self,
         ticket: Ticket,

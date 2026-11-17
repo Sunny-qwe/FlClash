@@ -27,7 +27,7 @@ use self::connect::Connector;
 use self::tunnel::Tunnel;
 use crate::ctx::{BuildCtx, BuildError};
 use crate::node::{Egress, info};
-use crate::session_slot::{SessionSlot, overtaken};
+use crate::session_slot::SessionSlot;
 
 struct Shared {
     info: OutboundInfo,
@@ -64,36 +64,17 @@ impl Shared {
     }
 
     async fn tunnel(&self, cx: &DialCx<'_>) -> io::Result<Arc<Tunnel>> {
-        if let Some(held) = self.ip.get(Tunnel::usable).0 {
-            return Ok(held);
-        }
-        let _building = self.init.lock().await;
-        let (held, ticket) = self.ip.get(Tunnel::usable);
-        if let Some(held) = held {
-            return Ok(held);
-        }
-        let tunnel = bounded(self.timeout(cx), Tunnel::connect(&self.config, cx)).await?;
-        if !self.ip.keep(ticket, &tunnel) {
-            tunnel.close();
-            return Err(overtaken());
-        }
-        Ok(tunnel)
+        let connect = || bounded(self.timeout(cx), Tunnel::connect(&self.config, cx));
+        self.ip
+            .offer(&self.init, Tunnel::usable, connect, Tunnel::close)
+            .await
     }
 
     async fn l4(&self, cx: &DialCx<'_>) -> io::Result<Arc<h3::Client>> {
-        if let Some(held) = self.l4.get(h3::Client::usable).0 {
-            return Ok(held);
-        }
-        let _building = self.init.lock().await;
-        let (held, ticket) = self.l4.get(h3::Client::usable);
-        if let Some(held) = held {
-            return Ok(held);
-        }
-        let client = bounded(self.timeout(cx), h3::Client::connect(&self.config, cx)).await?;
-        if !self.l4.keep(ticket, &client) {
-            return Err(overtaken());
-        }
-        Ok(client)
+        let connect = || bounded(self.timeout(cx), h3::Client::connect(&self.config, cx));
+        self.l4
+            .offer(&self.init, h3::Client::usable, connect, |_| {})
+            .await
     }
 }
 

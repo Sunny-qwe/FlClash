@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use arc_swap::ArcSwapOption;
 use concord_common::{Address, BoxRead, BoxWrite, DialCx, Initiator, SockOpts, Stream};
 use quinn::congestion::{CubicConfig, NewRenoConfig};
 use quinn::crypto::rustls::QuicClientConfig;
@@ -21,11 +22,13 @@ use quinn::{
 use rand::Rng;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+use concord_config::proxy::TlsOpts;
 use concord_tls::{QuicTls, TlsOptions, TrustStore};
 use concord_transport::SessionSocket;
 
-use crate::ctx::BuildError;
+use crate::ctx::{BuildCtx, BuildError};
 use crate::link::EnvSlot;
+use crate::tlsmap::{TlsSpec, tls_options};
 use concord_net::dial_each;
 
 use crate::node::{Egress, resolve_server};
@@ -129,6 +132,39 @@ pub(crate) fn quic_crypto(
     Ok(Crypto::Rustls(concord_tls::quic_client_config(
         options, trust, alpn,
     )?))
+}
+
+/// The server name and crypto of a QUIC node whose `sni` falls back to its server and whose
+/// `alpn` falls back to `default_alpn`.
+pub(crate) fn node_crypto(
+    tls: &TlsOpts,
+    server: &str,
+    default_alpn: &str,
+    ctx: &BuildCtx,
+) -> Result<(String, Crypto), BuildError> {
+    let server_name = if tls.server_name.is_empty() {
+        server.to_string()
+    } else {
+        tls.server_name.clone()
+    };
+    let alpn = if tls.alpn.is_empty() {
+        vec![default_alpn.to_string()]
+    } else {
+        tls.alpn.clone()
+    };
+    let env_slot: EnvSlot = Arc::new(ArcSwapOption::empty());
+    let options = tls_options(
+        tls,
+        TlsSpec {
+            sni: server_name.clone(),
+            alpn: alpn.clone(),
+        },
+        ctx,
+        Some(&env_slot),
+    )?;
+    let alpn: Vec<&str> = alpn.iter().map(String::as_str).collect();
+    let crypto = quic_crypto(&options, ctx.trust.clone(), &alpn, env_slot)?;
+    Ok((server_name, crypto))
 }
 
 pub(crate) fn client_config(
