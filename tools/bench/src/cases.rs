@@ -46,6 +46,7 @@ pub const ALL: &[Spec] = &[
         "shadowsocks 2022-blake3-chacha8-poly1305",
     ),
     spec("vmess", true, "vmess aes-128-gcm, alterId 0"),
+    spec("vmess-cfb", true, "vmess aes-128-cfb, alterId 0"),
     spec("vmess-chacha", true, "vmess chacha20-poly1305, alterId 0"),
     spec("vmess-none", true, "vmess unencrypted body, alterId 0"),
     spec(
@@ -334,11 +335,12 @@ pub fn build(spec: Spec, host: &str, port: u16, decoy: u16, certs: &Path) -> Cas
         "ss-xchacha20" => ss("xchacha20", "pw"),
         "ss2022" => ss("2022-blake3-aes-128-gcm", KEY16),
         "ss2022-chacha8" => ss("2022-blake3-chacha8-poly1305", KEY32),
-        "vmess" | "vmess-chacha" | "vmess-none" => (
+        "vmess" | "vmess-cfb" | "vmess-chacha" | "vmess-none" => (
             "vmess",
             "vmess",
             format!("    users:\n      - username: a\n        uuid: {UUID}\n        alterId: 0\n"),
             json!({"uuid": UUID, "alterId": 0, "cipher": match spec.name {
+                "vmess-cfb" => "aes-128-cfb",
                 "vmess-chacha" => "chacha20-poly1305",
                 "vmess-none" => "none",
                 _ => "aes-128-gcm",
