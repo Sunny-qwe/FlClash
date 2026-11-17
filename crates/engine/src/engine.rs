@@ -1,8 +1,6 @@
 use std::collections::BTreeMap;
 use std::mem::take;
 use std::net::SocketAddr;
-#[cfg(unix)]
-use std::os::fd::OwnedFd;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -10,21 +8,20 @@ use std::time::Duration;
 use arc_swap::{ArcSwap, ArcSwapOption};
 use concord_common::sync::lock;
 use concord_common::{
-    Change, ClockOffset, ConnRecord, CoreEvent, CoreOptions, DelayResult, EventSink,
-    FindProcessMode, GeneralChange, LogLevel, Origin, RouteStamp, RouteView, StateChange,
-    TunnelMode,
+    Change, ClockOffset, CoreEvent, CoreOptions, EventSink, Origin, RouteStamp, RouteView,
+    StateChange,
 };
 use concord_config::Profile;
 use concord_config::general::ControllerCors;
 use concord_config::tun::TunConfig;
-use concord_dns::{QueryError, QueryView, Resolver};
-use concord_group::{NodeStateView, Outbounds, ProxyViews, SelectionStore, StatusRanges};
-use concord_inbound::{ListenSpec, Listeners};
+use concord_dns::{QueryError, QueryView};
+use concord_group::{Outbounds, SelectionStore};
+use concord_inbound::Listeners;
 use concord_net::{LoopbackGuard, Sockets};
 use concord_platform::{HomeDir, Platform, mmap};
 use concord_rules::geo::GeoStore;
 use concord_tls::TrustStore;
-use concord_tun::{Congestion, DeviceSource, Prefix, TunRunner};
+use concord_tun::{Prefix, TunRunner};
 use concord_tunnel::{ConnTable, LiveOptions, Tunnel, TunnelStatus};
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
@@ -32,28 +29,30 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 
-use crate::apply::{self, Applied, Options, Shared, TrustCache, TunnelUpstream, listen_spec};
+use crate::apply::{self, Applied, Options, Shared, TrustCache, TunnelUpstream};
 use crate::dns_server::DnsServer;
 use crate::error::Failure;
 use crate::fake_ip_store;
-use crate::faults::{Faults, Service, ServiceFault};
-use crate::lan::{self, LanPatch};
+use crate::faults::Faults;
 use crate::ntp::{self, NtpSettings};
 use crate::ops;
 use crate::probe::{Prober, RouteHit};
 use crate::probe_env::TunnelProbes;
-use crate::resources::{self, GeoUpdater, GeoUrls, TunnelFetcher};
+use crate::resources::{self, GeoUpdater, TunnelFetcher};
 use crate::route::RouteCounters;
-#[cfg(unix)]
-use crate::tun::{InheritedTun, vpn_options};
-use crate::tun::{KeepOffDevice, congestion_of, options_of, start_runner, stop_runner};
 use crate::views::*;
 
+mod connections;
 #[cfg_attr(not(feature = "mitm"), path = "engine/mitm_disabled.rs")]
 mod mitm;
 mod providers;
+mod proxies;
+mod reconcile;
 #[cfg(test)]
 mod tests;
+mod tun;
+mod update;
+mod views;
 
 pub use mitm::MitmService;
 pub use providers::Providers;
@@ -137,7 +136,6 @@ pub struct Engine {
 }
 
 const NOT_INITIALIZED: &str = "not initialized";
-const DEFAULT_DELAY_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl Engine {
     /// Call inside the runtime that should carry the flows.
@@ -279,31 +277,6 @@ impl Engine {
             outbounds.reset_sessions();
         }
         concord_platform::release_free_memory();
-    }
-
-    pub fn memory_stats(&self) -> MemoryStats {
-        MemoryStats {
-            rss: concord_platform::resident_memory(),
-            ..Default::default()
-        }
-    }
-
-    pub fn capabilities(&self) -> Capabilities {
-        let config = apply::capabilities();
-        Capabilities {
-            implementation: concord_common::CORE_NAME,
-            version: env!("CARGO_PKG_VERSION"),
-            proxy_types: config.proxy_types,
-            transports: config.transports,
-            rule_types: config.rule_types,
-            ss_plugins: config.ss_plugins,
-            congestion_controllers: Congestion::NAMES.to_vec(),
-            features: Features {
-                mitm: MitmService::ENABLED,
-                ech: config.ech,
-                system_stack: false,
-            },
-        }
     }
 
     fn apply_options(&self, options: &CoreOptions) {
@@ -475,10 +448,6 @@ impl Engine {
         }
     }
 
-    pub fn clock_offset_nanos(&self) -> i64 {
-        self.shared.clock.nanos()
-    }
-
     fn start_ntp(&self, applied: &Applied, outbounds: &Outbounds) {
         let ntp = &applied.ntp;
         if !ntp.enable || ntp.server.is_empty() || ntp.interval == 0 {
@@ -505,179 +474,6 @@ impl Engine {
             self.shared.clock.clone(),
             applied.stop.clone(),
         );
-    }
-
-    pub async fn log_level(&self) -> Option<LogLevel> {
-        self.state
-            .lock()
-            .await
-            .as_ref()
-            .map(|applied| applied.general.log_level)
-    }
-
-    async fn sync_dns_server(&self, address: &str, mark: u32, resolver: Arc<Resolver>) {
-        let mut server = self.dns_server.lock().await;
-        if let Some(running) = server.as_ref() {
-            if running.address() == address && running.mark() == mark {
-                running.set_resolver(resolver);
-                return;
-            }
-            *server = None;
-        }
-        self.faults.set_dns(None);
-        if address.is_empty() {
-            return;
-        }
-        match DnsServer::start(address, mark, resolver) {
-            Ok(started) => {
-                tracing::info!("DNS server listening at: {address}");
-                *server = Some(started);
-            }
-            Err(err) => {
-                let message = format!("Start DNS server error: {err}");
-                tracing::error!("{message}");
-                self.faults.set_dns(Some(ServiceFault {
-                    service: Service::Dns,
-                    address: address.to_string(),
-                    kind: err.kind(),
-                    message,
-                }));
-            }
-        }
-    }
-
-    /// `updateListeners`: nothing happens until the host has asked the core to run.
-    async fn reconcile_listeners(&self, applied: &Applied) {
-        if !self.running.load(Ordering::SeqCst) {
-            return;
-        }
-        let spec: ListenSpec = listen_spec(&applied.general);
-        let handler = Arc::new(self.shared.tunnel.clone());
-        let errors = self.listeners.reconcile(&spec, handler).await;
-        for error in &errors {
-            tracing::error!("{error}");
-        }
-        self.faults
-            .set_listeners(errors.iter().map(ServiceFault::listener).collect());
-        if !self.android {
-            self.reconcile_tun(applied).await;
-        }
-    }
-
-    /// `listener.ReCreateTun`: a running device with the same settings is left alone,
-    /// and a start that failed is tried again by the next call.
-    async fn reconcile_tun(&self, applied: &Applied) {
-        let desired = (applied.tun.clone(), applied.tun_inet4, applied.general.ipv6);
-        let mut slot = self.tun.lock().await;
-        let same = lock(&self.tun_config).as_ref() == Some(&desired);
-        if same && slot.as_ref().is_some_and(|runner| !runner.is_finished()) {
-            return;
-        }
-        self.close_tun(&mut slot).await;
-        self.faults.set_tun(None);
-        {
-            let mut held = lock(&self.tun_config);
-            *held = Some(desired);
-        }
-        if !applied.tun.enable {
-            return;
-        }
-        let options = options_of(&applied.tun, applied.tun_inet4, applied.general.ipv6);
-        let congestion = congestion_of(&applied.tun.congestion_controller);
-        let exclusion = Arc::new(KeepOffDevice {
-            platform: self.shared.platform.clone(),
-            sockets: self.shared.sockets.clone(),
-            tunnel: self.shared.tunnel.clone(),
-            auto_detect: applied.tun.auto_detect_interface,
-        });
-        match start_runner(
-            &self.shared.tunnel,
-            &self.shared.sockets,
-            &options,
-            DeviceSource::Create,
-            congestion,
-            Some(exclusion),
-        )
-        .await
-        {
-            Ok(runner) => *slot = Some(runner),
-            Err(err) => {
-                let message = format!("Start TUN listening error: {err}");
-                tracing::error!("{message}");
-                self.faults.set_tun(Some(ServiceFault {
-                    service: Service::Tun,
-                    address: applied.tun.device.clone(),
-                    kind: err.kind,
-                    message,
-                }));
-            }
-        }
-    }
-
-    async fn close_tun(&self, slot: &mut Option<TunRunner>) {
-        if let Some(runner) = slot.take() {
-            stop_runner(runner).await;
-        }
-    }
-
-    /// `handleStartTun`. Takes the descriptor: it is closed on every failing path.
-    #[cfg(unix)]
-    pub(crate) async fn start_vpn_tun(&self, fd: OwnedFd, tun: &InheritedTun) -> bool {
-        self.shared.sockets.protect_held().await;
-        let started = {
-            let mut slot = self.tun.lock().await;
-            self.close_tun(&mut slot).await;
-            match vpn_options(tun) {
-                Ok((options, congestion)) => {
-                    match start_runner(
-                        &self.shared.tunnel,
-                        &self.shared.sockets,
-                        &options,
-                        DeviceSource::Adopt(fd),
-                        congestion,
-                        None,
-                    )
-                    .await
-                    {
-                        Ok(runner) => {
-                            *slot = Some(runner);
-                            true
-                        }
-                        Err(err) => {
-                            tracing::error!("TUN: {err}");
-                            false
-                        }
-                    }
-                }
-                Err(err) => {
-                    tracing::error!("TUN: {err}");
-                    false
-                }
-            }
-        };
-        if !started {
-            return false;
-        }
-        if self.running.load(Ordering::SeqCst) {
-            self.reset_resolver_connections();
-            self.route.reset(self.is_running());
-        } else if let Err(err) = self.start_listeners().await {
-            tracing::error!("start listeners: {err:?}");
-        }
-        true
-    }
-
-    /// `StopTun`.
-    pub async fn stop_vpn_tun(&self) {
-        {
-            let mut slot = self.tun.lock().await;
-            self.close_tun(&mut slot).await;
-        }
-        if self.running.load(Ordering::SeqCst)
-            && let Err(err) = self.stop_listeners().await
-        {
-            tracing::error!("stop listeners: {err:?}");
-        }
     }
 
     pub fn is_running(&self) -> bool {
@@ -714,131 +510,6 @@ impl Engine {
         });
     }
 
-    pub async fn update(&self, request: UpdateRequest) -> Result<(), Failure> {
-        self.update_as(Origin::Host, request).await.map(|_| ())
-    }
-
-    /// Returns the change it made, or the last change when it made none.
-    pub async fn update_as(&self, origin: Origin, request: UpdateRequest) -> Result<u64, Failure> {
-        let mut state = self.state.lock().await;
-        let Some(applied) = state.as_mut() else {
-            return Err(Failure::core("config is not applied"));
-        };
-        let lan = LanPatch::of(&request)?;
-        let before = Settled::of(applied, &self.shared.geo.urls.load());
-        let general = &mut applied.general;
-        if let Some(port) = request.mixed_port {
-            general.mixed_port = port;
-        }
-        if let Some(allow) = request.allow_lan {
-            general.allow_lan = allow;
-        }
-        lan.apply(general);
-        let mut live = self.shared.tunnel.live();
-        if let Some(mode) = request
-            .find_process_mode
-            .as_deref()
-            .and_then(FindProcessMode::parse)
-        {
-            general.find_process_mode = mode;
-            live.find_process_mode = mode;
-        }
-        if let Some(enabled) = request.tcp_concurrent {
-            general.tcp_concurrent = enabled;
-        }
-        if let Some(enabled) = request.unified_delay {
-            general.unified_delay = enabled;
-            self.shared
-                .options
-                .unified_delay
-                .store(enabled, Ordering::Relaxed);
-        }
-        let (mut moved, mut reset) = (false, false);
-        if let Some(mode) = request.mode.as_deref().and_then(TunnelMode::parse) {
-            moved = general.mode != mode;
-            general.mode = mode;
-            live.mode = mode;
-        }
-        if let Some(level) = request
-            .log_level
-            .as_deref()
-            .and_then(concord_common::LogLevel::parse)
-        {
-            general.log_level = level;
-        }
-        if let Some(enabled) = request.ipv6 {
-            reset = general.ipv6 != enabled;
-            general.ipv6 = enabled;
-        }
-        self.shared.tunnel.set_live(live);
-        if let Some(runtime) = self.runtime() {
-            runtime.dns.set_ipv6(general.ipv6);
-            runtime
-                .outbounds
-                .set_dial_flags(general.tcp_concurrent, general.ipv6);
-        }
-        if let Some(patch) = request.tun {
-            applied.tun.enable = patch.enable;
-            if let Some(auto_route) = patch.auto_route {
-                applied.tun.auto_route = auto_route;
-            }
-            if let Some(device) = patch.device {
-                applied.tun.device = device;
-            }
-            if let Some(stack) = patch.stack {
-                applied.tun.stack_name = stack;
-            }
-        }
-        let general = &mut applied.general;
-        if let Some(lines) = request.authentication {
-            general.authentication = lines
-                .iter()
-                .filter_map(|line| line.split_once(':'))
-                .map(|(user, pass)| concord_config::general::Credential {
-                    user: user.to_string(),
-                    pass: pass.to_string(),
-                })
-                .collect();
-        }
-        if let Some(options) = &request.options {
-            self.apply_options(options);
-        }
-        self.reconcile_listeners(applied).await;
-        let general = &mut applied.general;
-        let mut urls = (**self.shared.geo.urls.load()).clone();
-        for (kind, link) in request.geox_url {
-            if !urls.set(&kind, link) {
-                tracing::warn!("geox-url: unknown geo resource {kind:?}");
-            }
-        }
-        self.shared.geo.urls.store(Arc::new(urls));
-        if let Some(enabled) = request.geo_auto_update {
-            general.geo_auto_update = enabled;
-        }
-        if let Some(hours) = request
-            .geo_update_interval
-            .and_then(|hours| u32::try_from(hours).ok())
-        {
-            general.geo_update_interval = hours;
-        }
-        self.shared.geo.sync_auto(
-            general.geo_auto_update,
-            general.geo_update_interval,
-            self.shared.fetcher.clone(),
-        );
-        if reset {
-            self.route.reset(self.is_running());
-        } else if moved {
-            self.route.moved();
-        }
-        let change = before.change_to(&Settled::of(applied, &self.shared.geo.urls.load()));
-        let mut seq = self.intent.lock().await;
-        if !change.is_empty() {
-            self.publish_change(&mut seq, origin, Change::General(change));
-        }
-        Ok(*seq)
-    }
-
     fn publish_change(&self, seq: &mut u64, origin: Origin, change: Change) {
         publish_change(&*self.shared.events, seq, origin, change);
     }
@@ -856,110 +527,8 @@ impl Engine {
         token.drop_guard()
     }
 
-    pub fn selections(&self) -> BTreeMap<String, String> {
-        self.outbounds()
-            .map(|outbounds| outbounds.selections().into_iter().collect())
-            .unwrap_or_default()
-    }
-
     pub fn set_profile_controller(&self, owned: bool) {
         self.profile_controller.store(owned, Ordering::Relaxed);
-    }
-
-    /// The profile's `external-controller` and `secret`; empty while a host owns them.
-    pub async fn profile_controller(&self) -> (String, String, ControllerCors) {
-        self.state
-            .lock()
-            .await
-            .as_ref()
-            .map(|applied| {
-                (
-                    applied.general.external_controller.clone(),
-                    applied.general.secret.clone(),
-                    applied.general.external_controller_cors.clone(),
-                )
-            })
-            .unwrap_or_default()
-    }
-
-    pub async fn general(&self) -> Option<GeneralView> {
-        let state = self.state.lock().await;
-        let applied = state.as_ref()?;
-        let seq = *self.intent.lock().await;
-        let general = &applied.general;
-        let urls = self.shared.geo.urls.load();
-        Some(GeneralView {
-            seq,
-            port: general.port,
-            socks_port: general.socks_port,
-            redir_port: general.redir_port,
-            tproxy_port: general.tproxy_port,
-            mixed_port: general.mixed_port,
-            allow_lan: general.allow_lan,
-            bind_address: general.bind_address.clone(),
-            lan_allowed_ips: lan::texts(&general.lan_allowed_ips),
-            lan_disallowed_ips: lan::texts(&general.lan_disallowed_ips),
-            users: users_of(general),
-            skip_auth_prefixes: general
-                .skip_auth_prefixes
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-            mode: general.mode,
-            log_level: general.log_level,
-            ipv6: general.ipv6,
-            tcp_concurrent: general.tcp_concurrent,
-            unified_delay: general.unified_delay,
-            find_process_mode: general.find_process_mode,
-            interface_name: general.interface_name.clone(),
-            routing_mark: general.routing_mark,
-            sniffing: applied.sniffing,
-            global_ua: general.global_ua.clone(),
-            keep_alive_idle: general.keep_alive_idle,
-            keep_alive_interval: general.keep_alive_interval,
-            disable_keep_alive: general.disable_keep_alive,
-            geo_auto_update: general.geo_auto_update,
-            geo_update_interval: general.geo_update_interval,
-            geox_url: vec![
-                ("mmdb", urls.mmdb.clone()),
-                ("asn", urls.asn.clone()),
-                ("geosite", urls.geosite.clone()),
-            ],
-            tun: TunView {
-                enable: applied.tun.enable,
-                device: applied.tun.device.clone(),
-                stack: applied.tun.stack_name.clone(),
-                auto_route: applied.tun.auto_route,
-                auto_detect_interface: applied.tun.auto_detect_interface,
-                dns_hijack: applied.tun.dns_hijack.clone(),
-                mtu: applied.tun.mtu,
-            },
-            selections: self
-                .outbounds()
-                .map(|outbounds| outbounds.selections())
-                .unwrap_or_default(),
-        })
-    }
-
-    pub fn node_states(&self, names: Option<&[String]>) -> Vec<NodeStateView> {
-        self.outbounds()
-            .map(|outbounds| outbounds.node_states(names))
-            .unwrap_or_default()
-    }
-
-    pub fn rules(&self) -> Vec<RuleView> {
-        let Some(runtime) = self.runtime() else {
-            return Vec::new();
-        };
-        runtime
-            .program
-            .rules()
-            .map(|(rule, target)| RuleView {
-                kind: rule.type_name.to_string(),
-                payload: rule.payload.to_string(),
-                target: target.to_string(),
-            })
-            .collect()
     }
 
     pub async fn dns_query(&self, name: &str, qtype: &str) -> Result<QueryView, Failure> {
@@ -982,121 +551,9 @@ impl Engine {
         }
     }
 
-    pub fn warnings(&self) -> Vec<WarningView> {
-        (**self.warnings.load()).clone()
-    }
-
     pub fn clear_effect(&self, profile_id: i64) -> Result<(), Failure> {
         let home = self.home().ok_or_else(|| Failure::core(NOT_INITIALIZED))?;
         ops::clear_effect(&home, profile_id)
-    }
-
-    pub fn proxy_views(&self) -> ProxyViews {
-        self.outbounds()
-            .map(|outbounds| outbounds.views())
-            .unwrap_or_default()
-    }
-
-    pub fn route_view(&self) -> RouteView {
-        self.route.view()
-    }
-
-    pub async fn select(&self, group: &str, proxy: &str) -> SelectOutcome {
-        self.select_as(Origin::Host, group, proxy).await
-    }
-
-    pub async fn select_as(&self, origin: Origin, group: &str, proxy: &str) -> SelectOutcome {
-        let mut seq = self.intent.lock().await;
-        let Some(outbounds) = self.outbounds() else {
-            return SelectOutcome {
-                message: "Not found group".to_string(),
-                changed: false,
-                seq: *seq,
-            };
-        };
-        let before = outbounds.selection(group);
-        let staged = match outbounds.stage_selection(group, proxy) {
-            Ok(staged) => staged,
-            Err(failed) => {
-                return SelectOutcome {
-                    message: failed.message,
-                    changed: false,
-                    seq: *seq,
-                };
-            }
-        };
-        let after = outbounds.selection(group);
-        if after != before {
-            let group = group.to_string();
-            self.publish_change(
-                &mut seq,
-                origin,
-                Change::Selected {
-                    group,
-                    proxy: after,
-                },
-            );
-        }
-        let made = *seq;
-        drop(seq);
-        outbounds.probe_selection(&staged).await;
-        let outcome = outbounds.settle_selection(staged);
-        SelectOutcome {
-            message: outcome.message,
-            changed: outcome.changed,
-            seq: made,
-        }
-    }
-
-    pub async fn proxy_definition(&self, name: String) -> Result<Option<Value>, Failure> {
-        let home = self.home().ok_or_else(|| Failure::core(NOT_INITIALIZED))?;
-        if let Some(outbounds) = self.outbounds()
-            && let Some(definition) = outbounds.definition(&name).await
-        {
-            return Ok(Some(Value::Object(definition)));
-        }
-        let path = home.join("config.yaml");
-        ops::on_parse_stack(move || ops::configured_proxy(&path, &name))
-            .await?
-            .map(|mapping| mapping.map(Value::Object))
-    }
-
-    pub async fn test_delay(&self, name: &str, url: &str, timeout: i64) -> DelayResult {
-        self.test_delay_expecting(name, url, &StatusRanges::default(), timeout)
-            .await
-    }
-
-    pub async fn test_delay_expecting(
-        &self,
-        name: &str,
-        url: &str,
-        expected: &StatusRanges,
-        timeout: i64,
-    ) -> DelayResult {
-        let url = if url.is_empty() {
-            let current = self.shared.options.current.load();
-            if current.test_url.is_empty() {
-                concord_group::DEFAULT_TEST_URL.to_string()
-            } else {
-                current.test_url.clone()
-            }
-        } else {
-            url.to_string()
-        };
-        let Some(outbounds) = self.outbounds() else {
-            return DelayResult {
-                url,
-                name: name.to_string(),
-                value: -2,
-            };
-        };
-        let timeout = u64::try_from(timeout)
-            .ok()
-            .filter(|millis| *millis > 0)
-            .map_or(DEFAULT_DELAY_TIMEOUT, Duration::from_millis);
-        outbounds
-            .test_delay_expecting(name, &url, expected, timeout)
-            .await
     }
 
     pub fn providers(&self) -> Providers<'_> {
@@ -1158,34 +615,6 @@ impl Engine {
         Ok(())
     }
 
-    pub fn traffic_now(&self, only_proxy: bool) -> (i64, i64) {
-        as_signed(self.table.now(only_proxy))
-    }
-
-    pub fn traffic_total(&self, only_proxy: bool) -> (i64, i64) {
-        as_signed(self.table.total(only_proxy))
-    }
-
-    pub fn traffic_reset(&self) {
-        self.table.reset();
-    }
-
-    pub fn connections(&self) -> Vec<Arc<ConnRecord>> {
-        self.table.snapshot()
-    }
-
-    pub fn connection_id(&self, seq: u64) -> Option<String> {
-        self.table.id_of(seq)
-    }
-
-    pub fn connection_count(&self) -> usize {
-        self.table.len()
-    }
-
-    pub fn close_all_connections(&self) {
-        self.table.close_all();
-    }
-
     pub fn reset_resolver_connections(&self) {
         if let Some(runtime) = self.runtime() {
             runtime.dns.reset_connections();
@@ -1213,41 +642,6 @@ impl Engine {
             outbounds.reset_sessions();
         }
         self.route.reset(self.is_running());
-    }
-
-    /// Services asked to run that did not start, as of the last apply, update, start or stop.
-    pub fn faults(&self) -> Vec<ServiceFault> {
-        self.faults.list()
-    }
-
-    pub fn tun_fault(&self) -> Option<ServiceFault> {
-        self.faults.tun()
-    }
-
-    pub async fn start_listeners(&self) -> Result<(), Failure> {
-        let state = self.state.lock().await;
-        self.set_running(true);
-        if let Some(applied) = state.as_ref() {
-            self.reconcile_listeners(applied).await;
-        }
-        self.reset_resolver_connections();
-        self.route.reset(self.is_running());
-        Ok(())
-    }
-
-    pub async fn stop_listeners(&self) -> Result<(), Failure> {
-        let _state = self.state.lock().await;
-        self.set_running(false);
-        self.listeners.stop_all().await;
-        self.faults.set_listeners(Vec::new());
-        if !self.android {
-            let mut slot = self.tun.lock().await;
-            self.close_tun(&mut slot).await;
-            self.faults.set_tun(None);
-        }
-        self.reset_resolver_connections();
-        self.route.reset(self.is_running());
-        Ok(())
     }
 
     pub fn watch_route(&self, watched: bool) -> RouteView {
@@ -1290,100 +684,6 @@ impl Engine {
         self.table.close_all();
         self.initialized.store(false, Ordering::SeqCst);
     }
-}
-
-fn as_signed((up, down): (u64, u64)) -> (i64, i64) {
-    (
-        i64::try_from(up).unwrap_or(i64::MAX),
-        i64::try_from(down).unwrap_or(i64::MAX),
-    )
-}
-
-/// What `update` can change that a host keeps, so a patch reports only what moved.
-struct Settled {
-    mode: TunnelMode,
-    log_level: LogLevel,
-    allow_lan: bool,
-    ipv6: bool,
-    mixed_port: u16,
-    tcp_concurrent: bool,
-    find_process_mode: FindProcessMode,
-    unified_delay: bool,
-    users: Vec<String>,
-    geo_auto_update: bool,
-    geo_update_interval: u32,
-    geox_url: BTreeMap<String, String>,
-    tun_enable: bool,
-    tun_device: String,
-    tun_stack: String,
-    tun_auto_route: bool,
-}
-
-impl Settled {
-    fn of(applied: &Applied, urls: &GeoUrls) -> Self {
-        let general = &applied.general;
-        Settled {
-            mode: general.mode,
-            log_level: general.log_level,
-            allow_lan: general.allow_lan,
-            ipv6: general.ipv6,
-            mixed_port: general.mixed_port,
-            tcp_concurrent: general.tcp_concurrent,
-            find_process_mode: general.find_process_mode,
-            unified_delay: general.unified_delay,
-            users: users_of(general),
-            geo_auto_update: general.geo_auto_update,
-            geo_update_interval: general.geo_update_interval,
-            geox_url: geox_url_of(urls),
-            tun_enable: applied.tun.enable,
-            tun_device: applied.tun.device.clone(),
-            tun_stack: applied.tun.stack_name.clone(),
-            tun_auto_route: applied.tun.auto_route,
-        }
-    }
-
-    fn change_to(&self, after: &Settled) -> GeneralChange {
-        fn moved<T: PartialEq + Clone>(before: &T, after: &T) -> Option<T> {
-            (before != after).then(|| after.clone())
-        }
-        GeneralChange {
-            mode: moved(&self.mode, &after.mode),
-            log_level: moved(&self.log_level, &after.log_level),
-            allow_lan: moved(&self.allow_lan, &after.allow_lan),
-            ipv6: moved(&self.ipv6, &after.ipv6),
-            mixed_port: moved(&self.mixed_port, &after.mixed_port),
-            tcp_concurrent: moved(&self.tcp_concurrent, &after.tcp_concurrent),
-            find_process_mode: moved(&self.find_process_mode, &after.find_process_mode),
-            unified_delay: moved(&self.unified_delay, &after.unified_delay),
-            authentication: moved(&self.users, &after.users),
-            geo_auto_update: moved(&self.geo_auto_update, &after.geo_auto_update),
-            geo_update_interval: moved(&self.geo_update_interval, &after.geo_update_interval),
-            geox_url: moved(&self.geox_url, &after.geox_url),
-            tun_enable: moved(&self.tun_enable, &after.tun_enable),
-            tun_device: moved(&self.tun_device, &after.tun_device),
-            tun_stack: moved(&self.tun_stack, &after.tun_stack),
-            tun_auto_route: moved(&self.tun_auto_route, &after.tun_auto_route),
-        }
-    }
-}
-
-fn users_of(general: &concord_config::general::General) -> Vec<String> {
-    general
-        .authentication
-        .iter()
-        .map(|credential| credential.user.clone())
-        .collect()
-}
-
-fn geox_url_of(urls: &GeoUrls) -> BTreeMap<String, String> {
-    [
-        ("mmdb", urls.mmdb.clone()),
-        ("asn", urls.asn.clone()),
-        ("geosite", urls.geosite.clone()),
-    ]
-    .into_iter()
-    .map(|(kind, url)| (kind.to_string(), url))
-    .collect()
 }
 
 fn host_owns_controller(

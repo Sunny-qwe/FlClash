@@ -3,7 +3,6 @@
 file-lines crates/config/src/profile.rs 833
 file-lines crates/config/src/proxy/parse.rs 1090 raised from 1088: gost-relay is parsed in its own module and registered as a supported proxy type; MASQUE dispatches to its separate parser; back down when proxy dispatch leaves parse.rs
 file-lines crates/config/src/share_link/decode.rs 940
-file-lines crates/engine/src/engine.rs 1457 raised from 1442: the route epoch also moves after a stop and a network reset; setup_as starts the fetch of a missing ASN.mmdb, and its fallback to the default moved into a helper to keep it under 120 lines; protect held sockets on VPN TUN start; a network change drops the platform's interface tables; the profile's external-controller-cors is read for a core on its own and set aside with a warning for an embedded one; a live update carries bind-address and the LAN lists and the general view reports them, back down when TUN start leaves engine.rs
 file-lines crates/proxy/src/vmess/crypto.rs 809
 file-lines crates/rules/src/compile.rs 804
 file-lines crates/tls/src/record.rs 997 raised from 996: the key schedule lock is taken through concord_common::sync, which needs its own import
