@@ -128,12 +128,20 @@ Run nothing else on the machine while a bench measures, and a full run only on a
 
 ## Target Directory And Disk
 
-- One target directory per checkout: the workspace's own `target/`. Never share one `CARGO_TARGET_DIR` between two
-  Concord checkouts, worktrees or extracted trees: cargo can reuse the other tree's artifacts, and the binary you
-  measure is then not the code you think. `xtask bench --base` builds the base into `target/bench/rev-target` for
-  this reason. A baseline in another worktree gets its own target, deleted when the comparison is done.
-- Do not give each crate or each agent its own target inside one checkout either; that multiplies a tree that already
-  passes 10 GB.
+- Every worktree of this repository on one machine builds into the main checkout's `target/`: set `CARGO_TARGET_DIR`
+  to that one path in every worktree, never to a directory of the worktree's own, so dependencies compile once. A
+  worktree that builds while another may sets its own cfg for its whole run,
+  `RUSTFLAGS="--cfg concord_<name>_gate"`: cargo gives a path crate the same unit hash in every worktree and decides
+  freshness by mtime, so without a distinct cfg one worktree links another's artifacts, and `xtask` tests then read
+  the other tree through `CARGO_MANIFEST_DIR`. Touching the changed sources alone does not prevent it while another
+  worktree builds. Before a gate, also touch `xtask/**/*.rs`, and confirm by name that the new tests ran.
+- A comparison whose arms must not share artifacts builds each arm under a cfg no other build uses; `xtask bench
+  --base` builds the base into `target/bench/rev-target`.
+- Do not give a worktree, a crate or an agent a target of its own: every dependency compiles again, in a tree that
+  already passes 10 GB.
+- Build only what the step needs: `-p` the packages it uses, and for a release measurement `-p concord-desktop` or the
+  binary measured. Clippy for another platform (the Android ABIs, Windows) covers the crates the change touches and
+  runs once per head sent for review.
 - Keep debug builds small: `CARGO_INCREMENTAL=0` and `CARGO_PROFILE_DEV_DEBUG=line-tables-only`.
 - Check `du -sh target` before and after a round. Cargo keeps each compiled unit whole in
   `target/debug/build/<package>/<hash>/`, and a round of tests leaves several hashes of the same package; keep the
