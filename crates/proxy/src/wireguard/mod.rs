@@ -23,7 +23,6 @@ use concord_net::dial_found;
 use tokio::time::timeout;
 
 use self::config::WgConfig;
-use self::session::WgSession;
 use self::stack::IpStream;
 use self::tunnel::{Tunnel, watch_idle};
 use crate::ctx::{BuildCtx, BuildError};
@@ -129,7 +128,7 @@ impl Outbound for WireGuard {
     ) -> io::Result<Arc<dyn PacketSession>> {
         let shared = &self.shared;
         let tunnel = shared.tunnel(cx).await?;
-        let session = WgSession::new(
+        let session = session::open(
             tunnel.clone(),
             shared.clone(),
             cx.env.resolver.clone(),
@@ -137,13 +136,7 @@ impl Outbound for WireGuard {
         )?;
         if let Address::Domain(host, _) = hint {
             session
-                .seed(
-                    host,
-                    &*cx.env.resolver,
-                    cx.initiator,
-                    &shared.config,
-                    shared.egress.version(),
-                )
+                .seed(host)
                 .await
                 .map_err(|err| io::Error::other(format!("can't resolve ip: {err}")))?;
         }

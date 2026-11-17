@@ -24,6 +24,8 @@ base64 = { workspace = true }
 percent-encoding = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+http = { workspace = true }
+ipnetwork = { workspace = true }
 
 [lints]
 workspace = true

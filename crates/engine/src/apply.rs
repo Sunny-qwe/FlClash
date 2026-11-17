@@ -349,7 +349,7 @@ pub(crate) struct Built {
     pub rule_providers: Arc<RuleProviders>,
     pub deferred_geo: Vec<GeoFile>,
     pub warnings: Vec<WarningView>,
-    pub mitm: concord_config::Map,
+    pub mitm: concord_config::MitmDef,
     pub trust: Arc<TrustStore>,
 }
 

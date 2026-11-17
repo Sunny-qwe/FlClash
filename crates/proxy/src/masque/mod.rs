@@ -164,14 +164,14 @@ impl Outbound for Masque {
             ));
         }
         let tunnel = self.shared.tunnel(cx).await?;
-        let session = session::Session::new(
+        let session = session::open(
             tunnel,
             self.shared.clone(),
             cx.env.resolver.clone(),
             cx.initiator,
         )?;
         if let Address::Domain(host, _) = hint {
-            session.seed(host, &*cx.env.resolver, cx.initiator).await?;
+            session.seed(host).await?;
         }
         Ok(Arc::new(session))
     }

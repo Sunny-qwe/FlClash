@@ -1,4 +1,6 @@
+mod session;
 mod stream;
+pub(crate) use session::{SessionTunnel, StackSession};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::{IpAddr, SocketAddr};

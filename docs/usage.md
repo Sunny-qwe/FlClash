@@ -39,7 +39,9 @@ concord -t -c config.yaml
 
 Loads the profile without running it and prints what applying it would warn about as JSON,
 `{"warnings": [{"level", "code", "path", "message"}]}`, or `{"error": "..."}` with exit status 1 when it does not
-load. `--android` checks it as the Android build loads it.
+load. `--android` checks it as the Android build loads it. While `mitm` is enabled, each of its lines that cannot be
+read is skipped and reported (`mitm_line`, with the line of the profile); jq and cron expressions, scripts and the
+files a line names are checked when the section is applied.
 
 ### Reloading
 

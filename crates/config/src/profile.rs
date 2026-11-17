@@ -64,7 +64,7 @@ pub struct Profile {
     pub store_fake_ip: bool,
     pub dialer_ip4p_convert: bool,
     pub refuse_all: bool,
-    pub mitm: Map,
+    pub mitm: crate::mitm::MitmDef,
     pub tls: TlsConfig,
     pub report: LoadReport,
 }
@@ -110,7 +110,7 @@ impl Profile {
             store_fake_ip: false,
             dialer_ip4p_convert: false,
             refuse_all: true,
-            mitm: Map::new(),
+            mitm: crate::mitm::MitmDef::default(),
             tls: TlsConfig::default(),
             report: LoadReport::default(),
         }
@@ -825,7 +825,7 @@ pub fn load_raw(mut raw: RawConfig, options: &LoadOptions) -> Result<Profile> {
         dialer_ip4p_convert: flag(&raw.experimental, "dialer-ip4p-convert"),
         refuse_all: false,
         rules: std::mem::take(&mut raw.rules),
-        mitm: raw.mitm,
+        mitm: crate::mitm::load(&raw.mitm, &raw.lines.mitm, &mut report),
         tls: TlsConfig::from_map(&raw.tls),
         report,
     })

@@ -1,71 +1,25 @@
 use std::path::{Component, Path};
 
+use concord_config::mitm::{
+    BodyActionDef, BodyRewriteDef, HeaderEditDef, HeaderRewriteDef, MapLocalBody, MapLocalDef,
+    UrlRewriteDef,
+};
 use http::StatusCode;
-use http::header::{HeaderMap, HeaderName, HeaderValue};
+use http::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 
 use crate::heads::{HeadConditions, Heads};
 use crate::issue::LineError;
 use crate::jq::{Jq, JqOutcome};
 use crate::pattern::Pattern;
 use crate::script::{Script, ScriptKind};
-use crate::text::{Field, canonical_header, decode_base64, quote, remainder, split_fields, texts};
+use crate::text::{decode_base64, quote};
 use crate::view::LineView;
+
+pub(crate) use concord_config::mitm::UrlAction;
 
 mod views;
 
 const TINY_GIF_BASE64: &str = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UrlAction {
-    Header,
-    Redirect302,
-    Redirect307,
-    Reject,
-    Reject200,
-    RejectImg,
-    RejectDict,
-    RejectArray,
-}
-
-impl UrlAction {
-    fn named(text: &str) -> Option<UrlAction> {
-        Some(match text {
-            "header" => UrlAction::Header,
-            "302" => UrlAction::Redirect302,
-            "307" => UrlAction::Redirect307,
-            "reject" => UrlAction::Reject,
-            "reject-200" => UrlAction::Reject200,
-            "reject-img" | "reject-tinygif" => UrlAction::RejectImg,
-            "reject-dict" => UrlAction::RejectDict,
-            "reject-array" => UrlAction::RejectArray,
-            _ => return None,
-        })
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            UrlAction::Header => "header",
-            UrlAction::Redirect302 => "302",
-            UrlAction::Redirect307 => "307",
-            UrlAction::Reject => "reject",
-            UrlAction::Reject200 => "reject-200",
-            UrlAction::RejectImg => "reject-img",
-            UrlAction::RejectDict => "reject-dict",
-            UrlAction::RejectArray => "reject-array",
-        }
-    }
-
-    pub fn rejects(self) -> bool {
-        matches!(
-            self,
-            UrlAction::Reject
-                | UrlAction::Reject200
-                | UrlAction::RejectImg
-                | UrlAction::RejectDict
-                | UrlAction::RejectArray
-        )
-    }
-}
 
 #[derive(Debug)]
 pub struct UrlRewrite {
@@ -139,160 +93,31 @@ pub fn tiny_gif() -> Vec<u8> {
     decode_base64(TINY_GIF_BASE64).unwrap_or_default()
 }
 
-pub(crate) fn parse_url_rewrite(line: &str) -> Result<UrlRewrite, LineError> {
-    let fields = split_fields(line)?;
-    if fields.len() < 2 {
-        return Err(LineError::syntax(
-            "expected a pattern and a replacement or type",
-        ));
-    }
-    let conditional = fields
-        .get(2)
-        .is_some_and(|field| field.text.eq_ignore_ascii_case("url-and-header"));
-    let (head, first_arg) = if conditional {
-        (Some(Pattern::new(&field_text(&fields, 1))?), 3)
-    } else {
-        (None, 1)
-    };
-    let args = texts(fields.get(first_arg..).unwrap_or_default());
-    if args.is_empty() {
-        return Err(LineError::missing("url-and-header needs a type"));
-    }
-    let first = args.first().copied().unwrap_or_default();
-    let mut action = UrlAction::Header;
-    let mut replacement = String::new();
-    match args.len() {
-        _ if first == "url" && args.len() >= 2 => {
-            action = url_action_of(args.get(1).copied().unwrap_or_default())?;
-            if let Some(third) = args.get(2) {
-                replacement = (*third).to_string();
-            }
-        }
-        1 => match UrlAction::named(first) {
-            Some(named) if named.rejects() => action = named,
-            _ => replacement = first.to_string(),
-        },
-        2 => {
-            let second = args.get(1).copied().unwrap_or_default();
-            if let Some(named) = UrlAction::named(second) {
-                (replacement, action) = (first.to_string(), named);
-            } else if let Some(named) = UrlAction::named(first) {
-                (action, replacement) = (named, second.to_string());
-            } else {
-                return Err(LineError::unknown(format!(
-                    "unknown type {}",
-                    quote(second)
-                )));
-            }
-        }
-        _ => return Err(LineError::syntax("too many fields")),
-    }
-    if action.rejects() {
-        replacement.clear();
-    } else if replacement.is_empty() || replacement == "_" {
-        return Err(LineError::missing(format!(
-            "{} needs a replacement URL",
-            action.name()
-        )));
-    }
-    let pattern = Pattern::new(&field_text(&fields, 0))?;
+pub(crate) fn compile_url_rewrite(def: &UrlRewriteDef) -> Result<UrlRewrite, LineError> {
     Ok(UrlRewrite {
-        pattern,
-        head,
-        replacement,
-        action,
+        pattern: Pattern::new(&def.pattern)?,
+        head: def.head.as_deref().map(Pattern::new).transpose()?,
+        replacement: def.replacement.clone(),
+        action: def.action,
     })
 }
 
-fn field_text(fields: &[Field], at: usize) -> String {
-    fields
-        .get(at)
-        .map(|field| field.text.clone())
-        .unwrap_or_default()
-}
-
-fn url_action_of(text: &str) -> Result<UrlAction, LineError> {
-    UrlAction::named(text)
-        .ok_or_else(|| LineError::unknown(format!("unknown type {}", quote(text))))
-}
-
-pub(crate) fn parse_header_rewrite(line: &str) -> Result<HeaderRewrite, LineError> {
-    let mut fields = split_fields(line)?;
-    let mut response = false;
-    if let Some(first) = fields.first() {
-        match first.text.to_ascii_lowercase().as_str() {
-            "http-response" => {
-                response = true;
-                fields.remove(0);
-            }
-            "http-request" => {
-                fields.remove(0);
-            }
-            _ => {}
+pub(crate) fn compile_header_rewrite(def: &HeaderRewriteDef) -> Result<HeaderRewrite, LineError> {
+    let edit = match &def.edit {
+        HeaderEditDef::Add(name, value) => HeaderEdit::Add(name.clone(), value.clone()),
+        HeaderEditDef::Del(name) => HeaderEdit::Del(name.clone()),
+        HeaderEditDef::Replace(name, value) => HeaderEdit::Replace(name.clone(), value.clone()),
+        HeaderEditDef::ReplaceRegex(name, pattern, with) => {
+            HeaderEdit::ReplaceRegex(name.clone(), Pattern::new(pattern)?, with.clone())
         }
-    }
-    let (conditions, at) = HeadConditions::read(&fields, response, 1)?;
-    let action_text = field_text(&fields, at).to_ascii_lowercase();
-    let rest = fields.get(at + 1..).unwrap_or_default();
-    if action_text == "header-text-replace" {
-        if rest.len() != 2 {
-            return Err(LineError::syntax(
-                "header-text-replace needs a pattern and a replacement",
-            ));
-        }
-        return Ok(HeaderRewrite {
-            response,
-            pattern: Pattern::new(&field_text(&fields, 0))?,
-            conditions,
-            edit: HeaderEdit::Text(Pattern::new(&field_text(rest, 0))?, field_text(rest, 1)),
-        });
-    }
-    let Some(name_field) = rest.first() else {
-        return Err(LineError::syntax(
-            "expected a pattern, an action and a header name",
-        ));
-    };
-    let name_text = canonical_header(&name_field.text);
-    if matches!(name_text.as_str(), "Content-Length" | "Transfer-Encoding") {
-        return Err(LineError::unsupported(format!(
-            "{name_text} frames the message and cannot be rewritten"
-        )));
-    }
-    let name = HeaderName::from_bytes(name_text.as_bytes())
-        .map_err(|_| LineError::invalid(format!("invalid header name {}", quote(&name_text))))?;
-    let args = rest.get(1..).unwrap_or_default();
-    let value = || {
-        let text = remainder(line, name_field);
-        HeaderValue::from_str(&text)
-            .map_err(|_| LineError::invalid(format!("invalid header value {}", quote(&text))))
-    };
-    let edit = match action_text.as_str() {
-        "header-add" => HeaderEdit::Add(name, value()?),
-        "header-replace" => HeaderEdit::Replace(name, value()?),
-        "header-del" => HeaderEdit::Del(name),
-        "header-replace-regex" => {
-            if args.len() < 2 {
-                return Err(LineError::syntax(
-                    "header-replace-regex needs a pattern and a replacement",
-                ));
-            }
-            HeaderEdit::ReplaceRegex(
-                name,
-                Pattern::new(&field_text(args, 0))?,
-                field_text(args, 1),
-            )
-        }
-        _ => {
-            return Err(LineError::unknown(format!(
-                "unknown action {}",
-                quote(&field_text(&fields, at))
-            )));
+        HeaderEditDef::Text(pattern, with) => {
+            HeaderEdit::Text(Pattern::new(pattern)?, with.clone())
         }
     };
     Ok(HeaderRewrite {
-        response,
-        pattern: Pattern::new(&field_text(&fields, 0))?,
-        conditions,
+        response: def.response,
+        pattern: Pattern::new(&def.pattern)?,
+        conditions: HeadConditions::compile(&def.conditions)?,
         edit,
     })
 }
@@ -346,106 +171,27 @@ impl HeaderRewrite {
     }
 }
 
-pub(crate) fn parse_body_rewrite(line: &str) -> Result<BodyRewrite, LineError> {
-    let kind = line.split_whitespace().next().unwrap_or_default();
-    let jq_response = match kind.to_ascii_lowercase().as_str() {
-        "http-request-jq" => Some(false),
-        "http-response-jq" => Some(true),
-        _ => None,
+pub(crate) fn compile_body_rewrite(def: &BodyRewriteDef) -> Result<BodyRewrite, LineError> {
+    let action = match &def.action {
+        BodyActionDef::Replace(pairs) => BodyAction::Replace(
+            pairs
+                .iter()
+                .map(|(pattern, with)| {
+                    Ok(BodyReplacement {
+                        pattern: Pattern::multiline(pattern)?,
+                        with: with.clone(),
+                    })
+                })
+                .collect::<Result<_, LineError>>()?,
+        ),
+        BodyActionDef::Jq(expression) => BodyAction::Jq(Jq::compile(expression)?),
     };
-    if let Some(response) = jq_response {
-        let rest = line.trim_start().get(kind.len()..).unwrap_or_default();
-        let (pattern, mut expression) =
-            leading_field(rest).ok_or_else(|| LineError::syntax("unclosed quote"))?;
-        let mut conditions = HeadConditions::default();
-        while let Some((keyword, after)) = leading_field(expression)
-            && let Some((condition, after)) = leading_field(after)
-            && conditions.set(&keyword, Some(&condition), response)?
-        {
-            expression = after;
-        }
-        let expression = unwrap_quotes(expression.trim());
-        if pattern.is_empty() || expression.is_empty() {
-            return Err(LineError::syntax("expected a pattern and a jq expression"));
-        }
-        return Ok(BodyRewrite {
-            response,
-            pattern: Pattern::new(&pattern)?,
-            conditions,
-            action: BodyAction::Jq(Jq::compile(expression)?),
-        });
-    }
-    let fields = split_fields(line)?;
-    if fields.len() < 4 {
-        return Err(LineError::syntax(
-            "expected a type, a pattern and a regex with its replacement",
-        ));
-    }
-    let first = field_text(&fields, 0);
-    let response = match first.to_ascii_lowercase().as_str() {
-        "http-request" => false,
-        "http-response" => true,
-        _ => {
-            return Err(LineError::unknown(format!(
-                "unknown type {}",
-                quote(&first)
-            )));
-        }
-    };
-    let (conditions, at) = HeadConditions::read(&fields, response, 2)?;
-    let pairs = fields.get(at..).unwrap_or_default();
-    if pairs.is_empty() {
-        return Err(LineError::syntax("expected a regex with its replacement"));
-    }
-    if pairs.len() % 2 != 0 {
-        return Err(LineError::syntax("a regex is missing its replacement"));
-    }
-    let mut replacements = Vec::new();
-    for pair in pairs.chunks(2) {
-        let pattern = Pattern::multiline(&field_text(pair, 0))?;
-        replacements.push(BodyReplacement {
-            pattern,
-            with: field_text(pair, 1),
-        });
-    }
     Ok(BodyRewrite {
-        response,
-        pattern: Pattern::new(&field_text(&fields, 1))?,
-        conditions,
-        action: BodyAction::Replace(replacements),
+        response: def.response,
+        pattern: Pattern::new(&def.pattern)?,
+        conditions: HeadConditions::compile(&def.conditions)?,
+        action,
     })
-}
-
-/// The pattern of a jq line, and the expression after it as written: its own quotes and
-/// spaces are jq's, not the line's.
-fn leading_field(text: &str) -> Option<(String, &str)> {
-    let text = text.trim_start();
-    let Some(quoted) = text.strip_prefix('"') else {
-        let end = text.find([' ', '\t']).unwrap_or(text.len());
-        return Some((text[..end].to_string(), &text[end..]));
-    };
-    let mut out = String::new();
-    let mut chars = quoted.char_indices();
-    while let Some((at, c)) = chars.next() {
-        match c {
-            '\\' if quoted[at + 1..].starts_with('"') => {
-                out.push('"');
-                chars.next();
-            }
-            '"' => return Some((out, &quoted[at + 1..])),
-            c => out.push(c),
-        }
-    }
-    None
-}
-
-fn unwrap_quotes(text: &str) -> &str {
-    for mark in ['\'', '"'] {
-        if text.len() >= 2 && text.starts_with(mark) && text.ends_with(mark) {
-            return &text[1..text.len() - 1];
-        }
-    }
-    text
 }
 
 impl BodyRewrite {
@@ -522,143 +268,62 @@ pub(crate) fn read_resource(dir: &Path, param: &str, name: &str) -> Result<Vec<u
         .map_err(|_| LineError::resource(format!("{param} {} cannot be read", quote(name))))
 }
 
-fn mime_by_extension(name: &str) -> Option<&'static str> {
-    let ext = Path::new(name).extension()?.to_str()?.to_ascii_lowercase();
-    Some(match ext.as_str() {
-        "avif" => "image/avif",
-        "css" => "text/css; charset=utf-8",
-        "gif" => "image/gif",
-        "htm" | "html" => "text/html; charset=utf-8",
-        "jpeg" | "jpg" => "image/jpeg",
-        "js" | "mjs" => "text/javascript; charset=utf-8",
-        "json" => "application/json",
-        "pdf" => "application/pdf",
-        "png" => "image/png",
-        "svg" => "image/svg+xml",
-        "wasm" => "application/wasm",
-        "webp" => "image/webp",
-        "xml" => "text/xml; charset=utf-8",
-        "txt" => "text/plain; charset=utf-8",
-        _ => return None,
-    })
+/// A `map-local` or `request-body-mock` line's rule, its body read from the resources
+/// directory when the line names a file.
+pub(crate) fn compile_map_local(
+    def: &MapLocalDef,
+    resources: &Path,
+) -> Result<(MapLocal, LineView), LineError> {
+    let body = match &def.body {
+        MapLocalBody::Text => def.data.as_bytes().to_vec(),
+        MapLocalBody::TinyGif => tiny_gif(),
+        MapLocalBody::Base64(bytes) => bytes.clone(),
+        MapLocalBody::File => read_resource(resources, "data", &def.data)?,
+    };
+    let mut header = def.header.clone();
+    if !header.contains_key(CONTENT_TYPE) {
+        header.insert(CONTENT_TYPE, HeaderValue::from_static(def.content_type));
+    }
+    let rule = MapLocal {
+        pattern: Pattern::new(&def.pattern)?,
+        conditions: HeadConditions::compile(&def.conditions)?,
+        status: def.status,
+        header,
+        body,
+    };
+    let data = match def.body {
+        MapLocalBody::TinyGif => "",
+        _ => &def.data,
+    };
+    let view = views::map_local_view(&rule, def.body.data_type(), data, def.request, &def.header);
+    Ok((rule, view))
 }
 
-/// A `map-local` line, or with `request` a `request-body-mock` one, which takes the same
-/// parameters but no status, as it answers nothing.
+#[cfg(test)]
+pub(crate) fn parse_url_rewrite(line: &str) -> Result<UrlRewrite, LineError> {
+    compile_url_rewrite(&concord_config::mitm::parse_url_rewrite(line)?)
+}
+
+#[cfg(test)]
+pub(crate) fn parse_header_rewrite(line: &str) -> Result<HeaderRewrite, LineError> {
+    compile_header_rewrite(&concord_config::mitm::parse_header_rewrite(line)?)
+}
+
+#[cfg(test)]
+pub(crate) fn parse_body_rewrite(line: &str) -> Result<BodyRewrite, LineError> {
+    compile_body_rewrite(&concord_config::mitm::parse_body_rewrite(line)?)
+}
+
+#[cfg(test)]
 pub(crate) fn parse_map_local(
     line: &str,
     resources: &Path,
     request: bool,
 ) -> Result<(MapLocal, LineView), LineError> {
-    let fields = split_fields(line)?;
-    let (conditions, at) = HeadConditions::read(&fields, false, 1)?;
-    let args = fields.get(at..).unwrap_or_default();
-    if args.is_empty() {
-        return Err(LineError::syntax(
-            "expected a pattern and the data to answer with",
-        ));
-    }
-    let mut params = std::collections::HashMap::new();
-    for field in args {
-        let (key, value) = field.text.split_once('=').ok_or_else(|| {
-            LineError::syntax(format!("expected key=value, got {}", quote(&field.text)))
-        })?;
-        params.insert(key.to_ascii_lowercase(), value.to_string());
-    }
-    let get = |key: &str| params.get(key).map(String::as_str).unwrap_or_default();
-    let (data_type, body, content_type) = match get("data-type") {
-        "text" => (
-            "text",
-            get("data").as_bytes().to_vec(),
-            "text/plain; charset=utf-8".to_string(),
-        ),
-        "tiny-gif" => ("tiny-gif", tiny_gif(), "image/gif".to_string()),
-        "base64" => (
-            "base64",
-            decode_base64(get("data")).map_err(|err| err.within("data"))?,
-            "application/octet-stream".to_string(),
-        ),
-        "" | "file" => (
-            "file",
-            read_resource(resources, "data", get("data"))?,
-            mime_by_extension(get("data"))
-                .unwrap_or("application/octet-stream")
-                .to_string(),
-        ),
-        other => {
-            return Err(LineError::unknown(format!(
-                "unknown data-type {}",
-                quote(other)
-            )));
-        }
-    };
-    let mut status = StatusCode::OK;
-    if request && params.contains_key("status-code") {
-        return Err(LineError::unsupported(
-            "a request body mock answers nothing, so it takes no status-code",
-        ));
-    }
-    if let Some(text) = params.get("status-code") {
-        status = text
-            .parse::<u16>()
-            .ok()
-            .filter(|code| (200..=999).contains(code))
-            .and_then(|code| StatusCode::from_u16(code).ok())
-            .ok_or_else(|| LineError::invalid(format!("invalid status-code {}", quote(text))))?;
-    }
-    let mut header = HeaderMap::new();
-    let header_text = get("header");
-    if !header_text.is_empty() {
-        parse_map_local_header(header_text, &mut header)?;
-    }
-    let own_header = header.clone();
-    if !header.contains_key(http::header::CONTENT_TYPE) {
-        let value = HeaderValue::from_str(&content_type)
-            .map_err(|_| LineError::invalid("invalid content type"))?;
-        header.insert(http::header::CONTENT_TYPE, value);
-    }
-    let rule = MapLocal {
-        pattern: Pattern::new(&field_text(&fields, 0))?,
-        conditions,
-        status,
-        header,
-        body,
-    };
-    let data = if data_type == "tiny-gif" {
-        ""
-    } else {
-        get("data")
-    };
-    let view = views::map_local_view(&rule, data_type, data, request, &own_header);
-    Ok((rule, view))
-}
-
-fn parse_map_local_header(text: &str, header: &mut HeaderMap) -> Result<(), LineError> {
-    let decoded;
-    let (text, separator) = if text.contains(':') {
-        (text, '|')
-    } else {
-        let bytes = decode_base64(text).map_err(|err| err.within("header"))?;
-        decoded = String::from_utf8_lossy(&bytes).into_owned();
-        (decoded.as_str(), '\n')
-    };
-    for line in text.split(separator) {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let (name, value) = line
-            .split_once(':')
-            .ok_or_else(|| LineError::syntax(format!("header {} has no value", quote(line))))?;
-        let name = HeaderName::from_bytes(name.trim().as_bytes()).map_err(|_| {
-            LineError::invalid(format!("invalid header name {}", quote(name.trim())))
-        })?;
-        let value = HeaderValue::from_str(value.trim()).map_err(|_| {
-            LineError::invalid(format!("invalid header value {}", quote(value.trim())))
-        })?;
-        header.append(name, value);
-    }
-    Ok(())
+    compile_map_local(
+        &concord_config::mitm::parse_map_local(line, request)?,
+        resources,
+    )
 }
 
 fn first_local<'r>(rules: &'r [MapLocal], url: &str, heads: &Heads<'_>) -> Option<&'r MapLocal> {

@@ -2,12 +2,9 @@
 
 use std::cell::OnceCell;
 
-use crate::issue::LineError;
-use crate::pattern::{Pattern, PatternError};
-use crate::text::Field;
+use concord_config::mitm::HeadConditionsDef;
 
-pub(crate) const REQUEST_HEAD: &str = "request-head";
-pub(crate) const RESPONSE_HEAD: &str = "response-head";
+use crate::pattern::{Pattern, PatternError};
 
 /// Concord's `request-head <re>` and `response-head <re>` after a header or body rewrite's
 /// URL: patterns over a head as [crate::headers::head_text] writes it.
@@ -17,70 +14,13 @@ pub(crate) struct HeadConditions {
     pub(crate) response: Option<Pattern>,
 }
 
-#[derive(Debug)]
-pub(crate) enum ConditionError {
-    ResponseOnly,
-    NoPattern(&'static str),
-    Twice(&'static str),
-    Pattern(PatternError),
-}
-
-impl From<ConditionError> for LineError {
-    fn from(err: ConditionError) -> LineError {
-        match err {
-            ConditionError::ResponseOnly => {
-                LineError::unsupported(format!("{RESPONSE_HEAD} needs an http-response rule"))
-            }
-            ConditionError::NoPattern(keyword) => {
-                LineError::missing(format!("{keyword} needs a pattern"))
-            }
-            ConditionError::Twice(keyword) => {
-                LineError::syntax(format!("{keyword} is given twice"))
-            }
-            ConditionError::Pattern(err) => err.into(),
-        }
-    }
-}
-
 impl HeadConditions {
-    /// `false` when `keyword` names no condition.
-    pub(crate) fn set(
-        &mut self,
-        keyword: &str,
-        pattern: Option<&str>,
-        response: bool,
-    ) -> Result<bool, ConditionError> {
-        let (keyword, slot) = match keyword.to_ascii_lowercase().as_str() {
-            REQUEST_HEAD => (REQUEST_HEAD, &mut self.request),
-            RESPONSE_HEAD if response => (RESPONSE_HEAD, &mut self.response),
-            RESPONSE_HEAD => return Err(ConditionError::ResponseOnly),
-            _ => return Ok(false),
-        };
-        let pattern = pattern.ok_or(ConditionError::NoPattern(keyword))?;
-        if slot.is_some() {
-            return Err(ConditionError::Twice(keyword));
-        }
-        *slot = Some(Pattern::new(pattern).map_err(ConditionError::Pattern)?);
-        Ok(true)
-    }
-
-    /// Reads the conditions from `at` on and returns where the fields after them start.
-    pub(crate) fn read(
-        fields: &[Field],
-        response: bool,
-        mut at: usize,
-    ) -> Result<(Self, usize), ConditionError> {
-        let mut conditions = HeadConditions::default();
-        while let Some(keyword) = fields.get(at)
-            && conditions.set(
-                &keyword.text,
-                fields.get(at + 1).map(|field| field.text.as_str()),
-                response,
-            )?
-        {
-            at += 2;
-        }
-        Ok((conditions, at))
+    pub(crate) fn compile(def: &HeadConditionsDef) -> Result<Self, PatternError> {
+        let compile = |pattern: &Option<String>| pattern.as_deref().map(Pattern::new).transpose();
+        Ok(HeadConditions {
+            request: compile(&def.request)?,
+            response: compile(&def.response)?,
+        })
     }
 }
 

@@ -17,6 +17,7 @@ script = ["dep:rquickjs"]
 
 [dependencies]
 concord-common = { workspace = true, features = ["io"] }
+concord-config = { workspace = true }
 concord-platform = { workspace = true }
 concord-tls = { workspace = true }
 tokio = { workspace = true, features = ["net", "time", "io-util", "macros", "rt", "sync"] }
