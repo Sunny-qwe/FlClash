@@ -542,7 +542,9 @@ mod tests {
     }
 
     /// A server that lets every client in and counts the connections it accepts.
-    fn accepting_server() -> (u16, Arc<std::sync::atomic::AtomicUsize>, quinn::Endpoint) {
+    fn accepting_server(
+        on_auth: impl Fn(quinn::Connection) + Clone + Send + 'static,
+    ) -> (u16, Arc<std::sync::atomic::AtomicUsize>, quinn::Endpoint) {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let (endpoint, port) = crate::testing::quic_server(b"h3", |socket| socket);
         let accepted = Arc::new(AtomicUsize::new(0));
@@ -550,6 +552,7 @@ mod tests {
         tokio::spawn(async move {
             while let Some(incoming) = listening.accept().await {
                 counted.fetch_add(1, Ordering::SeqCst);
+                let on_auth = on_auth.clone();
                 tokio::spawn(async move {
                     let Ok(conn) = incoming.await else {
                         return;
@@ -564,9 +567,14 @@ mod tests {
                     if let Ok(Some(request)) = server.accept().await
                         && let Ok((_, mut stream)) = request.resolve_request().await
                     {
-                        let reply = http::Response::builder().status(AUTH_OK).body(()).unwrap();
+                        let reply = http::Response::builder()
+                            .status(AUTH_OK)
+                            .header("Hysteria-UDP", "false")
+                            .body(())
+                            .unwrap();
                         let _ = stream.send_response(reply).await;
                         let _ = stream.finish().await;
+                        on_auth(conn.clone());
                     }
                     conn.closed().await;
                     drop(server);
@@ -574,6 +582,63 @@ mod tests {
             }
         });
         (port, accepted, endpoint)
+    }
+
+    #[tokio::test]
+    async fn server_udp_refusal_keeps_the_datagram_reader_running() {
+        use concord_config::{Capabilities, ProxyParse, parse_proxy};
+        let (authenticated, mut peers) = tokio::sync::mpsc::unbounded_channel();
+        let (port, _, _server) = accepting_server(move |peer| {
+            let _ = authenticated.send(peer);
+        });
+        let node = serde_json::json!({
+            "name": "n", "type": "hysteria2", "server": "127.0.0.1", "port": port,
+            "password": "pw", "sni": "localhost", "skip-cert-verify": true,
+        });
+        let Ok(ProxyParse::Ok(def)) = parse_proxy(node.as_object().unwrap(), &Capabilities::full())
+        else {
+            panic!("does not parse");
+        };
+        let concord_config::proxy::ProxyKind::Hysteria2(opts) = &def.kind else {
+            panic!("not hysteria2");
+        };
+        let ctx = BuildCtx::new(concord_tls::TrustStore::new(b"", Vec::new()));
+        let built = build_hy2(&def, opts, &ctx).unwrap();
+        assert!(built.info().udp);
+        let env = crate::testing::test_env();
+        let cx = DialCx::new(&env, Initiator::Other, None);
+        let from = "127.0.0.1:53";
+        let target = Address::parse(from).unwrap();
+        let err = built.associate(&cx, &target).await.err().unwrap();
+        assert_eq!(err.to_string(), "UDP disabled by server");
+
+        let conn = built.offer(&cx).await.unwrap();
+        let (session, mut packets) = conn.shared.hub.register();
+        let limit = Duration::from_secs(2);
+        let peer = tokio::time::timeout(limit, peers.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let mut data = Vec::new();
+        wire::put_udp_header(
+            &mut data,
+            &wire::UdpHeader {
+                session,
+                packet: 0,
+                fragment: 0,
+                fragments: 1,
+                addr: from,
+            },
+        );
+        data.extend_from_slice(b"reader");
+        peer.send_datagram(bytes::Bytes::from(data)).unwrap();
+
+        let (addr, payload) = tokio::time::timeout(limit, packets.recv())
+            .await
+            .expect("the datagram reader did not dispatch")
+            .unwrap();
+        assert_eq!(addr, target);
+        assert_eq!(payload.as_ref(), b"reader");
     }
 
     #[tokio::test]
@@ -585,7 +650,7 @@ mod tests {
             serde_json::json!({}),
             serde_json::json!({"handshake-timeout": 5}),
         ] {
-            let (port, accepted, _server) = accepting_server();
+            let (port, accepted, _server) = accepting_server(|_| {});
             let mut node = serde_json::json!({
                 "name": "n", "type": "hysteria2", "server": "localhost", "port": port,
                 "password": "pw", "sni": "localhost", "skip-cert-verify": true,

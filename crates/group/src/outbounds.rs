@@ -19,6 +19,7 @@ use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::check::{Check, Supervisor};
+use crate::error::GroupError;
 use crate::first_write::FirstWrite;
 use crate::group::{Group, Pick, Policy, Touch};
 use crate::node::{Ghost, Item, Leaf, Node};
@@ -488,7 +489,7 @@ impl Outbounds {
                 Ok((leaf, chain, true))
             }
             Resolved::Pass | Resolved::PassRule => {
-                Err(io::Error::other(format!("{name} cannot be dialed")))
+                Err(io::Error::other(GroupError::CannotDial(name.to_owned())))
             }
             Resolved::Rejected(_) => Err(CoreError::QuarantinedNode(name.to_string()).into()),
             Resolved::Unknown => Err(CoreError::UnknownNode(name.to_string()).into()),

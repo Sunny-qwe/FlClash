@@ -10,6 +10,8 @@ pub enum GroupError {
     MissingMembers { group: String },
     #[error("{group}: '{name}' not found")]
     NotFound { group: String, name: String },
+    #[error("{0} cannot be dialed")]
+    CannotDial(String),
     #[error("{group}: empty fallback proxy '{name}' not found")]
     EmptyFallback { group: String, name: String },
     #[error("proxy group {0}: the duplicate name")]
