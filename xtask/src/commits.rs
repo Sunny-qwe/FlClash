@@ -1,5 +1,6 @@
 //! `xtask check-commits <git log revisions>`: holds commit messages to `rules.md`, Commits: a Conventional
-//! Commits subject with a scope, and no trailer or line that credits or links a coding agent. Commits older
+//! Commits subject with a scope, no trailer or line that credits or links a coding agent, and none of the
+//! internal coordination names the published tree keeps out (`internal_marks`). Commits older
 //! than the one that added this file are skipped: published history, which other repositories pin, cannot be
 //! reworded.
 
@@ -102,6 +103,11 @@ fn message_problems(message: &str) -> Vec<String> {
             problems.push(format!("`{line}` credits or links a coding agent"));
         }
     }
+    for line in message.lines() {
+        for (name, kind) in crate::internal_marks::internal_marks(line) {
+            problems.push(format!("`{name}` is {kind}; say what it is or measured"));
+        }
+    }
     problems
 }
 
@@ -193,6 +199,30 @@ mod tests {
             "Reviewed-by: Codex",
         ] {
             assert!(credits_an_agent(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn internal_names_in_a_message_are_reported() {
+        for (line, kind) in crate::internal_marks::tests::INTERNAL_LINES {
+            let found = message_problems(&format!("fix(tun): keep the queue whole\n\n{line}\n"));
+            assert_eq!(found.len(), 1, "{line}: {found:?}");
+            assert!(found[0].contains(kind), "{line}: {found:?}");
+        }
+        for (line, _) in crate::internal_marks::tests::INTERNAL_LINES {
+            assert_eq!(
+                message_problems(&format!("fix(tun): {line}")).len(),
+                1,
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn messages_with_names_shaped_like_internal_ones_pass() {
+        for line in crate::internal_marks::tests::PUBLIC_LINES {
+            let message = format!("fix(tun): keep the queue whole\n\n{line}\n");
+            assert_eq!(message_problems(&message), Vec::<String>::new(), "{line}");
         }
     }
 

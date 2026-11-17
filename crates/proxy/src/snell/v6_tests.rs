@@ -203,8 +203,8 @@ async fn v6_partial_records_fail_at_eof_and_split_halves_keep_reading() {
 #[test]
 fn v6_fixed_salt_wire_matches_upstream_alpha() {
     use sha2::{Digest, Sha256};
-    // Go 1.27.3, mihomo 3c0d10a5: place p7_vectors_test.go in transport/snell, then
-    // P7_VECTORS=v6_vectors.json go test ./transport/snell -run '^TestP7Vectors$' -count=1 (salt 00..0f).
+    // Go 1.27.3, mihomo 3c0d10a5 transport/snell, salt 00..0f: each PSK and mode's v6 record
+    // writer (newV6Profile, v6AEAD) writes the same packets and stream, then a zero chunk.
     let vectors: serde_json::Value = serde_json::from_str(include_str!("v6_vectors.json")).unwrap();
     for vector in vectors.as_array().unwrap() {
         let psk = vector["psk"].as_str().unwrap().as_bytes();

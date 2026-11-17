@@ -2,6 +2,7 @@ mod bench;
 mod commits;
 #[cfg(test)]
 mod doc_paths;
+mod internal_marks;
 mod layers;
 #[cfg(test)]
 mod public_tree;

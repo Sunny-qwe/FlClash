@@ -159,9 +159,8 @@ mod tests {
             .cipher(&server_auth)
             .encrypt(GenericArray::from_slice(&nonce), [7; 16].as_slice())
             .unwrap();
-        // Go 1.27.3, mihomo 3c0d10a5: generator in codex-rootcause/evidence/
-        // p6_jls_vectors_test.go; copy into
-        // transport/jls; go test ./transport/jls -run '^TestP6JLSVectors$' -v (P6_AUTH).
+        // Go 1.27.3, mihomo 3c0d10a5 transport/jls: AES-256-GCM with a 32-byte nonce, key
+        // SHA-256("secret" || hello), nonce SHA-256("name" || hello), sealing sixteen 7s.
         assert_eq!(
             hex::encode(&sealed),
             "ccb6b2b0df1c6c5accadfa86c2200989274ebd9d5f4da8fbde8e78dc2f4b9576"

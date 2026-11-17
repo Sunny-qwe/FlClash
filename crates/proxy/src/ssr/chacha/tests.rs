@@ -39,7 +39,8 @@ fn both_stream_ciphers_carry_the_counter_past_256_gib() {
 
 #[test]
 fn both_stream_ciphers_match_go_vectors_across_the_256_gib_boundary() {
-    // Generate with Go 1.27.3, metacubex/chacha v0.1.5: cd evidence/p4-chacha-vectors && go run .
+    // Go 1.27.3, metacubex/chacha v0.1.5 NewChaCha20IgnoreCounterOverflow: key 32 bytes of 7,
+    // SetCounter(2^32 - 1), then 140 zero bytes; each line is the IV followed by the output.
     for line in include_str!("../tests/chacha-boundary.txt").lines() {
         let (iv_len, wire) = line.split_once(' ').unwrap();
         let iv_len = iv_len.parse::<usize>().unwrap();

@@ -261,9 +261,9 @@ async fn jls_tcp_browses_a_verified_http2_fallback() {
 
 #[test]
 fn jls_native_hello_matches_the_go_capture() {
-    // Go 1.27.3 darwin/arm64, mihomo 3c0d10a5 / jls-tls 67adc0e2f796:
-    // generator in codex-rootcause/evidence/p6_jls_vectors_test.go; copy into transport/jls, then run
-    // go test ./transport/jls -run '^TestP6JLSVectors$' -v (P6_NATIVE).
+    // Go 1.27.3 darwin/arm64, mihomo 3c0d10a5 / jls-tls 67adc0e2f796: the first record a
+    // transport/jls NewClient (server name example.com, user name/secret, ALPN h2 and http/1.1)
+    // writes into a net.Pipe, with the random, session ID and every key share zeroed.
     let got = crate::reality::build_client_hello(
         &crate::jls::NATIVE,
         &crate::reality::HelloParams {

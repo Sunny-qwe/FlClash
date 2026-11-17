@@ -149,6 +149,9 @@ replays the list on the new release.
   in files you touch. Lint directives, license headers and vendored upstream comments are exempt.
 - Docs in this repository hold rules and facts, not narratives: no session history, conversation dates or agent names.
   A measured number carries its platform, case and the commit or run it came from.
+- Nothing tracked and no commit message names the project's own coordination: its working directories and notes, run
+  or branch names, work-line codes. A test vector says which upstream, version and call produced it. The `public_tree`
+  test and `check-commits` hold both to the same list.
 
 ## Commits
 
