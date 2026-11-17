@@ -102,6 +102,13 @@ confirming it with a run.
 
 Concord already takes these from the references; keep them unless the reference moves.
 
+- [runtime-bound] **QUIC receive scratch** follows the polling lifetime. mihomo Alpha `3c0d10a5` pins
+  metacubex/quic-go `2548683b76f4`, whose `buffer_pool.go:33-95` returns packet buffers to `sync.Pool` and
+  `sys_conn_oob.go:161-178` borrows buffers for a receive batch. Quinn already copies received bytes into owned
+  packets before dispatch. Concord leases the unchanged full batch/GRO scratch from one cache per polling OS
+  thread; endpoints retain only the required length. Rust's deterministic drop returns it on every poll exit,
+  without Go's garbage-collector-dependent pool lifetime or per-endpoint closing-period storage.
+
 - [language-neutral] **TCP JLS authentication** follows mihomo Alpha `3c0d10a5`
   `transport/jls/utls.go:243-334`: AES-256-GCM authenticates each full TLS 1.3 Hello with its
   32-byte random zeroed, using SHA-256(password || Hello) as key and SHA-256(username || Hello)

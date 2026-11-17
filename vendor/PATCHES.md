@@ -34,6 +34,7 @@ crate's directory, its `[patch.crates-io]` entry and its lines in `UPSTREAM.sha2
 | mio | High-resolution timed waits on Windows | None | PR to tokio-rs/mio, citing Go's default poller path |
 | quinn | `MAX_TRANSMIT_DATAGRAMS` 80 (`MAX_TRANSMIT_SEGMENTS` back to upstream's 10) | n0-computer/noq#636 (noq) | The segment cap is upstream's again; propose only the datagram limit to quinn-rs/quinn |
 | quinn | Stamp each received batch with its own read time | None; quinn `main` `8fe66c3` passes one `now` | PR with `crates/proxy/tests/quinn_recv_time.rs` as the regression |
+| quinn | Lease receive scratch for a socket poll instead of an endpoint lifetime | None | Propose to quinn-rs/quinn with the endpoint sharing regression and receive-buffer lease contracts |
 | quinn-proto | `send_quantum`, `on_packet_lost`, `min_pacing_delay` and explicit-rate pacing | quinn-rs/quinn#2481; merged as noq#611 | Follow #2481. `min_pacing_delay` is Concord's own addition and needs its own proposal; the pacer changes cannot move into `proxy/src/quic/congestion.rs` while the controller API lacks these hooks |
 | quinn-proto | Requeue unacknowledged STREAM data on a PTO; withdraw acknowledged copies | None; quinn `main` `765abecf` requeues only control frames | PR with the recovery contracts of `crates/proxy/tests/quinn_pto.rs` |
 | quinn-proto | A DATAGRAM-only packet does not bundle a pending ACK | None | PR citing quic-go's default path and the `quinn_pto.rs` ACK contracts |
@@ -97,6 +98,14 @@ The package archive checksum is `7d29020232d6aa3fb1daca64c1127cf662cf97f254ae16c
 
 ## quinn 0.11.12
 
+- `src/endpoint.rs`, `src/endpoint/recv_buffer.rs`: receive scratch is leased from a thread-local cache only
+  during `poll_socket`. Packets are already copied into owned `BytesMut`s before dispatch, so no scratch must
+  survive the poll. Keeping the full batch/GRO scratch on each endpoint multiplies it by all live and closing
+  endpoints, and the allocator can retain the freed pages after connection churn. One cached allocation per
+  polling thread keeps the original payload, GRO and batch capacities without tying storage to endpoint count.
+  The lease holds no cache borrow while a custom socket is called, supports reentrant polls, and frees normally
+  if thread-local destruction has started. Contracts: `quic::receive_scratch_tests` and
+  `crates/proxy/tests/quinn_recv_buffer.rs`.
 - `src/connection.rs`: `MAX_TRANSMIT_DATAGRAMS` 20 → 80, the value proposed in n0-computer/noq#636. A bulk sender
   yields, and wakes another tokio worker, a quarter as often (`8452ddc`). `MAX_TRANSMIT_SEGMENTS` stays at upstream's
   10: `8452ddc` raised it to 40 with #645, and a 40-datagram GSO packet cost the receiving Go server 30% more CPU per

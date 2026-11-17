@@ -445,6 +445,14 @@ impl AsyncWrite for QuicWrite {
 #[allow(
     clippy::unwrap_used,
     clippy::disallowed_methods,
+    reason = "loopback sockets exercise Quinn's receive-storage contract"
+)]
+mod receive_scratch_tests;
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::disallowed_methods,
     reason = "the tests talk to a loopback endpoint directly"
 )]
 mod tests {
