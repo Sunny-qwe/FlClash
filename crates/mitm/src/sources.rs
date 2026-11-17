@@ -4,9 +4,17 @@ use std::net::IpAddr;
 
 use ipnetwork::IpNetwork;
 
+use crate::view::SourceEntryView;
+
 #[derive(Debug, thiserror::Error)]
 #[error("invalid address or CIDR {0:?}")]
 pub(crate) struct InvalidSource(String);
+
+impl From<InvalidSource> for crate::issue::LineError {
+    fn from(err: InvalidSource) -> crate::issue::LineError {
+        crate::issue::LineError::invalid(err.to_string())
+    }
+}
 
 /// Every client while it names none, as Surge leaves MITM on for all clients without the key;
 /// an entry with `-` leaves its clients out whatever else names them.
@@ -17,20 +25,32 @@ pub(crate) struct SourceList {
 }
 
 impl SourceList {
-    /// Reads a line of comma-separated addresses and CIDRs, as Surge writes the key.
-    pub(crate) fn add_line(&mut self, line: &str) -> Result<(), InvalidSource> {
+    /// Reads a line of comma-separated addresses and CIDRs, as Surge writes the key. The entries
+    /// before a bad one stay added, and come back with its error.
+    pub(crate) fn add_line(
+        &mut self,
+        line: &str,
+    ) -> (Vec<SourceEntryView>, Result<(), InvalidSource>) {
+        let mut added = Vec::new();
         for entry in line
             .split(',')
             .map(str::trim)
             .filter(|entry| !entry.is_empty())
         {
-            let (list, text) = match entry.strip_prefix('-') {
-                Some(text) => (&mut self.exclude, text.trim()),
-                None => (&mut self.include, entry),
+            let (list, text, exclude) = match entry.strip_prefix('-') {
+                Some(text) => (&mut self.exclude, text.trim(), true),
+                None => (&mut self.include, entry, false),
             };
-            list.push(text.parse().map_err(|_| InvalidSource(entry.to_string()))?);
+            let Ok(network) = text.parse::<IpNetwork>() else {
+                return (added, Err(InvalidSource(entry.to_string())));
+            };
+            list.push(network);
+            added.push(SourceEntryView {
+                network: network.to_string(),
+                exclude,
+            });
         }
-        Ok(())
+        (added, Ok(()))
     }
 
     pub(crate) fn allows(&self, ip: IpAddr) -> bool {
@@ -47,7 +67,7 @@ mod tests {
     fn list(lines: &[&str]) -> SourceList {
         let mut list = SourceList::default();
         for line in lines {
-            list.add_line(line).unwrap();
+            list.add_line(line).1.unwrap();
         }
         list
     }
@@ -68,6 +88,6 @@ mod tests {
         assert!(skipped.allows(ip("192.168.4.52")));
         assert!(!skipped.allows(ip("192.168.4.51")));
         let mut bad = SourceList::default();
-        assert!(bad.add_line("192.168.1.0/24, lan").is_err());
+        assert!(bad.add_line("192.168.1.0/24, lan").1.is_err());
     }
 }

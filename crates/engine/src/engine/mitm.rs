@@ -80,8 +80,8 @@ impl MitmService {
     pub fn validate(&self, raw: Value) -> Result<Value, Failure> {
         let raw: MitmConfig = serde_json::from_value(raw)
             .map_err(|err| Failure::new("invalid_arguments", err.to_string()))?;
-        let issues = self.started()?.validate(&raw);
-        Ok(serde_json::to_value(issues).unwrap_or(Value::Null))
+        let validation = self.started()?.validate(&raw);
+        Ok(serde_json::to_value(validation).unwrap_or(Value::Null))
     }
 
     pub async fn run_script(&self, name: &str) -> Result<Value, Failure> {

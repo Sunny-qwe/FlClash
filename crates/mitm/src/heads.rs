@@ -2,7 +2,8 @@
 
 use std::cell::OnceCell;
 
-use crate::pattern::Pattern;
+use crate::issue::LineError;
+use crate::pattern::{Pattern, PatternError};
 use crate::text::Field;
 
 pub(crate) const REQUEST_HEAD: &str = "request-head";
@@ -21,16 +22,22 @@ pub(crate) enum ConditionError {
     ResponseOnly,
     NoPattern(&'static str),
     Twice(&'static str),
-    Pattern(String),
+    Pattern(PatternError),
 }
 
-impl From<ConditionError> for String {
-    fn from(err: ConditionError) -> String {
+impl From<ConditionError> for LineError {
+    fn from(err: ConditionError) -> LineError {
         match err {
-            ConditionError::ResponseOnly => format!("{RESPONSE_HEAD} needs an http-response rule"),
-            ConditionError::NoPattern(keyword) => format!("{keyword} needs a pattern"),
-            ConditionError::Twice(keyword) => format!("{keyword} is given twice"),
-            ConditionError::Pattern(err) => err,
+            ConditionError::ResponseOnly => {
+                LineError::unsupported(format!("{RESPONSE_HEAD} needs an http-response rule"))
+            }
+            ConditionError::NoPattern(keyword) => {
+                LineError::missing(format!("{keyword} needs a pattern"))
+            }
+            ConditionError::Twice(keyword) => {
+                LineError::syntax(format!("{keyword} is given twice"))
+            }
+            ConditionError::Pattern(err) => err.into(),
         }
     }
 }

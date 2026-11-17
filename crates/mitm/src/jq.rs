@@ -3,6 +3,7 @@ use jaq_core::load::{Arena, File, Loader, lex, parse};
 use jaq_core::{Compiler, Ctx, Vars, data, unwrap_valr};
 use jaq_json::{Val, read};
 
+use crate::issue::{IssueKind, LineError};
 use crate::text::quote;
 
 type Filter = jaq_core::Filter<data::JustLut<Val>>;
@@ -10,6 +11,7 @@ type Filter = jaq_core::Filter<data::JustLut<Val>>;
 /// A jq filter over a JSON body, as Surge's `http-request-jq` and `http-response-jq` run it.
 pub(crate) struct Jq {
     filter: Filter,
+    code: String,
 }
 
 impl std::fmt::Debug for Jq {
@@ -21,6 +23,12 @@ impl std::fmt::Debug for Jq {
 #[derive(Debug, thiserror::Error)]
 #[error("invalid jq expression: {0}")]
 pub(crate) struct JqError(String);
+
+impl From<JqError> for LineError {
+    fn from(err: JqError) -> LineError {
+        LineError::new(IssueKind::Jq, err.to_string())
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum JqOutcome {
@@ -47,7 +55,14 @@ impl Jq {
             .with_funs(funs)
             .compile(modules)
             .map_err(compile_error)?;
-        Ok(Jq { filter })
+        Ok(Jq {
+            filter,
+            code: code.to_string(),
+        })
+    }
+
+    pub(crate) fn code(&self) -> &str {
+        &self.code
     }
 
     /// Runs on `body` and keeps the first value it gives, as the body that replaces it.

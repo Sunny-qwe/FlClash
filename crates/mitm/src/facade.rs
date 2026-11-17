@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
@@ -11,7 +10,7 @@ use tokio::runtime::Handle;
 
 use crate::ca::{Authority, CaError, CertificateInfo};
 use crate::capture::{Body, CaptureStore, Exchange, ExchangeList};
-use crate::config::{Config, Issue, ParseEnv, RawConfig, check};
+use crate::config::{Config, ParseEnv, RawConfig, Validation, check};
 use crate::cron::LocalClock;
 use crate::engine::{MitmEngine, Shared};
 use crate::limits::Pressure;
@@ -137,7 +136,7 @@ impl Mitm {
         self.shared.authority.current()?.issue_pem(host)
     }
 
-    pub fn validate(&self, raw: &RawConfig) -> BTreeMap<String, Vec<Issue>> {
+    pub fn validate(&self, raw: &RawConfig) -> Validation {
         check(raw, &self.parse_env())
     }
 

@@ -113,8 +113,10 @@ apply's answer. A fetch cut short by a newer apply or by shutdown ends with `fai
 every `updating` has an end. There is no switch: these come hours apart, and none carries a `seq`, because a host
 reads them again rather than writes them back.
 
-On `updated` or `unchanged` of a provider a host reads the provider again: its `updatedAt` and subscription numbers
-change on every fetch, not only the first.
+A host that handled `providerLoaded` and `geoUpdate` moves to this one event: on `updated` or `unchanged` of a
+provider it reads the provider again (its `updatedAt` and subscription numbers change on every fetch, not only the
+first); a geo database's `updating` and outcome replace `geoUpdate`'s `updating` and `skipped`/`error`. The two old
+events are gone, so the host change lands in the same commit as the core it embeds.
 
 ## Build-Time And Run-Time Settings
 

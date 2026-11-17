@@ -5,6 +5,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::hostlist::{HostList, parse_host_line};
+use crate::issue::{IssueKind, LineError};
 use crate::limits::{Limits, RawLimits};
 use crate::rules::{
     Rules, parse_body_rewrite, parse_header_rewrite, parse_map_local, parse_url_rewrite,
@@ -12,6 +13,7 @@ use crate::rules::{
 use crate::script::{ScriptHost, parse_script};
 use crate::sources::SourceList;
 use crate::text::quote;
+use crate::view::{LineView, SourcesView};
 
 fn null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
@@ -73,6 +75,7 @@ pub struct RawConfig {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Issue {
     pub index: usize,
+    pub kind: IssueKind,
     pub message: String,
 }
 
@@ -99,7 +102,14 @@ pub struct Config {
     raw: RawConfig,
 }
 
-type AddLine = fn(&mut Config, &ParseEnv, &str) -> Result<(), String>;
+/// What a line put in force and what of it could not be read: a hostname or source line has
+/// both when some of its items apply.
+struct LineRead {
+    view: Option<LineView>,
+    error: Option<LineError>,
+}
+
+type AddLine = fn(&mut Config, &ParseEnv, &str) -> LineRead;
 
 struct ListSpec {
     key: &'static str,
@@ -107,100 +117,133 @@ struct ListSpec {
     add: AddLine,
 }
 
+fn read<T>(parsed: Result<T, LineError>, add: impl FnOnce(T) -> LineView) -> LineRead {
+    match parsed {
+        Ok(rule) => LineRead {
+            view: Some(add(rule)),
+            error: None,
+        },
+        Err(err) => LineRead {
+            view: None,
+            error: Some(err),
+        },
+    }
+}
+
+fn read_hosts(list: &mut HostList, line: &str) -> LineRead {
+    let (hosts, errors) = parse_host_line(line);
+    let view = hosts.view();
+    list.extend(hosts);
+    LineRead {
+        view,
+        error: host_errors(errors),
+    }
+}
+
 const LISTS: [ListSpec; 9] = [
     ListSpec {
         key: "hostname",
         lines: |raw| &raw.hostname,
-        add: |config, _, line| {
-            let (hosts, errors) = parse_host_line(line);
-            config.hosts.extend(hosts);
-            if errors.is_empty() {
-                Ok(())
-            } else {
-                Err(errors.join("\n"))
-            }
-        },
+        add: |config, _, line| read_hosts(&mut config.hosts, line),
     },
     ListSpec {
         key: "skip-server-cert-verify-hostname",
         lines: |raw| &raw.skip_server_cert_verify_hostname,
-        add: |config, _, line| {
-            let (hosts, errors) = parse_host_line(line);
-            config.skip_verify_hosts.extend(hosts);
-            if errors.is_empty() {
-                Ok(())
-            } else {
-                Err(errors.join("\n"))
-            }
-        },
+        add: |config, _, line| read_hosts(&mut config.skip_verify_hosts, line),
     },
     ListSpec {
         key: "client-source-address",
         lines: |raw| &raw.client_source_address,
-        add: |config, _, line| config.sources.add_line(line).map_err(|err| err.to_string()),
+        add: |config, _, line| {
+            let (entries, result) = config.sources.add_line(line);
+            LineRead {
+                view: (!entries.is_empty()).then_some(LineView::Sources(SourcesView { entries })),
+                error: result.err().map(LineError::from),
+            }
+        },
     },
     ListSpec {
         key: "url-rewrite",
         lines: |raw| &raw.url_rewrite,
         add: |config, _, line| {
-            config.rules.url_rewrites.push(parse_url_rewrite(line)?);
-            Ok(())
+            read(parse_url_rewrite(line), |rule| {
+                let view = rule.view();
+                config.rules.url_rewrites.push(rule);
+                view
+            })
         },
     },
     ListSpec {
         key: "header-rewrite",
         lines: |raw| &raw.header_rewrite,
         add: |config, _, line| {
-            config
-                .rules
-                .header_rewrites
-                .push(parse_header_rewrite(line)?);
-            Ok(())
+            read(parse_header_rewrite(line), |rule| {
+                let view = rule.view();
+                config.rules.header_rewrites.push(rule);
+                view
+            })
         },
     },
     ListSpec {
         key: "body-rewrite",
         lines: |raw| &raw.body_rewrite,
         add: |config, _, line| {
-            config
-                .rules
-                .body_rewrites
-                .push(Arc::new(parse_body_rewrite(line)?));
-            Ok(())
+            read(parse_body_rewrite(line), |rule| {
+                let view = rule.view();
+                config.rules.body_rewrites.push(Arc::new(rule));
+                view
+            })
         },
     },
     ListSpec {
         key: "map-local",
         lines: |raw| &raw.map_local,
         add: |config, env, line| {
-            config
-                .rules
-                .map_locals
-                .push(parse_map_local(line, &env.resources, false)?);
-            Ok(())
+            read(
+                parse_map_local(line, &env.resources, false),
+                |(rule, view)| {
+                    config.rules.map_locals.push(rule);
+                    view
+                },
+            )
         },
     },
     ListSpec {
         key: "request-body-mock",
         lines: |raw| &raw.request_body_mock,
         add: |config, env, line| {
-            config
-                .rules
-                .request_mocks
-                .push(parse_map_local(line, &env.resources, true)?);
-            Ok(())
+            read(
+                parse_map_local(line, &env.resources, true),
+                |(rule, view)| {
+                    config.rules.request_mocks.push(rule);
+                    view
+                },
+            )
         },
     },
     ListSpec {
         key: "script",
         lines: |raw| &raw.script,
         add: |config, env, line| {
-            let script = parse_script(line, &env.resources, &env.scripts)?;
-            config.rules.scripts.push(Arc::new(script));
-            Ok(())
+            read(parse_script(line, &env.resources, &env.scripts), |script| {
+                let view = script.view();
+                config.rules.scripts.push(Arc::new(script));
+                view
+            })
         },
     },
 ];
+
+/// A line's bad items as one error, of the first item's kind.
+fn host_errors(errors: Vec<LineError>) -> Option<LineError> {
+    let first = errors.first()?;
+    let message = errors
+        .iter()
+        .map(|err| err.message.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(LineError::new(first.kind, message))
+}
 
 fn each_line(lines: &[String], mut visit: impl FnMut(usize, &str)) {
     for (index, line) in lines.iter().enumerate() {
@@ -236,7 +279,7 @@ impl Config {
         let mut errors = Vec::new();
         for list in &LISTS {
             each_line((list.lines)(&raw), |_, line| {
-                if let Err(err) = (list.add)(&mut config, env, line) {
+                if let Some(err) = (list.add)(&mut config, env, line).error {
                     errors.push(format!("{} {}: {err}", list.key, quote(line)));
                 }
             });
@@ -263,21 +306,49 @@ impl Config {
     }
 }
 
-/// Issues by list, naming the lines that cannot be read.
-pub fn check(raw: &RawConfig, env: &ParseEnv) -> BTreeMap<String, Vec<Issue>> {
-    let mut issues: BTreeMap<String, Vec<Issue>> = BTreeMap::new();
+/// By list, the lines that cannot be read, and how each line in force reads; a line some of
+/// whose items apply is in both.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Validation {
+    pub issues: BTreeMap<String, Vec<Issue>>,
+    pub views: BTreeMap<String, Vec<LineEntry>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LineEntry {
+    pub index: usize,
+    pub view: LineView,
+}
+
+pub fn check(raw: &RawConfig, env: &ParseEnv) -> Validation {
+    let mut validation = Validation::default();
     let mut scratch = Config::empty(RawConfig::default());
     for list in &LISTS {
         each_line((list.lines)(raw), |index, line| {
-            if let Err(message) = (list.add)(&mut scratch, env, line) {
-                issues
+            let read = (list.add)(&mut scratch, env, line);
+            if let Some(err) = read.error {
+                let issue = Issue {
+                    index,
+                    kind: err.kind,
+                    message: err.message,
+                };
+                validation
+                    .issues
                     .entry(list.key.to_string())
                     .or_default()
-                    .push(Issue { index, message });
+                    .push(issue);
+            }
+            if let Some(view) = read.view {
+                let entry = LineEntry { index, view };
+                validation
+                    .views
+                    .entry(list.key.to_string())
+                    .or_default()
+                    .push(entry);
             }
         });
     }
-    issues
+    validation
 }
 
 /// Upper-case hex pairs joined by colons.
@@ -325,9 +396,10 @@ mod tests {
             hostname: lines(&["b.com", "a.com, bad host"]),
             ..RawConfig::default()
         };
-        let issues = check(&raw, &env);
+        let issues = check(&raw, &env).issues;
         let want = vec![Issue {
             index: 1,
+            kind: IssueKind::Invalid,
             message: "\"bad host\": unsupported character ' '".to_string(),
         }];
         assert_eq!(issues, BTreeMap::from([("hostname".to_string(), want)]));
@@ -341,7 +413,7 @@ mod tests {
             url_rewrite: lines(&["^ok _ reject", "(broken _ reject", "# note"]),
             ..RawConfig::default()
         };
-        let issues = check(&raw, &env);
+        let issues = check(&raw, &env).issues;
         assert_eq!(issues.len(), 1);
         assert_eq!(issues["url-rewrite"].len(), 1);
         assert_eq!(issues["url-rewrite"][0].index, 1);

@@ -57,7 +57,7 @@ held to and what goes wrong when measuring.
   full tier; before a release, beta included; and for a toolchain upgrade, on Linux alone (below). A release ships
   when the set ties or beats Go on every platform's current `main` and each confirmed known issue is fixed or deferred
   under the rules below. Go is upstream mihomo through SOCKS and sing-box over TUN. Windows has no TUN arm in the
-  bench, so its TUN cell is not measured.
+  bench yet, so its TUN cell is not measured.
 - **Android is measured on the Linux VM with an Android-shaped build**: its TUN device takes the shape a VpnService
   descriptor has (one queue, no offload), against the same Go arms as Linux. A phone is
   used only for a path the VM cannot run.

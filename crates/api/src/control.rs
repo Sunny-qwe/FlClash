@@ -1299,10 +1299,10 @@ impl ControlService for Control {
         params: MitmValidateParams,
     ) -> Result<MitmValidateResult, ApiError> {
         self.mitm_enabled()?;
-        let issues = self
+        let validation = self
             .blocking(move |engine| engine.mitm().validate(params.config))
             .await?;
-        Ok(MitmValidateResult { issues })
+        serde_json::from_value(validation).map_err(|err| ApiError::internal(err.to_string()))
     }
 
     async fn mitm_issue_certificate(&self, params: MitmIssueParams) -> Result<MitmPem, ApiError> {

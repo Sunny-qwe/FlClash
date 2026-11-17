@@ -414,7 +414,7 @@ async fn mitm_makes_its_certificate_on_request_and_its_leaves_verify() {
     let leaf = rig.engine.mitm().issue_certificate("check.test").unwrap();
     verify_leaf(info["pem"].as_str().unwrap(), &leaf, "check.test").unwrap();
 
-    let issues = rig
+    let validation = rig
         .engine
         .mitm()
         .validate(serde_json::json!({
@@ -422,13 +422,20 @@ async fn mitm_makes_its_certificate_on_request_and_its_leaves_verify() {
             "url-rewrite": ["^ok _ reject", "(broken _ reject", "# note"],
         }))
         .unwrap();
-    let issues = issues.as_object().unwrap();
+    let issues = validation["issues"].as_object().unwrap();
     assert_eq!(issues.len(), 1, "{issues:?}");
     let listed = issues["url-rewrite"].as_array().unwrap();
     assert_eq!(
         (listed.len(), &listed[0]["index"]),
         (1, &serde_json::json!(1))
     );
+    let read: Vec<&serde_json::Value> = validation["views"]["url-rewrite"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| &entry["index"])
+        .collect();
+    assert_eq!(read, [&serde_json::json!(0)]);
 }
 
 async fn decrypting_rig(rules: &str, lines: &str, capture: bool) -> (Rig, SocketAddr, String) {

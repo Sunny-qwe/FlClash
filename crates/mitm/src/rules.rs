@@ -4,10 +4,14 @@ use http::StatusCode;
 use http::header::{HeaderMap, HeaderName, HeaderValue};
 
 use crate::heads::{HeadConditions, Heads};
+use crate::issue::LineError;
 use crate::jq::{Jq, JqOutcome};
 use crate::pattern::Pattern;
 use crate::script::{Script, ScriptKind};
 use crate::text::{Field, canonical_header, decode_base64, quote, remainder, split_fields, texts};
+use crate::view::LineView;
+
+mod views;
 
 const TINY_GIF_BASE64: &str = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
@@ -135,10 +139,12 @@ pub fn tiny_gif() -> Vec<u8> {
     decode_base64(TINY_GIF_BASE64).unwrap_or_default()
 }
 
-pub(crate) fn parse_url_rewrite(line: &str) -> Result<UrlRewrite, String> {
+pub(crate) fn parse_url_rewrite(line: &str) -> Result<UrlRewrite, LineError> {
     let fields = split_fields(line)?;
     if fields.len() < 2 {
-        return Err("expected a pattern and a replacement or type".to_string());
+        return Err(LineError::syntax(
+            "expected a pattern and a replacement or type",
+        ));
     }
     let conditional = fields
         .get(2)
@@ -150,7 +156,7 @@ pub(crate) fn parse_url_rewrite(line: &str) -> Result<UrlRewrite, String> {
     };
     let args = texts(fields.get(first_arg..).unwrap_or_default());
     if args.is_empty() {
-        return Err("url-and-header needs a type".to_string());
+        return Err(LineError::missing("url-and-header needs a type"));
     }
     let first = args.first().copied().unwrap_or_default();
     let mut action = UrlAction::Header;
@@ -173,15 +179,21 @@ pub(crate) fn parse_url_rewrite(line: &str) -> Result<UrlRewrite, String> {
             } else if let Some(named) = UrlAction::named(first) {
                 (action, replacement) = (named, second.to_string());
             } else {
-                return Err(format!("unknown type {}", quote(second)));
+                return Err(LineError::unknown(format!(
+                    "unknown type {}",
+                    quote(second)
+                )));
             }
         }
-        _ => return Err("too many fields".to_string()),
+        _ => return Err(LineError::syntax("too many fields")),
     }
     if action.rejects() {
         replacement.clear();
     } else if replacement.is_empty() || replacement == "_" {
-        return Err(format!("{} needs a replacement URL", action.name()));
+        return Err(LineError::missing(format!(
+            "{} needs a replacement URL",
+            action.name()
+        )));
     }
     let pattern = Pattern::new(&field_text(&fields, 0))?;
     Ok(UrlRewrite {
@@ -199,11 +211,12 @@ fn field_text(fields: &[Field], at: usize) -> String {
         .unwrap_or_default()
 }
 
-fn url_action_of(text: &str) -> Result<UrlAction, String> {
-    UrlAction::named(text).ok_or_else(|| format!("unknown type {}", quote(text)))
+fn url_action_of(text: &str) -> Result<UrlAction, LineError> {
+    UrlAction::named(text)
+        .ok_or_else(|| LineError::unknown(format!("unknown type {}", quote(text))))
 }
 
-pub(crate) fn parse_header_rewrite(line: &str) -> Result<HeaderRewrite, String> {
+pub(crate) fn parse_header_rewrite(line: &str) -> Result<HeaderRewrite, LineError> {
     let mut fields = split_fields(line)?;
     let mut response = false;
     if let Some(first) = fields.first() {
@@ -223,7 +236,9 @@ pub(crate) fn parse_header_rewrite(line: &str) -> Result<HeaderRewrite, String> 
     let rest = fields.get(at + 1..).unwrap_or_default();
     if action_text == "header-text-replace" {
         if rest.len() != 2 {
-            return Err("header-text-replace needs a pattern and a replacement".to_string());
+            return Err(LineError::syntax(
+                "header-text-replace needs a pattern and a replacement",
+            ));
         }
         return Ok(HeaderRewrite {
             response,
@@ -233,20 +248,23 @@ pub(crate) fn parse_header_rewrite(line: &str) -> Result<HeaderRewrite, String> 
         });
     }
     let Some(name_field) = rest.first() else {
-        return Err("expected a pattern, an action and a header name".to_string());
+        return Err(LineError::syntax(
+            "expected a pattern, an action and a header name",
+        ));
     };
     let name_text = canonical_header(&name_field.text);
     if matches!(name_text.as_str(), "Content-Length" | "Transfer-Encoding") {
-        return Err(format!(
+        return Err(LineError::unsupported(format!(
             "{name_text} frames the message and cannot be rewritten"
-        ));
+        )));
     }
     let name = HeaderName::from_bytes(name_text.as_bytes())
-        .map_err(|_| format!("invalid header name {}", quote(&name_text)))?;
+        .map_err(|_| LineError::invalid(format!("invalid header name {}", quote(&name_text))))?;
     let args = rest.get(1..).unwrap_or_default();
     let value = || {
         let text = remainder(line, name_field);
-        HeaderValue::from_str(&text).map_err(|_| format!("invalid header value {}", quote(&text)))
+        HeaderValue::from_str(&text)
+            .map_err(|_| LineError::invalid(format!("invalid header value {}", quote(&text))))
     };
     let edit = match action_text.as_str() {
         "header-add" => HeaderEdit::Add(name, value()?),
@@ -254,7 +272,9 @@ pub(crate) fn parse_header_rewrite(line: &str) -> Result<HeaderRewrite, String> 
         "header-del" => HeaderEdit::Del(name),
         "header-replace-regex" => {
             if args.len() < 2 {
-                return Err("header-replace-regex needs a pattern and a replacement".to_string());
+                return Err(LineError::syntax(
+                    "header-replace-regex needs a pattern and a replacement",
+                ));
             }
             HeaderEdit::ReplaceRegex(
                 name,
@@ -263,10 +283,10 @@ pub(crate) fn parse_header_rewrite(line: &str) -> Result<HeaderRewrite, String> 
             )
         }
         _ => {
-            return Err(format!(
+            return Err(LineError::unknown(format!(
                 "unknown action {}",
                 quote(&field_text(&fields, at))
-            ));
+            )));
         }
     };
     Ok(HeaderRewrite {
@@ -326,7 +346,7 @@ impl HeaderRewrite {
     }
 }
 
-pub(crate) fn parse_body_rewrite(line: &str) -> Result<BodyRewrite, String> {
+pub(crate) fn parse_body_rewrite(line: &str) -> Result<BodyRewrite, LineError> {
     let kind = line.split_whitespace().next().unwrap_or_default();
     let jq_response = match kind.to_ascii_lowercase().as_str() {
         "http-request-jq" => Some(false),
@@ -335,7 +355,8 @@ pub(crate) fn parse_body_rewrite(line: &str) -> Result<BodyRewrite, String> {
     };
     if let Some(response) = jq_response {
         let rest = line.trim_start().get(kind.len()..).unwrap_or_default();
-        let (pattern, mut expression) = leading_field(rest).ok_or("unclosed quote")?;
+        let (pattern, mut expression) =
+            leading_field(rest).ok_or_else(|| LineError::syntax("unclosed quote"))?;
         let mut conditions = HeadConditions::default();
         while let Some((keyword, after)) = leading_field(expression)
             && let Some((condition, after)) = leading_field(after)
@@ -345,32 +366,39 @@ pub(crate) fn parse_body_rewrite(line: &str) -> Result<BodyRewrite, String> {
         }
         let expression = unwrap_quotes(expression.trim());
         if pattern.is_empty() || expression.is_empty() {
-            return Err("expected a pattern and a jq expression".to_string());
+            return Err(LineError::syntax("expected a pattern and a jq expression"));
         }
         return Ok(BodyRewrite {
             response,
             pattern: Pattern::new(&pattern)?,
             conditions,
-            action: BodyAction::Jq(Jq::compile(expression).map_err(|err| err.to_string())?),
+            action: BodyAction::Jq(Jq::compile(expression)?),
         });
     }
     let fields = split_fields(line)?;
     if fields.len() < 4 {
-        return Err("expected a type, a pattern and a regex with its replacement".to_string());
+        return Err(LineError::syntax(
+            "expected a type, a pattern and a regex with its replacement",
+        ));
     }
     let first = field_text(&fields, 0);
     let response = match first.to_ascii_lowercase().as_str() {
         "http-request" => false,
         "http-response" => true,
-        _ => return Err(format!("unknown type {}", quote(&first))),
+        _ => {
+            return Err(LineError::unknown(format!(
+                "unknown type {}",
+                quote(&first)
+            )));
+        }
     };
     let (conditions, at) = HeadConditions::read(&fields, response, 2)?;
     let pairs = fields.get(at..).unwrap_or_default();
     if pairs.is_empty() {
-        return Err("expected a regex with its replacement".to_string());
+        return Err(LineError::syntax("expected a regex with its replacement"));
     }
     if pairs.len() % 2 != 0 {
-        return Err("a regex is missing its replacement".to_string());
+        return Err(LineError::syntax("a regex is missing its replacement"));
     }
     let mut replacements = Vec::new();
     for pair in pairs.chunks(2) {
@@ -468,12 +496,12 @@ fn is_local(name: &str) -> bool {
     true
 }
 
-pub(crate) fn read_resource(dir: &Path, param: &str, name: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn read_resource(dir: &Path, param: &str, name: &str) -> Result<Vec<u8>, LineError> {
     if !is_local(name) {
-        return Err(format!(
+        return Err(LineError::resource(format!(
             "{param} {} is not a file in the resources directory",
             quote(name)
-        ));
+        )));
     }
     let path = dir.join(name);
     let info = std::fs::symlink_metadata(&path).map_err(|err| {
@@ -482,12 +510,16 @@ pub(crate) fn read_resource(dir: &Path, param: &str, name: &str) -> Result<Vec<u
             std::io::ErrorKind::PermissionDenied => "permission denied".to_string(),
             _ => "cannot be read".to_string(),
         };
-        format!("{param} {}: {reason}", quote(name))
+        LineError::resource(format!("{param} {}: {reason}", quote(name)))
     })?;
     if !info.file_type().is_file() {
-        return Err(format!("{param} {} is not a regular file", quote(name)));
+        return Err(LineError::resource(format!(
+            "{param} {} is not a regular file",
+            quote(name)
+        )));
     }
-    std::fs::read(&path).map_err(|_| format!("{param} {} cannot be read", quote(name)))
+    std::fs::read(&path)
+        .map_err(|_| LineError::resource(format!("{param} {} cannot be read", quote(name))))
 }
 
 fn mime_by_extension(name: &str) -> Option<&'static str> {
@@ -517,43 +549,54 @@ pub(crate) fn parse_map_local(
     line: &str,
     resources: &Path,
     request: bool,
-) -> Result<MapLocal, String> {
+) -> Result<(MapLocal, LineView), LineError> {
     let fields = split_fields(line)?;
     let (conditions, at) = HeadConditions::read(&fields, false, 1)?;
     let args = fields.get(at..).unwrap_or_default();
     if args.is_empty() {
-        return Err("expected a pattern and the data to answer with".to_string());
+        return Err(LineError::syntax(
+            "expected a pattern and the data to answer with",
+        ));
     }
     let mut params = std::collections::HashMap::new();
     for field in args {
-        let (key, value) = field
-            .text
-            .split_once('=')
-            .ok_or_else(|| format!("expected key=value, got {}", quote(&field.text)))?;
+        let (key, value) = field.text.split_once('=').ok_or_else(|| {
+            LineError::syntax(format!("expected key=value, got {}", quote(&field.text)))
+        })?;
         params.insert(key.to_ascii_lowercase(), value.to_string());
     }
     let get = |key: &str| params.get(key).map(String::as_str).unwrap_or_default();
-    let (body, content_type) = match get("data-type") {
+    let (data_type, body, content_type) = match get("data-type") {
         "text" => (
+            "text",
             get("data").as_bytes().to_vec(),
             "text/plain; charset=utf-8".to_string(),
         ),
-        "tiny-gif" => (tiny_gif(), "image/gif".to_string()),
+        "tiny-gif" => ("tiny-gif", tiny_gif(), "image/gif".to_string()),
         "base64" => (
-            decode_base64(get("data")).map_err(|err| format!("data: {err}"))?,
+            "base64",
+            decode_base64(get("data")).map_err(|err| err.within("data"))?,
             "application/octet-stream".to_string(),
         ),
         "" | "file" => (
+            "file",
             read_resource(resources, "data", get("data"))?,
             mime_by_extension(get("data"))
                 .unwrap_or("application/octet-stream")
                 .to_string(),
         ),
-        other => return Err(format!("unknown data-type {}", quote(other))),
+        other => {
+            return Err(LineError::unknown(format!(
+                "unknown data-type {}",
+                quote(other)
+            )));
+        }
     };
     let mut status = StatusCode::OK;
     if request && params.contains_key("status-code") {
-        return Err("a request body mock answers nothing, so it takes no status-code".to_string());
+        return Err(LineError::unsupported(
+            "a request body mock answers nothing, so it takes no status-code",
+        ));
     }
     if let Some(text) = params.get("status-code") {
         status = text
@@ -561,33 +604,41 @@ pub(crate) fn parse_map_local(
             .ok()
             .filter(|code| (200..=999).contains(code))
             .and_then(|code| StatusCode::from_u16(code).ok())
-            .ok_or_else(|| format!("invalid status-code {}", quote(text)))?;
+            .ok_or_else(|| LineError::invalid(format!("invalid status-code {}", quote(text))))?;
     }
     let mut header = HeaderMap::new();
     let header_text = get("header");
     if !header_text.is_empty() {
         parse_map_local_header(header_text, &mut header)?;
     }
+    let own_header = header.clone();
     if !header.contains_key(http::header::CONTENT_TYPE) {
-        let value =
-            HeaderValue::from_str(&content_type).map_err(|_| "invalid content type".to_string())?;
+        let value = HeaderValue::from_str(&content_type)
+            .map_err(|_| LineError::invalid("invalid content type"))?;
         header.insert(http::header::CONTENT_TYPE, value);
     }
-    Ok(MapLocal {
+    let rule = MapLocal {
         pattern: Pattern::new(&field_text(&fields, 0))?,
         conditions,
         status,
         header,
         body,
-    })
+    };
+    let data = if data_type == "tiny-gif" {
+        ""
+    } else {
+        get("data")
+    };
+    let view = views::map_local_view(&rule, data_type, data, request, &own_header);
+    Ok((rule, view))
 }
 
-fn parse_map_local_header(text: &str, header: &mut HeaderMap) -> Result<(), String> {
+fn parse_map_local_header(text: &str, header: &mut HeaderMap) -> Result<(), LineError> {
     let decoded;
     let (text, separator) = if text.contains(':') {
         (text, '|')
     } else {
-        let bytes = decode_base64(text).map_err(|err| format!("header: {err}"))?;
+        let bytes = decode_base64(text).map_err(|err| err.within("header"))?;
         decoded = String::from_utf8_lossy(&bytes).into_owned();
         (decoded.as_str(), '\n')
     };
@@ -598,11 +649,13 @@ fn parse_map_local_header(text: &str, header: &mut HeaderMap) -> Result<(), Stri
         }
         let (name, value) = line
             .split_once(':')
-            .ok_or_else(|| format!("header {} has no value", quote(line)))?;
-        let name = HeaderName::from_bytes(name.trim().as_bytes())
-            .map_err(|_| format!("invalid header name {}", quote(name.trim())))?;
-        let value = HeaderValue::from_str(value.trim())
-            .map_err(|_| format!("invalid header value {}", quote(value.trim())))?;
+            .ok_or_else(|| LineError::syntax(format!("header {} has no value", quote(line))))?;
+        let name = HeaderName::from_bytes(name.trim().as_bytes()).map_err(|_| {
+            LineError::invalid(format!("invalid header name {}", quote(name.trim())))
+        })?;
+        let value = HeaderValue::from_str(value.trim()).map_err(|_| {
+            LineError::invalid(format!("invalid header value {}", quote(value.trim())))
+        })?;
         header.append(name, value);
     }
     Ok(())
@@ -770,8 +823,8 @@ mod tests {
         rules.rewrite_url(url, &Heads::new(Some(&head), None))
     }
 
-    fn local(line: &str, resources: &Path) -> Result<MapLocal, String> {
-        parse_map_local(line, resources, false)
+    fn local(line: &str, resources: &Path) -> Result<MapLocal, LineError> {
+        parse_map_local(line, resources, false).map(|(rule, _)| rule)
     }
 
     fn rules_with(urls: &[&str]) -> Rules {
@@ -1135,9 +1188,10 @@ mod tests {
             let line = format!(r#"^https://a\.com/x data-type=file data="{data}""#);
             let err = local(&line, &resources).expect_err(data);
             assert!(
-                !err.contains(&resources.display().to_string()),
+                !err.message.contains(&resources.display().to_string()),
                 "{data}: {err}"
             );
+            assert_eq!(err.kind, crate::issue::IssueKind::Resource, "{data}");
         }
     }
 }

@@ -1,6 +1,8 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
 
+use crate::issue::LineError;
+
 /// Go's `%q` for a string.
 pub(crate) fn quote(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
@@ -44,13 +46,13 @@ pub(crate) fn canonical_header(name: &str) -> String {
     out
 }
 
-pub(crate) fn decode_base64(text: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn decode_base64(text: &str) -> Result<Vec<u8>, LineError> {
     for engine in [&STANDARD, &STANDARD_NO_PAD, &URL_SAFE, &URL_SAFE_NO_PAD] {
         if let Ok(data) = engine.decode(text) {
             return Ok(data);
         }
     }
-    Err("invalid base64".to_string())
+    Err(LineError::invalid("invalid base64"))
 }
 
 #[derive(Clone, Debug)]
@@ -62,7 +64,7 @@ pub(crate) struct Field {
 /// Splits on spaces and keeps a double-quoted run, which may start inside a
 /// field as in `data="{}"`, in one field without its quotes. Inside quotes only
 /// `\"` is unescaped, so a regex keeps its backslashes.
-pub(crate) fn split_fields(line: &str) -> Result<Vec<Field>, String> {
+pub(crate) fn split_fields(line: &str) -> Result<Vec<Field>, LineError> {
     let bytes = line.as_bytes();
     let mut fields = Vec::new();
     let mut i = 0;
@@ -89,7 +91,7 @@ pub(crate) fn split_fields(line: &str) -> Result<Vec<Field>, String> {
             i += 1;
         }
         if quoted {
-            return Err("unclosed quote".to_string());
+            return Err(LineError::syntax("unclosed quote"));
         }
         fields.push(Field {
             text: String::from_utf8_lossy(&text).into_owned(),

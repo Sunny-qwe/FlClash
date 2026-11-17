@@ -1,4 +1,6 @@
+use crate::issue::LineError;
 use crate::text::{quote, quote_char};
+use crate::view::{HostEntryView, HostsView, LineView};
 
 const HTTPS_PORT: u16 = 443;
 const HTTP_PORT: u16 = 80;
@@ -64,6 +66,23 @@ impl HostList {
             .find(|entry| entry.covers(port, sniffed) && glob(&entry.pattern, &host))
     }
 
+    /// `None` while the list has no entry, as a line none of whose items could be read.
+    pub(crate) fn view(&self) -> Option<LineView> {
+        (!self.0.is_empty()).then(|| {
+            LineView::Hosts(HostsView {
+                entries: self
+                    .0
+                    .iter()
+                    .map(|entry| HostEntryView {
+                        host: entry.pattern.clone(),
+                        port: (!entry.bare).then_some(entry.port),
+                        exclude: entry.exclude,
+                    })
+                    .collect(),
+            })
+        })
+    }
+
     pub(crate) fn extend(&mut self, other: HostList) {
         self.0.extend(other.0);
     }
@@ -78,8 +97,8 @@ impl HostEntry {
     }
 }
 
-/// One error per bad item; the caller joins them with newlines when it needs a line's message.
-pub(crate) fn parse_host_line(line: &str) -> (HostList, Vec<String>) {
+/// One error per bad item, naming it; the entries of the good items apply all the same.
+pub(crate) fn parse_host_line(line: &str) -> (HostList, Vec<LineError>) {
     let mut list = HostList::default();
     let mut errors = Vec::new();
     for item in line.split(',') {
@@ -89,23 +108,26 @@ pub(crate) fn parse_host_line(line: &str) -> (HostList, Vec<String>) {
         }
         match parse_host_entry(item) {
             Ok(entry) => list.0.push(entry),
-            Err(err) => errors.push(format!("{}: {err}", quote(item))),
+            Err(err) => errors.push(err.within(&quote(item))),
         }
     }
     (list, errors)
 }
 
-fn parse_host_entry(item: &str) -> Result<HostEntry, String> {
+fn parse_host_entry(item: &str) -> Result<HostEntry, LineError> {
     let (exclude, item) = match item.strip_prefix('-') {
         Some(rest) => (true, rest),
         None => (false, item),
     };
     let (host, port) = split_host_pattern(item)?;
     if host.is_empty() {
-        return Err("empty host".to_string());
+        return Err(LineError::invalid("empty host"));
     }
     if let Some(bad) = host.chars().find(|c| !is_host_pattern_char(*c)) {
-        return Err(format!("unsupported character {}", quote_char(bad)));
+        return Err(LineError::invalid(format!(
+            "unsupported character {}",
+            quote_char(bad)
+        )));
     }
     Ok(HostEntry {
         pattern: host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase(),
@@ -115,16 +137,18 @@ fn parse_host_entry(item: &str) -> Result<HostEntry, String> {
     })
 }
 
-fn split_host_pattern(item: &str) -> Result<(&str, Option<u16>), String> {
+fn split_host_pattern(item: &str) -> Result<(&str, Option<u16>), LineError> {
     if let Some(rest) = item.strip_prefix('[') {
-        let end = rest.find(']').ok_or("unclosed bracket")?;
+        let end = rest
+            .find(']')
+            .ok_or_else(|| LineError::syntax("unclosed bracket"))?;
         let (host, tail) = (&rest[..end], &rest[end + 1..]);
         if tail.is_empty() {
             return Ok((host, None));
         }
-        let port = tail
-            .strip_prefix(':')
-            .ok_or_else(|| format!("unexpected {} after the address", quote(tail)))?;
+        let port = tail.strip_prefix(':').ok_or_else(|| {
+            LineError::syntax(format!("unexpected {} after the address", quote(tail)))
+        })?;
         return Ok((host, Some(parse_port(port)?)));
     }
     if item.matches(':').count() != 1 {
@@ -134,9 +158,9 @@ fn split_host_pattern(item: &str) -> Result<(&str, Option<u16>), String> {
     Ok((host, Some(parse_port(port)?)))
 }
 
-pub(crate) fn parse_port(text: &str) -> Result<u16, String> {
+fn parse_port(text: &str) -> Result<u16, LineError> {
     text.parse::<u16>()
-        .map_err(|_| format!("invalid port {}", quote(text)))
+        .map_err(|_| LineError::invalid(format!("invalid port {}", quote(text))))
 }
 
 fn is_host_pattern_char(c: char) -> bool {

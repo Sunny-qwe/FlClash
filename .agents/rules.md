@@ -40,10 +40,10 @@
 - Non-test files stay within 800 lines and functions within 120. xtask's `ratchets` test holds `xtask/ratchets.txt`
   to the code exactly, so every change in a listed size updates its line in the same commit. Nothing new joins the
   list. A listed file or function may grow when a change needs it, with `raised from <old>: <reason>` on its line
-  saying why and when it comes back down (`raised from 809: GSO coalesced write, back down when the writer splits`);
-  the reviewer weighs the reason, and a raise without one fails. A reason that names its condition (`back down when
-  X`) is a promise: the change that lands X brings the number back down in the same commit, and its review checks
-  the line. A per-crate `Result<_, String>` count only goes down.
+  saying why and when it comes back down (`raised from 809: GSO coalesced write, split in B1`); the reviewer weighs
+  the reason, and a raise without one fails. A reason that names its condition (`back down when X`) is a promise:
+  the change that lands X brings the number back down in the same commit, and its review checks the line. A
+  per-crate `Result<_, String>` count only goes down.
 - `panic = "unwind"`: a malformed packet may end one connection's task, never the process. Infrastructure tasks whose
   failure would leave a VPN that only looks alive are the exception.
 
@@ -99,8 +99,8 @@
   pins, from the reference that table names for the area, and says whether that path is the one the reference takes
   by default. A claim without a citation, or about a fallback or optional variant, does not justify a change; the
   reviewer opens at least one citation before accepting.
-- Deliberate differences and settings whose meaning follows FlClash's mihomo fork (`chen08209/Clash.Meta`, branch
-  `FlClash`) are part of the design; check before "fixing" one.
+- Deliberate differences and settings whose meaning follows the fork of mihomo that FlClash shipped are part of the design; check before
+  "fixing" one.
 
 ## Tunables
 

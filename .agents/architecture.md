@@ -132,6 +132,9 @@ Found in the structure survey and left to their owners:
 
 - `proxy/src/lazy.rs` spreads the deferred-header state across `HeadFirst`'s stage and `Kick`'s four states. Low
   priority: one state machine when the file next changes.
+- Data-path size and timing constants still without a `reference-choices.md` row (tunnel `FIRST_BYTES_WINDOW`,
+  sniff waits, h2io `PING_TIMEOUT`, xhttp `CHROME_H2_KEEP_ALIVE`). Each protocol's owner: add the row when the
+  constant is next touched.
 - tunnel `MeteredStream` forwards the owned write but leaves `poll_read_buffer` at the copying default; it wraps
   only the core's own inner dials and the MITM upstream. Tunnel owner: forward the owned read and meter the returned
   buffer.
