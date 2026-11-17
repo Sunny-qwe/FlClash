@@ -41,7 +41,9 @@
   to the code exactly, so every change in a listed size updates its line in the same commit. Nothing new joins the
   list. A listed file or function may grow when a change needs it, with `raised from <old>: <reason>` on its line
   saying why and when it comes back down (`raised from 809: GSO coalesced write, split in B1`); the reviewer weighs
-  the reason, and a raise without one fails. A per-crate `Result<_, String>` count only goes down.
+  the reason, and a raise without one fails. A reason that names its condition (`back down when X`) is a promise:
+  the change that lands X brings the number back down in the same commit, and its review checks the line. A
+  per-crate `Result<_, String>` count only goes down.
 - `panic = "unwind"`: a malformed packet may end one connection's task, never the process. Infrastructure tasks whose
   failure would leave a VPN that only looks alive are the exception.
 
