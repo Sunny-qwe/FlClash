@@ -38,6 +38,7 @@ use crate::dns_server::DnsServer;
 use crate::error::Failure;
 use crate::fake_ip_store;
 use crate::faults::{Faults, Service, ServiceFault};
+use crate::lan::{self, LanPatch};
 use crate::ntp::{self, NtpSettings};
 use crate::ops;
 use crate::probe::{Prober, RouteHit};
@@ -81,6 +82,9 @@ pub struct TunPatch {
 pub struct UpdateRequest {
     pub tun: Option<TunPatch>,
     pub allow_lan: Option<bool>,
+    pub bind_address: Option<String>,
+    pub lan_allowed_ips: Option<Vec<String>>,
+    pub lan_disallowed_ips: Option<Vec<String>>,
     pub mixed_port: Option<u16>,
     pub find_process_mode: Option<String>,
     pub mode: Option<String>,
@@ -547,7 +551,7 @@ impl Engine {
         if !self.running.load(Ordering::SeqCst) {
             return;
         }
-        let spec: ListenSpec = listen_spec(&applied.general, applied.lan_refused);
+        let spec: ListenSpec = listen_spec(&applied.general);
         let handler = Arc::new(self.shared.tunnel.clone());
         let errors = self.listeners.reconcile(&spec, handler).await;
         for error in &errors {
@@ -721,6 +725,7 @@ impl Engine {
         let Some(applied) = state.as_mut() else {
             return Err(Failure::core("config is not applied"));
         };
+        let lan = LanPatch::of(&request)?;
         let before = Settled::of(applied, &self.shared.geo.urls.load());
         let general = &mut applied.general;
         if let Some(port) = request.mixed_port {
@@ -729,6 +734,7 @@ impl Engine {
         if let Some(allow) = request.allow_lan {
             general.allow_lan = allow;
         }
+        lan.apply(general);
         let mut live = self.shared.tunnel.live();
         if let Some(mode) = request
             .find_process_mode
@@ -891,6 +897,9 @@ impl Engine {
             tproxy_port: general.tproxy_port,
             mixed_port: general.mixed_port,
             allow_lan: general.allow_lan,
+            bind_address: general.bind_address.clone(),
+            lan_allowed_ips: lan::texts(&general.lan_allowed_ips),
+            lan_disallowed_ips: lan::texts(&general.lan_disallowed_ips),
             users: users_of(general),
             skip_auth_prefixes: general
                 .skip_auth_prefixes

@@ -657,7 +657,7 @@ enum Refusal {
 }
 
 /// Keys of mihomo's `configSchema` that Concord does not change live.
-const FIXED_KEYS: [&str; 14] = [
+const FIXED_KEYS: [&str; 11] = [
     "port",
     "socks-port",
     "redir-port",
@@ -668,9 +668,6 @@ const FIXED_KEYS: [&str; 14] = [
     "tcptun-config",
     "udptun-config",
     "skip-auth-prefixes",
-    "lan-allowed-ips",
-    "lan-disallowed-ips",
-    "bind-address",
     "interface-name",
 ];
 
@@ -747,6 +744,13 @@ fn patch_params(body: &Map<String, Value>, host_owned: bool) -> Result<ConfigPat
         None => None,
     };
     params.allow_lan = flag("allow-lan")?;
+    params.bind_address = match body.get("bind-address") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(host)) => Some(host.clone()),
+        Some(_) => return Err(Refusal::Invalid),
+    };
+    params.lan_allowed_ips = prefix_list(body, "lan-allowed-ips")?;
+    params.lan_disallowed_ips = prefix_list(body, "lan-disallowed-ips")?;
     params.ipv6 = flag("ipv6")?;
     params.tcp_concurrent = flag("tcp-concurrent")?;
     params.mixed_port = match body.get("mixed-port") {
@@ -759,6 +763,19 @@ fn patch_params(body: &Map<String, Value>, host_owned: bool) -> Result<ConfigPat
         ),
     };
     Ok(params)
+}
+
+/// Checked as prefixes by the core, which refuses the whole patch on a bad one.
+fn prefix_list(body: &Map<String, Value>, key: &str) -> Result<Option<Vec<String>>, Refusal> {
+    match body.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| item.as_str().map(str::to_string).ok_or(Refusal::Invalid))
+            .collect::<Result<_, _>>()
+            .map(Some),
+        Some(_) => Err(Refusal::Invalid),
+    }
 }
 
 #[cfg(test)]
@@ -788,6 +805,24 @@ mod tests {
         assert_eq!(params.log_level, Some(LogLevel::Warning));
         assert_eq!(params.allow_lan, Some(true));
         assert_eq!(params.mixed_port, Some(7891));
+    }
+
+    #[test]
+    fn a_patch_carries_the_lan_keys() {
+        let body = object(json!({
+            "bind-address": "192.168.1.2",
+            "lan-allowed-ips": ["192.168.0.0/16"],
+            "lan-disallowed-ips": [],
+        }));
+        let params = patch_params(&body, true).ok().unwrap();
+        assert_eq!(params.bind_address.as_deref(), Some("192.168.1.2"));
+        assert_eq!(
+            params.lan_allowed_ips,
+            Some(vec!["192.168.0.0/16".to_string()])
+        );
+        assert_eq!(params.lan_disallowed_ips, Some(Vec::new()));
+        let body = object(json!({ "lan-allowed-ips": "192.168.0.0/16" }));
+        assert!(matches!(patch_params(&body, true), Err(Refusal::Invalid)));
     }
 
     #[test]

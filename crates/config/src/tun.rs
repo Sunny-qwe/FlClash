@@ -18,7 +18,8 @@ pub struct TunConfig {
     pub congestion_controller: String,
     pub udp_timeout: i64,
     pub disable_icmp_forwarding: bool,
-    pub gso: bool,
+    /// `None` when the profile does not say.
+    pub gso: Option<bool>,
     pub include_interface: Vec<String>,
     pub exclude_interface: Vec<String>,
     pub include_uid: Vec<u32>,
@@ -86,7 +87,7 @@ impl TunConfig {
             congestion_controller: f.string("congestion-controller")?,
             udp_timeout: f.i64("udp-timeout")?,
             disable_icmp_forwarding: f.boolean("disable-icmp-forwarding")?,
-            gso: f.boolean("gso")?,
+            gso: f.opt_bool("gso")?,
             include_interface: f.strings("include-interface")?,
             exclude_interface: f.strings("exclude-interface")?,
             include_uid: narrow(f.ints("include-uid", 0, i128::from(u32::MAX))?),

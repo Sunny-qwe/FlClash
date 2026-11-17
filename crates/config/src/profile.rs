@@ -10,8 +10,6 @@ use crate::general::General;
 use crate::geox::GeoConfig;
 use crate::group::{GroupDef, GroupKind, find_group_cycle, parse_group};
 use crate::hosts::{HostsConfig, parse_hosts};
-use crate::lenient::Fields;
-use crate::net::IpCidr;
 use crate::ntp::NtpConfig;
 use crate::provider::{
     ProxyProviderDef, ProxySource, RuleProviderDef, parse_proxy_provider, parse_rule_providers,
@@ -65,7 +63,6 @@ pub struct Profile {
     pub sub_rules: IndexMap<String, Vec<RuleDef>>,
     pub store_fake_ip: bool,
     pub dialer_ip4p_convert: bool,
-    pub lan_listener_refused: bool,
     pub refuse_all: bool,
     pub mitm: Map,
     pub tls: TlsConfig,
@@ -112,7 +109,6 @@ impl Profile {
             sub_rules: IndexMap::new(),
             store_fake_ip: false,
             dialer_ip4p_convert: false,
-            lan_listener_refused: false,
             refuse_all: true,
             mitm: Map::new(),
             tls: TlsConfig::default(),
@@ -132,34 +128,6 @@ pub fn load(bytes: &[u8], options: &LoadOptions) -> Result<Profile> {
 
 pub fn load_str(text: &str, options: &LoadOptions) -> Result<Profile> {
     load(text.as_bytes(), options)
-}
-
-fn lan_is_restricted(general: &Map) -> Result<bool> {
-    let mut f = Fields::new(general, "", false);
-    let bind = f.string("bind-address")?;
-    if !matches!(bind.as_str(), "" | "*" | "0.0.0.0" | "::" | "[::]") {
-        return Ok(true);
-    }
-    if !f.strings("lan-disallowed-ips")?.is_empty() {
-        return Ok(true);
-    }
-    let allowed = f.strings("lan-allowed-ips")?;
-    if allowed.is_empty() {
-        return Ok(false);
-    }
-    let (mut all_v4, mut all_v6) = (false, false);
-    for entry in &allowed {
-        if let Some(cidr) = IpCidr::parse(entry)
-            && cidr.covers_everything()
-        {
-            if cidr.is_ipv4() {
-                all_v4 = true;
-            } else {
-                all_v6 = true;
-            }
-        }
-    }
-    Ok(!(all_v4 && all_v6))
 }
 
 struct Names {
@@ -655,9 +623,6 @@ fn warn_tun_settings(tun: &TunConfig, report: &mut LoadReport) {
         ),
         _ => {}
     }
-    if tun.gso {
-        report.warn("not_applied", "tun.gso", "gso is not applied by this core");
-    }
 }
 
 fn warn_ignored_sections(raw: &RawConfig, report: &mut LoadReport) {
@@ -724,15 +689,6 @@ pub fn load_raw(mut raw: RawConfig, options: &LoadOptions) -> Result<Profile> {
                 ),
             );
         }
-    }
-
-    let mut lan_listener_refused = false;
-    if general.allow_lan && lan_is_restricted(&raw.extra)? {
-        lan_listener_refused = true;
-        report.warn("lan_listener_refused", 
-            "allow-lan",
-            "lan-allowed-ips, lan-disallowed-ips or bind-address restrict the LAN listener, which is not supported, so it is not opened",
-        );
     }
 
     let mut names = Names {
@@ -902,7 +858,6 @@ pub fn load_raw(mut raw: RawConfig, options: &LoadOptions) -> Result<Profile> {
         sub_rules,
         store_fake_ip: flag(&raw.profile, "store-fake-ip"),
         dialer_ip4p_convert: flag(&raw.experimental, "dialer-ip4p-convert"),
-        lan_listener_refused,
         refuse_all: false,
         rules: std::mem::take(&mut raw.rules),
         mitm: raw.mitm,
@@ -1180,10 +1135,7 @@ proxy-groups:
         }
         assert!(warned_paths("tun:\n  enable: true\n  stack: mips\n", false).is_empty());
         assert!(warned_paths("tun:\n  enable: false\n  stack: system\n", false).is_empty());
-        assert_eq!(
-            warned_paths("tun:\n  enable: true\n  gso: true\n", false),
-            ["tun.gso"]
-        );
+        assert!(warned_paths("tun:\n  enable: true\n  gso: true\n", false).is_empty());
     }
 
     #[test]
@@ -1468,10 +1420,10 @@ proxy-groups:
     }
 
     #[test]
-    fn restricted_lan() {
-        let profile = load_text("allow-lan: true\nlan-allowed-ips: [192.168.0.0/16]\n").unwrap();
-        assert!(profile.lan_listener_refused);
-        assert!(!load_text("allow-lan: true\n").unwrap().lan_listener_refused);
+    fn a_restricted_lan_loads_without_a_warning() {
+        let text = "allow-lan: true\nbind-address: 192.168.1.2\nlan-allowed-ips: [192.168.0.0/16]\nlan-disallowed-ips: [192.168.1.1/32]\n";
+        assert!(warned_paths(text, false).is_empty());
+        assert_eq!(load_text(text).unwrap().general.lan_allowed_ips.len(), 1);
     }
 
     #[test]

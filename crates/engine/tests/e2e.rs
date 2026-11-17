@@ -4,7 +4,7 @@
 )]
 
 use std::collections::{BTreeMap, HashMap};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -364,6 +364,9 @@ fn empty_update() -> UpdateRequest {
     UpdateRequest {
         tun: None,
         allow_lan: None,
+        bind_address: None,
+        lan_allowed_ips: None,
+        lan_disallowed_ips: None,
         mixed_port: None,
         find_process_mode: None,
         mode: None,
@@ -1141,6 +1144,57 @@ async fn a_live_update_changes_the_mode_and_the_route_stamp() {
         after.epoch + 1,
         "IPv6 moves a direct dial's exit"
     );
+    rig.engine.shutdown().await;
+}
+
+/// mihomo's default listeners filter every peer by the LAN lists, LAN or not
+/// (`listener/mixed/mixed.go`), and bind `bind-address` only with `allow-lan`
+/// (`listener/listener.go` `genAddr`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_lan_keys_bind_and_filter_the_listeners() {
+    let echo = tcp_echo().await;
+    let rig = Rig::new();
+    rig.apply(
+        "allow-lan: true\nbind-address: 127.0.0.1\nlan-allowed-ips: [127.0.0.0/8]\nrules:\n  - MATCH,DIRECT\n",
+    )
+    .await
+    .unwrap();
+    rig.engine.start_listeners().await.unwrap();
+    assert!(
+        TcpStream::connect((Ipv6Addr::LOCALHOST, rig.mixed))
+            .await
+            .is_err(),
+        "bound to the one address only"
+    );
+    let mut stream = socks_connect(rig.mixed, echo).await.unwrap();
+    round_trip(&mut stream).await;
+
+    let mut request = empty_update();
+    request.lan_disallowed_ips = Some(vec!["127.0.0.1/32".to_string()]);
+    rig.engine.update(request).await.unwrap();
+    assert!(refused(rig.mixed, echo).await, "the deny list wins");
+
+    let mut request = empty_update();
+    request.allow_lan = Some(false);
+    request.bind_address = Some("192.0.2.1".to_string());
+    rig.engine.update(request).await.unwrap();
+    assert!(
+        refused(rig.mixed, echo).await,
+        "the lists hold without the LAN"
+    );
+    let mut request = empty_update();
+    request.lan_disallowed_ips = Some(Vec::new());
+    rig.engine.update(request).await.unwrap();
+    let mut stream = socks_connect(rig.mixed, echo).await.unwrap();
+    round_trip(&mut stream).await;
+
+    let mut request = empty_update();
+    request.lan_allowed_ips = Some(vec!["10.0.0.0/8".to_string(), "127.0.0.1".to_string()]);
+    let failure = rig.engine.update(request).await.unwrap_err();
+    assert_eq!(failure.code, "invalid_arguments");
+    let general = rig.engine.general().await.unwrap();
+    assert_eq!(general.lan_allowed_ips, ["127.0.0.0/8"]);
+    assert_eq!(general.bind_address, "192.0.2.1");
     rig.engine.shutdown().await;
 }
 

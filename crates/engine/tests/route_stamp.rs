@@ -90,6 +90,9 @@ fn empty_update() -> UpdateRequest {
     UpdateRequest {
         tun: None,
         allow_lan: None,
+        bind_address: None,
+        lan_allowed_ips: None,
+        lan_disallowed_ips: None,
         mixed_port: None,
         find_process_mode: None,
         mode: None,

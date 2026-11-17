@@ -157,6 +157,15 @@ dto! {
         pub tun: Option<TunPatch>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub allow_lan: Option<bool>,
+        /// `*` binds every address; read only while the LAN is allowed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub bind_address: Option<String>,
+        /// CIDR prefixes admitted to the mixed, HTTP and SOCKS listeners.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub lan_allowed_ips: Option<Vec<String>>,
+        /// CIDR prefixes refused there even when the allowed list admits them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub lan_disallowed_ips: Option<Vec<String>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub mixed_port: Option<u16>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

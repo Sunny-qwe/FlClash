@@ -1375,6 +1375,33 @@
             "null"
           ]
         },
+        "bindAddress": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`*` binds every address; read only while the LAN is allowed."
+        },
+        "lanAllowedIps": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "CIDR prefixes admitted to the mixed, HTTP and SOCKS listeners."
+        },
+        "lanDisallowedIps": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "CIDR prefixes refused there even when the allowed list admits them."
+        },
         "mixedPort": {
           "type": [
             "integer",
@@ -1604,6 +1631,21 @@
         "allowLan": {
           "type": "boolean"
         },
+        "bindAddress": {
+          "type": "string"
+        },
+        "lanAllowedIps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "lanDisallowedIps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "authentication": {
           "type": "array",
           "items": {
@@ -1696,6 +1738,9 @@
         "tproxyPort",
         "mixedPort",
         "allowLan",
+        "bindAddress",
+        "lanAllowedIps",
+        "lanDisallowedIps",
         "authentication",
         "skipAuthPrefixes",
         "mode",

@@ -45,7 +45,10 @@
       "experimental",
       "external-controller",
       "secret",
-      "external-controller-cors"
+      "external-controller-cors",
+      "bind-address",
+      "lan-allowed-ips",
+      "lan-disallowed-ips"
     ],
     "t2": [
       "geodata-mode",
@@ -58,9 +61,6 @@
       "clash-for-android",
       "inbound-tfo",
       "inbound-mptcp",
-      "bind-address",
-      "lan-allowed-ips",
-      "lan-disallowed-ips",
       "external-controller-pipe",
       "external-controller-unix",
       "external-controller-tls",

@@ -6,6 +6,7 @@ mod engine;
 mod error;
 mod fake_ip_store;
 mod faults;
+mod lan;
 mod ntp;
 pub mod ops;
 pub mod probe;

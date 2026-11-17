@@ -55,6 +55,9 @@ pub const TOP_T1: &[&str] = &[
     "external-controller",
     "secret",
     "external-controller-cors",
+    "bind-address",
+    "lan-allowed-ips",
+    "lan-disallowed-ips",
 ];
 
 pub const TOP_T2: &[&str] = &[
@@ -68,9 +71,6 @@ pub const TOP_T2: &[&str] = &[
     "clash-for-android",
     "inbound-tfo",
     "inbound-mptcp",
-    "bind-address",
-    "lan-allowed-ips",
-    "lan-disallowed-ips",
     "external-controller-pipe",
     "external-controller-unix",
     "external-controller-tls",
@@ -263,6 +263,9 @@ pub fn general_defaults() -> Map {
         "authentication": [],
         "skip-auth-prefixes": null,
         "allow-lan": false,
+        "bind-address": "*",
+        "lan-allowed-ips": ["0.0.0.0/0", "::/0"],
+        "lan-disallowed-ips": null,
         "mode": "rule",
         "unified-delay": false,
         "log-level": "info",

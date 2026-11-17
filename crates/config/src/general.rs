@@ -53,6 +53,9 @@ pub struct General {
     pub redir_port: u16,
     pub tproxy_port: u16,
     pub allow_lan: bool,
+    pub bind_address: String,
+    pub lan_allowed_ips: Vec<IpCidr>,
+    pub lan_disallowed_ips: Vec<IpCidr>,
     pub authentication: Vec<Credential>,
     pub skip_auth_prefixes: Vec<IpCidr>,
     pub mode: TunnelMode,
@@ -83,6 +86,9 @@ impl Default for General {
             redir_port: 0,
             tproxy_port: 0,
             allow_lan: false,
+            bind_address: "*".to_string(),
+            lan_allowed_ips: everywhere(),
+            lan_disallowed_ips: Vec::new(),
             authentication: Vec::new(),
             skip_auth_prefixes: Vec::new(),
             mode: TunnelMode::Rule,
@@ -104,6 +110,24 @@ impl Default for General {
             external_controller_cors: ControllerCors::default(),
         }
     }
+}
+
+/// mihomo's `lan-allowed-ips` default (`config/config.go`, `UnmarshalRawConfig`).
+fn everywhere() -> Vec<IpCidr> {
+    ["0.0.0.0/0", "::/0"]
+        .into_iter()
+        .filter_map(IpCidr::parse)
+        .collect()
+}
+
+fn prefixes(f: &mut Fields<'_>, key: &str) -> Result<Vec<IpCidr>> {
+    f.strings(key)?
+        .iter()
+        .map(|text| {
+            IpCidr::parse(text.trim())
+                .ok_or_else(|| ConfigError::new(format!("invalid {key} entry: {text}")))
+        })
+        .collect()
 }
 
 fn choice<T>(text: String, parse: impl Fn(&str) -> Option<T>, key: &str, what: &str) -> Result<T> {
@@ -136,12 +160,15 @@ impl General {
                 });
             }
         }
-        for text in f.strings("skip-auth-prefixes")? {
-            let prefix = IpCidr::parse(text.trim()).ok_or_else(|| {
-                ConfigError::new(format!("invalid skip-auth-prefixes entry: {text}"))
-            })?;
-            general.skip_auth_prefixes.push(prefix);
+        general.skip_auth_prefixes = prefixes(&mut f, "skip-auth-prefixes")?;
+        if let Some(bind) = f.opt_string("bind-address")? {
+            general.bind_address = bind;
         }
+        // yaml.v3 sets a slice written as null to nil, which admits no one.
+        if map.contains_key("lan-allowed-ips") {
+            general.lan_allowed_ips = prefixes(&mut f, "lan-allowed-ips")?;
+        }
+        general.lan_disallowed_ips = prefixes(&mut f, "lan-disallowed-ips")?;
         if let Some(mode) = f.opt_string("mode")? {
             general.mode = choice(mode, TunnelMode::parse, "mode", "mode")?;
         }
@@ -251,6 +278,35 @@ mod tests {
         let general = General::from_map(&map).unwrap();
         assert_eq!(general.skip_auth_prefixes.len(), 2);
         map.insert("skip-auth-prefixes".into(), json!(["127.0.0.1"]));
+        assert!(General::from_map(&map).is_err());
+    }
+
+    #[test]
+    fn the_lan_keys_follow_mihomo() {
+        let defaults = General::from_map(&general_defaults()).unwrap();
+        assert_eq!(defaults.bind_address, "*");
+        assert_eq!(defaults.lan_allowed_ips, everywhere());
+        assert!(defaults.lan_disallowed_ips.is_empty());
+        assert_eq!(
+            General::from_map(&Map::new()).unwrap().lan_allowed_ips,
+            everywhere()
+        );
+
+        let mut map = general_defaults();
+        map.insert("bind-address".into(), json!("192.168.1.2"));
+        map.insert(
+            "lan-allowed-ips".into(),
+            json!(["192.168.0.0/16", "fd00::/8"]),
+        );
+        map.insert("lan-disallowed-ips".into(), json!(["192.168.1.1/32"]));
+        let general = General::from_map(&map).unwrap();
+        assert_eq!(general.bind_address, "192.168.1.2");
+        assert_eq!(general.lan_allowed_ips.len(), 2);
+        assert_eq!(general.lan_disallowed_ips.len(), 1);
+
+        map.insert("lan-allowed-ips".into(), serde_json::Value::Null);
+        assert!(General::from_map(&map).unwrap().lan_allowed_ips.is_empty());
+        map.insert("lan-disallowed-ips".into(), json!(["192.168.1.1"]));
         assert!(General::from_map(&map).is_err());
     }
 }

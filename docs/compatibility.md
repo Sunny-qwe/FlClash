@@ -76,10 +76,11 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
 
 - Not served, answered with status 501: `/restart`, `/upgrade` (core, UI and geo), `/debug`, `/storage`, `/ui`
   (there is no `external-ui`) and `PATCH /rules/disable`.
-- `PATCH /configs` changes what Concord changes live: `mode`, `log-level`, `ipv6`, `allow-lan`, `mixed-port`,
-  `tcp-concurrent`, `find-process-mode` and, when Concord runs on its own, `tun`. A request that names any other
-  setting (ports other than `mixed-port`, `interface-name`, `sniffing`, `bind-address`, the LAN lists and the like)
-  is refused with status 400 naming the settings, and nothing in it is applied; mihomo applies them.
+- `PATCH /configs` changes what Concord changes live: `mode`, `log-level`, `ipv6`, `allow-lan`, `bind-address`,
+  `lan-allowed-ips`, `lan-disallowed-ips`, `mixed-port`, `tcp-concurrent`, `find-process-mode` and, when Concord runs
+  on its own, `tun`. A request that names any other setting (ports other than `mixed-port`, `interface-name`,
+  `sniffing`, `skip-auth-prefixes` and the like) is refused with status 400 naming the settings, and nothing in it is
+  applied; mihomo applies them.
 - `PUT /configs` reads a `path` only inside the home directory; `SAFE_PATHS` is not read. The profile, given by
   `path` or `payload` or, with neither, the file `concord run` started with, replaces the working `config.yaml`.
 - Connection `id`s are decimal numbers, not UUIDs.
@@ -91,10 +92,8 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
 - The `tun` object of `GET /configs` carries `enable`, `device`, `stack`, `dns-hijack`, `auto-route`,
   `auto-detect-interface` and `mtu`; settings Concord does not have keep mihomo's zero values, and mihomo's defaults
   for the TUN addresses, `recvmsgx` and `processors-per-channel` are not reported.
-- `lan-allowed-ips` and `lan-disallowed-ips` in `GET /configs` are `null`: Concord does not restrict the LAN listener
-  by address, and a profile that does is not opened to the LAN.
-- An empty list is `[]` where mihomo writes `null` (`authentication`, `skip-auth-prefixes`, `dns-hijack`, and
-  `connections` with none open).
+- An empty list is `[]` where mihomo writes `null` (`authentication`, `skip-auth-prefixes`, `lan-disallowed-ips`,
+  `dns-hijack`, and `connections` with none open).
 
 ## Not Supported
 
@@ -160,7 +159,9 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
 - **Snell connection reuse:** `reuse` selects CONNECT_V2 and its zero-chunk end marker, but Concord does not pool
   Snell connections; each dial opens a new connection. This also applies to Snell v4/v5.
 - **TUN:** ICMP echo is forwarded from an unprivileged ICMP socket on Unix and a raw ICMP socket on Windows; only echo
-  replies come back, so `traceroute` through the TUN shows no hops. `tun.gso` is ignored with a warning. On Windows
+  replies come back, so `traceroute` through the TUN shows no hops. On Linux the TUN uses offload whenever
+  the device supports it, whatever `tun.gso` says (mihomo uses it only with `gso: true`); `gso: false` gets a warning
+  that offload stays on. Other platforms have no offload in either core. On Windows
   the interface's forwarding, router-discovery, DAD and DNS-registration options are not set. `tun.dns-mode` is not
   read: with `auto-route` the TUN becomes the system resolver on every desktop platform, macOS included, where mihomo
   leaves it off unless `dns-mode` asks; the macOS entry lives in the dynamic store and goes away with the process.

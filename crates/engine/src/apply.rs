@@ -24,7 +24,7 @@ use concord_group::{
     EnvFactory, GroupDeps, GroupError, Outbounds, ProxyFactory, RouteMoved, SelectionStore,
     TestDefaults,
 };
-use concord_inbound::{Cidr, ListenSpec};
+use concord_inbound::ListenSpec;
 use concord_net::{LoopbackGuard, Sockets};
 use concord_platform::{HomeDir, Platform};
 use concord_proxy::BuildCtx;
@@ -39,6 +39,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::Failure;
 use crate::fake_ip_store::FakeIpStore;
+use crate::lan;
 use crate::ops::on_parse_stack;
 use crate::resources::{
     GeoUpdateError, GeoUpdater, GeoUrls, RuleLoadError, RuleProviders, TunnelFetcher,
@@ -302,7 +303,7 @@ pub(crate) fn sock_opts(general: &General) -> SockOpts {
     }
 }
 
-pub(crate) fn listen_spec(general: &General, lan_refused: bool) -> ListenSpec {
+pub(crate) fn listen_spec(general: &General) -> ListenSpec {
     let port = |port: u16| (port != 0).then_some(port);
     ListenSpec {
         mixed_port: port(general.mixed_port),
@@ -310,17 +311,16 @@ pub(crate) fn listen_spec(general: &General, lan_refused: bool) -> ListenSpec {
         socks_port: port(general.socks_port),
         redir_port: port(general.redir_port),
         tproxy_port: port(general.tproxy_port),
-        allow_lan: general.allow_lan && !lan_refused,
+        allow_lan: general.allow_lan,
+        bind_address: general.bind_address.clone(),
+        lan_allowed_ips: lan::cidrs(&general.lan_allowed_ips),
+        lan_disallowed_ips: lan::cidrs(&general.lan_disallowed_ips),
         authentication: general
             .authentication
             .iter()
             .map(|credential| (credential.user.clone(), credential.pass.clone()))
             .collect(),
-        skip_auth: general
-            .skip_auth_prefixes
-            .iter()
-            .filter_map(|prefix| Cidr::new(prefix.addr, prefix.prefix))
-            .collect(),
+        skip_auth: lan::cidrs(&general.skip_auth_prefixes),
         tcp_keepalive: !keep_alive_disabled(general),
         keepalive_idle_secs: general.keep_alive_idle,
         keepalive_interval_secs: general.keep_alive_interval,
@@ -334,7 +334,6 @@ pub(crate) struct Applied {
     pub ntp: NtpConfig,
     pub tun: TunConfig,
     pub tun_inet4: Option<Prefix>,
-    pub lan_refused: bool,
     pub dns_listen: String,
     pub dns_listen_mark: u32,
     pub store_fake_ip: bool,
@@ -603,7 +602,6 @@ pub(crate) async fn build(
         shared.platform.clone(),
     ));
     let applied = Applied {
-        lan_refused: profile.lan_listener_refused,
         tun_inet4: crate::tun::inet4_of(profile.dns.fake_ip_range),
         dns_listen: if profile.dns.enable {
             profile.dns.listen.clone()
@@ -749,6 +747,7 @@ fn warning_views(profile: &Profile, android: bool) -> Vec<WarningView> {
         })
         .collect::<Vec<_>>();
     warnings.extend(tun_congestion_warning(&profile.tun, android));
+    warnings.extend(tun_offload_warning(&profile.tun, cfg!(target_os = "linux")));
     for warning in &warnings {
         if warning.level == "info" {
             tracing::info!("[Config] {}: {}", warning.path, warning.message);
@@ -773,6 +772,17 @@ fn tun_congestion_warning(tun: &TunConfig, android: bool) -> Option<WarningView>
     })
 }
 
+/// The Linux device asks for offload whatever `gso` says, where sing-tun enables it only when
+/// asked (`tun_linux.go`); no other platform has it, in either core.
+fn tun_offload_warning(tun: &TunConfig, linux: bool) -> Option<WarningView> {
+    (tun.enable && linux && tun.gso == Some(false)).then(|| WarningView {
+        level: "warning",
+        code: "not_applied",
+        path: "tun.gso".to_string(),
+        message: "offload is used whenever the device supports it".to_string(),
+    })
+}
+
 fn user_agent(general: &General) -> String {
     if general.global_ua.is_empty() {
         "clash.meta".to_string()
@@ -783,6 +793,8 @@ fn user_agent(general: &General) -> String {
 
 #[cfg(test)]
 mod tests {
+    use concord_config::net::IpCidr;
+
     use super::*;
 
     #[test]
@@ -793,7 +805,7 @@ mod tests {
             ..General::default()
         };
         let enabled = !cfg!(target_os = "android");
-        let spec = listen_spec(&general, false);
+        let spec = listen_spec(&general);
         assert_eq!(spec.tcp_keepalive, enabled);
         assert_eq!(
             (spec.keepalive_idle_secs, spec.keepalive_interval_secs),
@@ -802,7 +814,7 @@ mod tests {
         assert_eq!(sock_opts(&general).disable_keep_alive, !enabled);
 
         general.disable_keep_alive = true;
-        assert!(!listen_spec(&general, false).tcp_keepalive);
+        assert!(!listen_spec(&general).tcp_keepalive);
         assert!(sock_opts(&general).disable_keep_alive);
     }
 
@@ -826,5 +838,41 @@ mod tests {
         tun.congestion_controller = "bbr3".into();
         tun.enable = false;
         assert!(tun_congestion_warning(&tun, false).is_none());
+    }
+
+    #[test]
+    fn the_lan_keys_reach_the_listen_spec() {
+        let mut general = General {
+            allow_lan: true,
+            bind_address: "192.168.1.2".into(),
+            lan_disallowed_ips: vec![IpCidr::parse("192.168.1.1/32").unwrap()],
+            ..General::default()
+        };
+        let spec = listen_spec(&general);
+        assert!(spec.allow_lan);
+        assert_eq!(spec.bind_address, "192.168.1.2");
+        assert_eq!(spec.lan_allowed_ips.len(), 2);
+        assert_eq!(spec.lan_disallowed_ips.len(), 1);
+        general.lan_allowed_ips.clear();
+        assert!(listen_spec(&general).lan_allowed_ips.is_empty());
+    }
+
+    #[test]
+    fn only_turning_linux_offload_off_is_reported() {
+        let mut tun = TunConfig {
+            enable: true,
+            gso: Some(false),
+            ..TunConfig::default()
+        };
+        let warning = tun_offload_warning(&tun, true).unwrap();
+        assert_eq!(
+            (warning.code, warning.path.as_str()),
+            ("not_applied", "tun.gso")
+        );
+        assert!(tun_offload_warning(&tun, false).is_none());
+        for gso in [None, Some(true)] {
+            tun.gso = gso;
+            assert!(tun_offload_warning(&tun, true).is_none(), "{gso:?}");
+        }
     }
 }
