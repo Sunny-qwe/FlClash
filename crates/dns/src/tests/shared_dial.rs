@@ -10,7 +10,139 @@ use std::sync::Weak;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use concord_common::{BoxStream, PacketSession};
+use futures_util::{FutureExt, poll};
 use tokio::net::{TcpListener, TcpStream};
+
+use crate::shared_dial::{Got, Join, SharedDial};
+
+fn live(_: &usize) -> bool {
+    true
+}
+
+fn pair(got: io::Result<Got<usize>>) -> (usize, bool) {
+    let got = got.unwrap();
+    (got.value, got.reused)
+}
+
+#[tokio::test]
+async fn concurrent_callers_share_a_successful_dial() {
+    let slot = SharedDial::new();
+    let (send, recv) = tokio::sync::oneshot::channel();
+    let first = slot.get(live, async {
+        recv.await.unwrap();
+        Ok(7)
+    });
+    tokio::pin!(first);
+    assert!(poll!(&mut first).is_pending());
+    let mut waiters: Vec<_> = (0..16)
+        .map(|_| slot.get(live, async { panic!("duplicate dial") }).boxed())
+        .collect();
+    for waiter in &mut waiters {
+        assert!(poll!(waiter).is_pending());
+    }
+    send.send(()).unwrap();
+    assert_eq!(pair(first.await), (7, false));
+    for waiter in waiters {
+        assert_eq!(pair(waiter.await), (7, false));
+    }
+    assert_eq!(
+        pair(slot.get(live, async { panic!("cached") }).await),
+        (7, true)
+    );
+}
+
+#[tokio::test]
+async fn only_the_waiting_batch_shares_a_dial_error() {
+    let slot = SharedDial::new();
+    let (send, recv) = tokio::sync::oneshot::channel();
+    let first = slot.get(live, async {
+        recv.await.unwrap();
+        Err(io::Error::new(
+            io::ErrorKind::ConnectionRefused,
+            "dial failed",
+        ))
+    });
+    tokio::pin!(first);
+    assert!(poll!(&mut first).is_pending());
+    let mut waiters: Vec<_> = (0..16)
+        .map(|_| {
+            slot.get(live, async { panic!("duplicate failed dial") })
+                .boxed()
+        })
+        .collect();
+    for waiter in &mut waiters {
+        assert!(poll!(waiter).is_pending());
+    }
+    send.send(()).unwrap();
+    let first = first.await.err().unwrap();
+    // A new caller can succeed before the old waiters consume their error.
+    assert_eq!(pair(slot.get(live, async { Ok(9) }).await), (9, false));
+    for waiter in waiters {
+        let err = waiter.await.err().unwrap();
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionRefused);
+        assert_eq!(err.to_string(), "dial failed");
+        let shared = |err: &io::Error| {
+            Arc::as_ptr(
+                err.get_ref()
+                    .unwrap()
+                    .downcast_ref::<Arc<io::Error>>()
+                    .unwrap(),
+            )
+        };
+        assert_eq!(shared(&first), shared(&err));
+    }
+}
+
+#[tokio::test]
+async fn cancelling_the_dial_releases_waiters_and_allows_another_dial() {
+    let slot = SharedDial::new();
+    let mut first = slot.get(live, std::future::pending()).boxed();
+    assert!(poll!(&mut first).is_pending());
+    let mut waiter = slot.get(live, async { panic!("duplicate dial") }).boxed();
+    assert!(poll!(&mut waiter).is_pending());
+    drop(first);
+    assert_eq!(
+        waiter.await.err().unwrap().kind(),
+        io::ErrorKind::Interrupted
+    );
+    assert_eq!(pair(slot.get(live, async { Ok(1) }).await), (1, false));
+    assert_eq!(slot.take(), Some(1));
+    assert_eq!(pair(slot.get(live, async { Ok(2) }).await), (2, false));
+}
+
+#[tokio::test]
+async fn an_uncached_sender_keeps_its_own_connection() {
+    let slot = SharedDial::<usize>::new();
+    for _ in 0..2 {
+        match slot.join(live).await.unwrap() {
+            Join::Dial(turn) => turn.release(),
+            Join::Ready(_) => panic!("nothing was published"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_released_turn_hands_the_next_dial_to_a_waiter() {
+    let slot = SharedDial::<usize>::new();
+    let Join::Dial(turn) = slot.join(live).await.unwrap() else {
+        panic!("nothing was published");
+    };
+    let mut waiter = slot.get(live, async { Ok(3) }).boxed();
+    assert!(poll!(&mut waiter).is_pending());
+    turn.release();
+    assert_eq!(pair(waiter.await), (3, false));
+}
+
+#[tokio::test]
+async fn a_dead_session_is_dropped_and_dialled_again() {
+    let slot = SharedDial::new();
+    assert_eq!(pair(slot.get(live, async { Ok(1) }).await), (1, false));
+    assert_eq!(
+        pair(slot.get(|n| *n != 1, async { Ok(2) }).await),
+        (2, false)
+    );
+    assert_eq!(slot.take(), Some(2));
+}
 
 struct CountingDialer {
     server: SocketAddr,

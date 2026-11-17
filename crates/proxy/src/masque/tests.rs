@@ -27,8 +27,8 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::*;
+use crate::stack::{Stack, StackConfig, Wired};
 use crate::testing::test_env;
-use crate::wireguard::stack::{Stack, StackConfig, Wired};
 
 fn stack() -> Wired {
     let wired = Stack::start(&StackConfig {

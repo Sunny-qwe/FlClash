@@ -98,7 +98,7 @@ impl Inner {
         local.ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::AddrNotAvailable,
-                "no route inside the wireguard tunnel",
+                "no route inside the tunnel",
             )
         })
     }

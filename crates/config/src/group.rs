@@ -10,8 +10,9 @@ use crate::lenient::{Fields, Ignored};
 use crate::net::parse_unsigned_ranges;
 use crate::proxy::ProxyDef;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GroupKind {
+    #[default]
     Select,
     UrlTest,
     Fallback,
@@ -46,7 +47,7 @@ pub enum LbStrategy {
     StickySessions,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GroupDef {
     pub name: String,
     pub kind: GroupKind,
@@ -126,7 +127,6 @@ pub fn parse_group(map: &Map) -> Result<GroupDef> {
     }
     let mut def = GroupDef {
         name: name.clone(),
-        kind: GroupKind::Select,
         proxies: f.strings("proxies").map_err(decode)?,
         use_providers: f.strings("use").map_err(decode)?,
         use_position,
@@ -149,12 +149,7 @@ pub fn parse_group(map: &Map) -> Result<GroupDef> {
         include_all_providers: include_all || f.boolean("include-all-providers").map_err(decode)?,
         hidden: f.boolean("hidden").map_err(decode)?,
         icon: f.string("icon").map_err(decode)?,
-        tolerance: 0,
-        default_selected: String::new(),
-        strategy: LbStrategy::default(),
-        hash_key: String::new(),
-        ignored: Vec::new(),
-        builtin_global: false,
+        ..GroupDef::default()
     };
     def.kind = match type_name.as_str() {
         "select" => GroupKind::Select,
@@ -229,35 +224,14 @@ impl GroupDef {
         members.extend(groups.iter().map(|g| g.name.clone()));
         GroupDef {
             name: "GLOBAL".to_string(),
-            kind: GroupKind::Select,
             proxies: members,
-            use_providers: Vec::new(),
-            use_position: IndexMap::new(),
             url: url.to_string(),
-            explicit_url: None,
-            interval: 0,
             interval_is_zero: true,
-            timeout: 0,
-            max_failed_times: 0,
             empty_fallback: "COMPATIBLE".to_string(),
-            explicit_empty_fallback: false,
             lazy: true,
-            disable_udp: false,
-            filter: String::new(),
-            exclude_filter: String::new(),
-            exclude_type: String::new(),
             expected_status: "*".to_string(),
-            include_all: false,
-            include_all_proxies: false,
-            include_all_providers: false,
-            hidden: false,
-            icon: String::new(),
-            tolerance: 0,
-            default_selected: String::new(),
-            strategy: Default::default(),
-            hash_key: String::new(),
-            ignored: Vec::new(),
             builtin_global: true,
+            ..GroupDef::default()
         }
     }
 

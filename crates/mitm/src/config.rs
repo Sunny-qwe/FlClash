@@ -3,18 +3,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use concord_config::mitm::MitmSection as RawConfig;
-use concord_config::mitm::{HostEntryDef, Items, MitmDef, MitmLine, Read};
+use concord_config::mitm::text::quote;
+use concord_config::mitm::{HostEntryDef, IssueKind, Items, LineError, MitmDef, MitmLine, Read};
 use serde::Serialize;
 
 use crate::hostlist::HostList;
-use crate::issue::{IssueKind, LineError};
 use crate::limits::{Limits, Resolve};
 use crate::rules::{
     Rules, compile_body_rewrite, compile_header_rewrite, compile_map_local, compile_url_rewrite,
 };
 use crate::script::{ScriptHost, compile_script};
 use crate::sources::SourceList;
-use crate::text::quote;
 use crate::view::{LineView, SourcesView};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -215,7 +214,7 @@ impl Config {
     }
 
     pub fn same(&self, other: &Config) -> bool {
-        self.def == other.def
+        self.def.reads_the_same(&other.def)
     }
 
     pub fn script_names(&self) -> Vec<&str> {
@@ -403,6 +402,42 @@ mod tests {
             &env,
         );
         assert!(a.same(&b) && !a.same(&c));
+    }
+
+    #[test]
+    fn same_ignores_where_comments_and_blank_lines_put_a_line() {
+        let (_home, env) = env();
+        let raw = RawConfig {
+            enable: true,
+            hostname: lines(&["a.test, b.test"]),
+            url_rewrite: lines(&["^ok _ reject", "^next _ reject"]),
+            ..RawConfig::default()
+        };
+        let (a, _) = Config::parse(raw.clone(), &env);
+        let (moved, _) = Config::parse(
+            RawConfig {
+                hostname: lines(&["# hosts", "", "a.test,b.test"]),
+                url_rewrite: lines(&["", "# ads", "  ^ok   _ reject", "^next _ reject"]),
+                ..raw.clone()
+            },
+            &env,
+        );
+        let (swapped, _) = Config::parse(
+            RawConfig {
+                url_rewrite: lines(&["^next _ reject", "^ok _ reject"]),
+                ..raw.clone()
+            },
+            &env,
+        );
+        let (changed, _) = Config::parse(
+            RawConfig {
+                url_rewrite: lines(&["^ok _ reject", "^other _ reject"]),
+                ..raw
+            },
+            &env,
+        );
+        assert!(a.same(&moved));
+        assert!(!a.same(&swapped) && !a.same(&changed));
     }
 
     #[test]

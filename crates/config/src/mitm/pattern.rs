@@ -7,9 +7,16 @@ pub fn check_pattern(pattern: &str) -> Result<(), LineError> {
     compile(pattern)
 }
 
-/// As [check_pattern] for a body regex, which matches line by line.
+/// The flag a body regex is compiled with, so that it matches line by line.
+pub const MULTILINE: &str = "(?m)";
+
+pub fn multiline(pattern: &str) -> String {
+    format!("{MULTILINE}{pattern}")
+}
+
+/// As [check_pattern] for a body regex.
 pub fn check_multiline(pattern: &str) -> Result<(), LineError> {
-    compile(&format!("(?m){pattern}"))
+    compile(&multiline(pattern))
 }
 
 fn compile(source: &str) -> Result<(), LineError> {

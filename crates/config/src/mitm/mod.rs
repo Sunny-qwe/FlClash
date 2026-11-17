@@ -16,7 +16,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub use heads::{HeadConditionsDef, REQUEST_HEAD, RESPONSE_HEAD};
 pub use hosts::{HostEntryDef, SourceEntryDef, parse_host_line, parse_source_line};
 pub use issue::{IssueKind, LineError};
-pub use pattern::{check_multiline, check_pattern};
+pub use pattern::{MULTILINE, check_multiline, check_pattern, multiline};
 pub use rules::{
     BodyActionDef, BodyRewriteDef, HeaderEditDef, HeaderRewriteDef, MapLocalBody, MapLocalDef,
     UrlAction, UrlRewriteDef, parse_body_rewrite, parse_header_rewrite, parse_map_local,
@@ -194,6 +194,13 @@ fn source_items(line: &str) -> Items<SourceEntryDef> {
     Items { items, error }
 }
 
+fn same_reads<T: PartialEq>(lines: &[MitmLine<T>], other: &[MitmLine<T>]) -> bool {
+    lines
+        .iter()
+        .map(|line| &line.read)
+        .eq(other.iter().map(|line| &line.read))
+}
+
 fn bad<'a, T>(
     list: &'static str,
     lines: &'a [MitmLine<T>],
@@ -234,6 +241,48 @@ impl MitmDef {
             }),
             script: each_line(&section.script, parse_script),
         }
+    }
+
+    /// Whether `other` puts the same section in force: its lines read the same and come in
+    /// the same order, wherever blank lines and comments put them and however they are spaced.
+    pub fn reads_the_same(&self, other: &MitmDef) -> bool {
+        let MitmDef {
+            enable,
+            skip_server_cert_verify,
+            auto_quic_block,
+            decrypt_tls,
+            ca_fingerprint,
+            h2,
+            limits,
+            hostname,
+            skip_server_cert_verify_hostname,
+            client_source_address,
+            url_rewrite,
+            header_rewrite,
+            body_rewrite,
+            map_local,
+            request_body_mock,
+            script,
+        } = self;
+        *enable == other.enable
+            && *skip_server_cert_verify == other.skip_server_cert_verify
+            && *auto_quic_block == other.auto_quic_block
+            && *decrypt_tls == other.decrypt_tls
+            && *ca_fingerprint == other.ca_fingerprint
+            && *h2 == other.h2
+            && *limits == other.limits
+            && same_reads(hostname, &other.hostname)
+            && same_reads(
+                skip_server_cert_verify_hostname,
+                &other.skip_server_cert_verify_hostname,
+            )
+            && same_reads(client_source_address, &other.client_source_address)
+            && same_reads(url_rewrite, &other.url_rewrite)
+            && same_reads(header_rewrite, &other.header_rewrite)
+            && same_reads(body_rewrite, &other.body_rewrite)
+            && same_reads(map_local, &other.map_local)
+            && same_reads(request_body_mock, &other.request_body_mock)
+            && same_reads(script, &other.script)
     }
 
     /// The lines that cannot be read, list by list in the order the engine reads them.

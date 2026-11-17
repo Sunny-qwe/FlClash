@@ -1,6 +1,5 @@
-use concord_config::mitm::HostEntryDef;
+use concord_config::mitm::{HostEntryDef, LineError};
 
-use crate::issue::LineError;
 use crate::view::{HostEntryView, HostsView, LineView};
 
 const HTTPS_PORT: u16 = 443;

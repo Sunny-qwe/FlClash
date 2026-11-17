@@ -13,8 +13,17 @@ pub fn provider_backoff(failures: u32, interval: Duration) -> Duration {
         .min(interval)
 }
 
-/// Retries an initial load after each backoff. `None` means its owner is gone;
-/// cancellation interrupts the wait, while an in-flight load keeps its caller's policy.
+/// What one initial-load attempt came to.
+#[cfg(feature = "io")]
+pub enum Attempt {
+    Loaded,
+    Retry,
+    /// The load's owner is gone; nothing is left to load for.
+    Gone,
+}
+
+/// Retries an initial load after each backoff until it loads. Cancellation interrupts
+/// the wait, while an in-flight load keeps its caller's policy.
 #[cfg(feature = "io")]
 pub async fn retry_until_loaded<F>(
     interval: Duration,
@@ -22,7 +31,7 @@ pub async fn retry_until_loaded<F>(
     mut load: impl FnMut() -> F,
 ) -> bool
 where
-    F: Future<Output = Option<bool>> + Send,
+    F: Future<Output = Attempt> + Send,
 {
     if interval.is_zero() {
         return false;
@@ -34,9 +43,9 @@ where
             () = tokio::time::sleep(provider_backoff(failures, interval)) => {}
         }
         match load().await {
-            Some(true) => return true,
-            None => return false,
-            Some(false) => failures = failures.saturating_add(1),
+            Attempt::Loaded => return true,
+            Attempt::Gone => return false,
+            Attempt::Retry => failures = failures.saturating_add(1),
         }
     }
 }
@@ -44,6 +53,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "io")]
+    use tokio_util::sync::CancellationToken;
 
     #[test]
     fn doubles_from_ten_seconds_up_to_the_interval() {
@@ -64,13 +75,8 @@ mod tests {
         let day = Duration::from_secs(86_400);
         assert_eq!(provider_backoff(40, day), day);
     }
-}
 
-#[cfg(all(test, feature = "io"))]
-mod retry_tests {
-    use super::*;
-    use tokio_util::sync::CancellationToken;
-
+    #[cfg(feature = "io")]
     #[tokio::test(start_paused = true)]
     async fn initial_load_retries_follow_the_backoff_until_success() {
         let stop = CancellationToken::new();
@@ -79,13 +85,18 @@ mod retry_tests {
         assert!(
             retry_until_loaded(Duration::from_secs(40), &stop, || {
                 waits.push(start.elapsed().as_secs());
-                std::future::ready(Some(waits.len() == 4))
+                std::future::ready(if waits.len() == 4 {
+                    Attempt::Loaded
+                } else {
+                    Attempt::Retry
+                })
             })
             .await
         );
         assert_eq!(waits, [10, 30, 70, 110]);
     }
 
+    #[cfg(feature = "io")]
     #[tokio::test(start_paused = true)]
     async fn zero_interval_cancellation_and_owner_loss_end_initial_retries() {
         let stop = CancellationToken::new();
@@ -93,7 +104,7 @@ mod retry_tests {
         assert!(
             !retry_until_loaded(Duration::ZERO, &stop, || {
                 calls += 1;
-                std::future::ready(Some(false))
+                std::future::ready(Attempt::Retry)
             })
             .await
         );
@@ -102,7 +113,7 @@ mod retry_tests {
         assert!(
             !retry_until_loaded(Duration::from_secs(30), &stop, || {
                 calls += 1;
-                std::future::ready(Some(false))
+                std::future::ready(Attempt::Retry)
             })
             .await
         );
@@ -111,7 +122,7 @@ mod retry_tests {
         assert!(
             !retry_until_loaded(Duration::from_secs(30), &stop, || {
                 calls += 1;
-                std::future::ready(None)
+                std::future::ready(Attempt::Gone)
             })
             .await
         );

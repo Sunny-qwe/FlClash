@@ -37,13 +37,11 @@ use concord_tunnel::{Runtime, Tunnel};
 use rustls_pki_types::CertificateDer;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::Failure;
+use crate::error::{Failure, GeoUpdateError, RuleLoadError};
 use crate::fake_ip_store::FakeIpStore;
 use crate::lan;
 use crate::ops::on_parse_stack;
-use crate::resources::{
-    GeoUpdateError, GeoUpdater, GeoUrls, RuleLoadError, RuleProviders, TunnelFetcher,
-};
+use crate::resources::{GeoUpdater, GeoUrls, RuleProviders, TunnelFetcher};
 use crate::route::RouteCounters;
 use crate::views::WarningView;
 
@@ -441,7 +439,7 @@ pub(crate) enum ApplyError {
     #[error(transparent)]
     Outbounds(#[from] GroupError),
     #[error(transparent)]
-    Build(#[from] tokio::task::JoinError),
+    OutboundsTask(tokio::task::JoinError),
 }
 
 pub(crate) async fn load_profile(
@@ -731,7 +729,8 @@ async fn build_outbounds(
         let outbounds = Outbounds::build(&mut profile, deps)?;
         Ok((profile, outbounds))
     })
-    .await?
+    .await
+    .map_err(ApplyError::OutboundsTask)?
 }
 
 /// Everything an apply of `profile` warns about; `concord -t` reports the same list.

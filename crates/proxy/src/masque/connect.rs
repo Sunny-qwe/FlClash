@@ -9,7 +9,7 @@ use super::body::Body;
 use super::h3::Client;
 use super::tunnel::Tunnel;
 use super::{Shared, bounded};
-use crate::wireguard::stack::IpStream;
+use crate::stack::IpStream;
 
 pub(super) enum Connector {
     L4(Arc<Client>),

@@ -10,8 +10,8 @@ use concord_config::proxy::{WgPeer, WireGuardOpts, wireguard_dns};
 use ipnetwork::{IpNetwork, Ipv4Network, Ipv6Network};
 
 use super::amnezia::Settings;
-use super::stack::Congestion;
 use crate::ctx::BuildError;
+use crate::stack::Congestion;
 
 const DEFAULT_MTU: usize = 1408;
 const MAX_MTU: usize = 65_495;

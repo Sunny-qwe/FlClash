@@ -29,6 +29,7 @@ mod socks5;
 mod ss;
 mod ssh;
 mod ssr;
+mod stack;
 mod tlsmap;
 mod trojan;
 mod tuic;

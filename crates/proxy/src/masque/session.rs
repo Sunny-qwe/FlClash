@@ -7,7 +7,7 @@ use concord_common::{HostResolver, Initiator};
 
 use super::Shared;
 use super::tunnel::Tunnel;
-use crate::wireguard::stack::{SessionTunnel, StackSession};
+use crate::stack::{SessionTunnel, StackSession};
 
 pub(super) struct MasqueUdp {
     tunnel: Arc<Tunnel>,

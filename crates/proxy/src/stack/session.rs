@@ -26,7 +26,9 @@ pub(crate) trait SessionTunnel: Send + Sync + 'static {
 
     fn resolve(&self, host: String) -> impl Future<Output = io::Result<IpAddr>> + Send + 'static;
 
-    fn usable(&self) -> bool;
+    fn usable(&self) -> bool {
+        true
+    }
 }
 
 /// UDP through the tunnel. A destination given by name is resolved once per name,

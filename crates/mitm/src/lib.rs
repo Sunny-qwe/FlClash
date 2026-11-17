@@ -16,7 +16,6 @@ mod forward;
 mod headers;
 mod heads;
 mod hostlist;
-mod issue;
 mod jq;
 mod limits;
 mod pattern;
@@ -33,18 +32,17 @@ mod target;
 mod task;
 #[cfg(test)]
 mod testing;
-mod text;
 mod view;
 #[cfg(test)]
 mod view_tests;
 
 pub use ca::{Authority, Ca, CaError, CertificateInfo};
 pub use capture::{Action, Body, Exchange, ExchangeList, ExchangeSummary};
+pub use concord_config::mitm::{IssueKind, LineError};
 pub use config::{Config, Issue, LineEntry, RawConfig, Validation};
 pub use cron::{LocalClock, UtcClock};
 pub use engine::MitmEngine;
 pub use facade::{Mitm, MitmEnv};
-pub use issue::{IssueKind, LineError};
 pub use limits::{
     PRESSURE_NO_BODIES, PRESSURE_NO_SCRIPTS, PRESSURE_NONE, PRESSURE_RELAY, RawLimits,
 };

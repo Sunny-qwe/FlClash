@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::WireGuard;
-use super::stack::{Stack, StackConfig, StackRecv, StackSend};
+use crate::stack::{Stack, StackConfig, StackRecv, StackSend};
 use crate::testing::{HeldLookup, test_env};
 
 const SERVER_TUNNEL_IP: Ipv4Addr = Ipv4Addr::new(10, 7, 0, 1);

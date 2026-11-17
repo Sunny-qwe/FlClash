@@ -8,7 +8,7 @@ use quinn::crypto::rustls::QuicClientConfig;
 
 use crate::client::{Client, Params, checked, decode, encode, with_random_id, with_timeout};
 use crate::dialer::{Connector, Cx};
-use crate::session::SessionSlot;
+use crate::shared_dial::SharedDial;
 
 const ALPN: &str = "doq";
 const MAX_RESPONSE: usize = 65_535;
@@ -21,7 +21,7 @@ pub(crate) struct DoqClient {
     port: u16,
     connector: Arc<Connector>,
     config: quinn::ClientConfig,
-    session: SessionSlot<Session>,
+    session: SharedDial<Session>,
 }
 
 impl DoqClient {
@@ -48,23 +48,8 @@ impl DoqClient {
             port,
             connector,
             config: quinn::ClientConfig::new(Arc::new(crypto)),
-            session: SessionSlot::new(),
+            session: SharedDial::new(),
         })
-    }
-
-    async fn connection(&self, cx: Cx) -> io::Result<(quinn::Connection, bool)> {
-        self.session
-            .get(
-                |slot| {
-                    let (_, conn) = slot.as_ref()?;
-                    conn.close_reason().is_none().then(|| conn.clone())
-                },
-                async {
-                    let session = self.dial(cx).await?;
-                    Ok((session.1.clone(), Some(session)))
-                },
-            )
-            .await
     }
 
     async fn dial(&self, cx: Cx) -> io::Result<Session> {
@@ -117,8 +102,12 @@ impl Client for DoqClient {
         with_timeout(async {
             let mut reused = true;
             loop {
-                let (conn, cached) = self.connection(cx).await?;
-                reused &= cached;
+                let session = self
+                    .session
+                    .get(|(_, conn)| conn.close_reason().is_none(), self.dial(cx))
+                    .await?;
+                reused &= session.reused;
+                let (_, conn) = session.value;
                 let answer = Self::round_trip(&conn, &bytes)
                     .await
                     .and_then(|resp| checked(&query, resp));

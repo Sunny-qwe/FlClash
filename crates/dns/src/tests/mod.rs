@@ -1,5 +1,5 @@
 mod alloc;
-mod session;
+mod shared_dial;
 mod support;
 
 use std::net::{IpAddr, Ipv4Addr};

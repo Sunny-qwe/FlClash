@@ -1,7 +1,6 @@
+use concord_config::mitm::LineError;
+use concord_config::mitm::text::quote;
 use time::{Date, Month, OffsetDateTime};
-
-use crate::issue::LineError;
-use crate::text::quote;
 
 /// A 29 February schedule waits eight years across a skipped century leap year.
 const SEARCH_HORIZON: i64 = 8 * 366 * 86_400;

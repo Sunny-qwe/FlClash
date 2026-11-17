@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use concord_config::proxy::ProxyParse;
 use concord_config::{
@@ -35,15 +35,18 @@ pub(crate) async fn on_parse_stack<T: Send + 'static>(
     }
 }
 
+pub(crate) enum RuleSetSource {
+    Downloaded(Vec<u8>),
+    Local(PathBuf),
+}
+
 pub(crate) async fn compile_rule_set(
-    path: std::path::PathBuf,
-    bytes: Option<Vec<u8>>,
-    allow_empty: bool,
+    source: RuleSetSource,
 ) -> Result<(Vec<u8>, concord_rules::CompiledRuleSet), Failure> {
     on_parse_stack(move || {
-        let bytes = match bytes {
-            Some(bytes) => bytes,
-            None => std::fs::read(path).map_err(Failure::from)?,
+        let (bytes, allow_empty) = match source {
+            RuleSetSource::Downloaded(bytes) => (bytes, false),
+            RuleSetSource::Local(path) => (std::fs::read(path).map_err(Failure::from)?, true),
         };
         let compiled = concord_rules::compile_rule_set(&bytes, allow_empty)
             .map_err(|err| Failure::new(err.code(), err.to_string()))?;

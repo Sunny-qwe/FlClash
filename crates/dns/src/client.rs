@@ -35,12 +35,14 @@ pub(crate) trait Client: Send + Sync {
 
 pub(crate) type ClientRef = Arc<dyn Client>;
 
+const TIMED_OUT: &str = "dns exchange timed out";
+
 pub(crate) fn timed_out() -> io::Error {
-    io::Error::new(io::ErrorKind::TimedOut, "dns exchange timed out")
+    io::Error::new(io::ErrorKind::TimedOut, TIMED_OUT)
 }
 
 pub(crate) async fn with_timeout<T>(fut: impl Future<Output = io::Result<T>>) -> io::Result<T> {
-    concord_common::timeout::with_timeout(EXCHANGE_TIMEOUT, fut, "dns exchange timed out").await
+    concord_common::timeout::with_timeout(EXCHANGE_TIMEOUT, fut, TIMED_OUT).await
 }
 
 pub(crate) fn with_random_id(req: &Message) -> Message {

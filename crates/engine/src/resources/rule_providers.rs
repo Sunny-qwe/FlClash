@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use concord_common::backoff::retry_until_loaded;
+use concord_common::backoff::{Attempt, retry_until_loaded};
 use concord_common::sync::lock;
 use concord_common::{
     CoreEvent, EventSink, Fetch, Refresh, ResourceKind, ResourcePhase, ResourceUpdate,
@@ -19,7 +19,9 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use super::{GeoUpdater, ResourceError, RuleLoadError, download, touch};
+use super::fetch::{download, touch};
+use super::geo::{GEO_REPARSES, GeoUpdater};
+use crate::error::{ResourceError, RuleLoadError};
 use crate::route::RouteCounters;
 
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(20);
@@ -115,9 +117,6 @@ pub(crate) struct RuleProviders {
     events: Arc<dyn EventSink>,
     route: Arc<RouteCounters>,
 }
-
-/// Rounds of fetching geo files and parsing again; each round can only add the files a rule-set needs.
-const GEO_REPARSES: usize = 2;
 
 impl RuleProviders {
     pub fn new(
@@ -451,7 +450,11 @@ impl RuleProviders {
                 if matches!(provider.def.source, RuleSource::Http(_)) && provider.def.interval > 0 {
                     let interval = Duration::from_secs(u64::from(provider.def.interval));
                     retry_until_loaded(interval, stop, || async {
-                        Some(self.pull_with_log(provider).await)
+                        if self.pull_with_log(provider).await {
+                            Attempt::Loaded
+                        } else {
+                            Attempt::Retry
+                        }
                     })
                     .await;
                 }

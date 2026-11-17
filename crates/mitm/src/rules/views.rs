@@ -1,15 +1,14 @@
+use concord_config::mitm::MULTILINE;
+use concord_config::mitm::text::canonical_header;
 use http::header::HeaderMap;
 
 use super::{BodyAction, BodyRewrite, HeaderEdit, HeaderRewrite, MapLocal, UrlRewrite};
 use crate::heads::HeadConditions;
 use crate::pattern::Pattern;
-use crate::text::canonical_header;
 use crate::view::{
     BodyReplacementView, BodyRewriteView, HeaderRewriteView, HeaderView, LineView, MapLocalView,
     Phase, UrlRewriteView,
 };
-
-const MULTILINE: &str = "(?m)";
 
 fn source(pattern: &Pattern) -> String {
     pattern.source().to_string()

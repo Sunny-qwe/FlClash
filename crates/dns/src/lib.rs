@@ -18,7 +18,7 @@ mod plain;
 mod query;
 mod record;
 mod resolver;
-mod session;
+mod shared_dial;
 mod system;
 #[cfg(test)]
 mod tests;

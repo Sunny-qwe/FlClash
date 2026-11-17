@@ -1,4 +1,6 @@
+use std::path::Path;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -10,7 +12,7 @@ use concord_tls::TrustStore;
 use concord_tunnel::Tunnel;
 use tokio::time::Instant;
 
-use super::ResourceError;
+use crate::error::ResourceError;
 
 const MAX_REDIRECTS: usize = 10;
 
@@ -127,4 +129,11 @@ pub(crate) async fn download(
         return Err(ResourceError::Status(response.status));
     }
     Ok(response.body)
+}
+
+pub(super) fn touch(path: &Path) {
+    let _ = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.set_modified(SystemTime::now()));
 }

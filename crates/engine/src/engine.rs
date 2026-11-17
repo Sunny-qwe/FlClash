@@ -35,7 +35,7 @@ use crate::error::Failure;
 use crate::fake_ip_store;
 use crate::faults::Faults;
 use crate::ntp::{self, NtpSettings};
-use crate::ops;
+use crate::ops::{self, RuleSetSource};
 use crate::probe::{Prober, RouteHit};
 use crate::probe_env::TunnelProbes;
 use crate::resources::{self, GeoUpdater, TunnelFetcher};
@@ -572,16 +572,16 @@ impl Engine {
         }
         let source = home.join("providers").join("rules").join(name);
         let downloaded = !url.is_empty();
-        let bytes = if downloaded {
-            Some(
+        let from = if downloaded {
+            RuleSetSource::Downloaded(
                 resources::download(&*self.shared.fetcher, resources::rule_set_request(url))
                     .await
                     .map_err(|err| request_failure(&err, json!({})))?,
             )
         } else {
-            None
+            RuleSetSource::Local(source.clone())
         };
-        let (bytes, compiled) = ops::compile_rule_set(source.clone(), bytes, !downloaded).await?;
+        let (bytes, compiled) = ops::compile_rule_set(from).await?;
         if downloaded {
             home.write_atomic(&source, &bytes)?;
         }

@@ -17,7 +17,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use crate::client::{BoxIo, Client, Params, checked, decode, encode, with_random_id, with_timeout};
 use crate::dialer::{Connector, Cx};
 use crate::dot::{server_name, tls_connector};
-use crate::session::SessionSlot;
+use crate::shared_dial::{Got, Join, SharedDial};
 
 const MAX_BODY: usize = 65_535;
 const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -84,7 +84,7 @@ pub(crate) struct DohClient {
     target: DohTarget,
     connector: Arc<Connector>,
     tls: Option<tokio_rustls::TlsConnector>,
-    h2: SessionSlot<http2::SendRequest<Body>>,
+    h2: SharedDial<http2::SendRequest<Body>>,
     h1: Mutex<Vec<http1::SendRequest<Body>>>,
 }
 
@@ -108,40 +108,50 @@ impl DohClient {
             target,
             connector,
             tls,
-            h2: SessionSlot::new(),
+            h2: SharedDial::new(),
             h1: Mutex::new(Vec::new()),
         })
     }
 
-    async fn sender(&self, cx: Cx) -> io::Result<(Sender, bool)> {
-        self.h2
-            .get(
-                |slot| {
-                    match slot.as_ref() {
-                        Some(sender) if !sender.is_closed() => {
-                            return Some(Sender::H2(sender.clone()));
-                        }
-                        Some(_) => *slot = None,
-                        None => {}
-                    }
-                    let mut idle = lock(&self.h1);
-                    while let Some(sender) = idle.pop() {
-                        if !sender.is_closed() {
-                            return Some(Sender::H1(sender));
-                        }
-                    }
-                    None
-                },
-                async {
-                    let sender = self.dial(cx).await?;
-                    let session = match &sender {
-                        Sender::H2(sender) => Some(sender.clone()),
-                        Sender::H1(_) => None,
-                    };
-                    Ok((sender, session))
-                },
-            )
-            .await
+    async fn sender(&self, cx: Cx) -> io::Result<Got<Sender>> {
+        if let Some(idle) = self.idle_h1(true) {
+            return Ok(idle);
+        }
+        let turn = match self.h2.join(|sender| !sender.is_closed()).await? {
+            Join::Ready(got) => return Ok(got.map(Sender::H2)),
+            Join::Dial(turn) => turn,
+        };
+        if let Some(idle) = self.idle_h1(false) {
+            turn.release();
+            return Ok(idle);
+        }
+        let sender = match self.dial(cx).await {
+            Ok(sender) => sender,
+            Err(err) => return Err(turn.fail(err)),
+        };
+        match &sender {
+            Sender::H2(h2) => turn.publish(h2.clone()),
+            Sender::H1(_) => turn.release(),
+        }
+        Ok(Got {
+            value: sender,
+            reused: false,
+        })
+    }
+
+    /// `reused` is false once the caller has missed the cache, as a sender it then finds
+    /// was not there when it asked.
+    fn idle_h1(&self, reused: bool) -> Option<Got<Sender>> {
+        let mut idle = lock(&self.h1);
+        while let Some(sender) = idle.pop() {
+            if !sender.is_closed() {
+                return Some(Got {
+                    value: Sender::H1(sender),
+                    reused,
+                });
+            }
+        }
+        None
     }
 
     async fn dial(&self, cx: Cx) -> io::Result<Sender> {
@@ -242,12 +252,12 @@ impl Client for DohClient {
         query.metadata.id = 0;
         let bytes = encode(&query)?;
         with_timeout(async {
-            let mut attempts = 0;
+            let mut reused = true;
             loop {
-                let (current, cached) = self.sender(cx).await?;
-                let reused = attempts == 0 && cached;
+                let sender = self.sender(cx).await?;
+                reused &= sender.reused;
                 let answer = self
-                    .round_trip(current, &bytes)
+                    .round_trip(sender.value, &bytes)
                     .await
                     .and_then(|resp| checked(&query, resp));
                 match answer {
@@ -255,14 +265,13 @@ impl Client for DohClient {
                         resp.metadata.id = original;
                         return Ok(resp);
                     }
-                    Err(err) if reused && attempts < 2 => {
-                        attempts += 1;
-                        self.reset();
-                        tracing::debug!("re-creating the DoH connection after {err}");
-                    }
                     Err(err) => {
                         self.reset();
-                        return Err(err);
+                        if !reused {
+                            return Err(err);
+                        }
+                        reused = false;
+                        tracing::debug!("re-creating the DoH connection after {err}");
                     }
                 }
             }

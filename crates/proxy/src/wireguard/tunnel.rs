@@ -19,9 +19,9 @@ use tokio::time::{Instant, sleep};
 use super::amnezia::Amnezia;
 use super::config::{PeerConfig, WgConfig};
 use super::dns::RemoteDns;
-use super::stack::{Stack, StackConfig, StackRecv, StackSend, TcpConn, UdpPort};
 use super::transport::{Carrier, Reserved, WireFactory};
 use crate::node::{Egress, resolve_server};
+use crate::stack::{Stack, StackConfig, StackRecv, StackSend, TcpConn, UdpPort};
 
 const IDLE_TICK: Duration = Duration::from_secs(90);
 

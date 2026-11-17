@@ -15,7 +15,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::{Instant, timeout};
 
 use super::config::{DnsServer, DnsTransport};
-use super::stack::{Congestion, Stack};
+use crate::stack::{Congestion, Stack};
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 const SECOND_ANSWER_GRACE: Duration = Duration::from_millis(100);
@@ -78,7 +78,7 @@ fn parse(wire: &[u8], id: u16) -> Option<Answer> {
     Some(answer)
 }
 
-async fn establish(conn: &mut super::stack::TcpConn) -> io::Result<()> {
+async fn establish(conn: &mut crate::stack::TcpConn) -> io::Result<()> {
     poll_fn(|cx| conn.poll_established(cx)).await
 }
 

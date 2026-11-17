@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, SystemTime};
 
 use arc_swap::ArcSwap;
-use concord_common::backoff::{provider_backoff as backoff, retry_until_loaded};
+use concord_common::backoff::{Attempt, provider_backoff as backoff, retry_until_loaded};
 use concord_common::sync::lock;
 use concord_common::{CoreEvent, Fetch, Refresh, ResourceKind, ResourcePhase, ResourceUpdate};
 use concord_config::provider::{ProxyProviderDef, ProxySource, parse_provider_content};
@@ -710,12 +710,14 @@ pub(crate) async fn run(
     };
     if initial.is_err() {
         let loaded = retry_until_loaded(interval, &stop, || async {
-            let strong = provider.upgrade()?;
+            let Some(strong) = provider.upgrade() else {
+                return Attempt::Gone;
+            };
             match strong.reported(strong.pull()).await {
-                Ok(_) => Some(true),
+                Ok(_) => Attempt::Loaded,
                 Err(err) => {
                     tracing::warn!("[Provider] {} pull error: {err}", strong.name);
-                    Some(false)
+                    Attempt::Retry
                 }
             }
         })

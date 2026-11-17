@@ -39,7 +39,10 @@ impl SourceList {
     pub(crate) fn add_line(
         &mut self,
         line: &str,
-    ) -> (Vec<SourceEntryView>, Result<(), crate::issue::LineError>) {
+    ) -> (
+        Vec<SourceEntryView>,
+        Result<(), concord_config::mitm::LineError>,
+    ) {
         let (entries, error) = concord_config::mitm::parse_source_line(line);
         (self.add(&entries), error.map_or(Ok(()), Err))
     }

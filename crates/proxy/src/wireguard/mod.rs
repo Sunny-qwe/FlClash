@@ -2,7 +2,6 @@ mod amnezia;
 pub(crate) mod config;
 pub(crate) mod dns;
 mod session;
-pub(crate) mod stack;
 mod transport;
 mod tunnel;
 
@@ -23,11 +22,11 @@ use concord_net::dial_found;
 use tokio::time::timeout;
 
 use self::config::WgConfig;
-use self::stack::IpStream;
 use self::tunnel::{Tunnel, watch_idle};
 use crate::ctx::{BuildCtx, BuildError};
 use crate::node::{Egress, info};
 use crate::session_slot::{SessionSlot, overtaken};
+use crate::stack::IpStream;
 
 pub(crate) struct Shared {
     info: OutboundInfo,

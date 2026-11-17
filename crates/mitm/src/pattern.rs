@@ -1,6 +1,5 @@
+use concord_config::mitm::{IssueKind, LineError};
 use fancy_regex::{Captures, Regex};
-
-use crate::issue::{IssueKind, LineError};
 
 /// A backtracking regex, as Surge's and Loon's patterns need. fancy-regex's default step
 /// limit stands in for a match timeout; a pattern that exceeds it matches nothing.
@@ -30,7 +29,7 @@ impl Pattern {
 
     fn build(pattern: &str, multiline: bool) -> Result<Pattern, PatternError> {
         let source = if multiline {
-            format!("(?m){pattern}")
+            concord_config::mitm::multiline(pattern)
         } else {
             pattern.to_string()
         };

@@ -1,18 +1,17 @@
 use std::path::{Component, Path};
 
+use concord_config::mitm::text::{decode_base64, quote};
 use concord_config::mitm::{
-    BodyActionDef, BodyRewriteDef, HeaderEditDef, HeaderRewriteDef, MapLocalBody, MapLocalDef,
-    UrlRewriteDef,
+    BodyActionDef, BodyRewriteDef, HeaderEditDef, HeaderRewriteDef, LineError, MapLocalBody,
+    MapLocalDef, UrlRewriteDef,
 };
 use http::StatusCode;
 use http::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 
 use crate::heads::{HeadConditions, Heads};
-use crate::issue::LineError;
 use crate::jq::{Jq, JqOutcome};
 use crate::pattern::Pattern;
 use crate::script::{Script, ScriptKind};
-use crate::text::{decode_base64, quote};
 use crate::view::LineView;
 
 pub(crate) use concord_config::mitm::UrlAction;
@@ -856,7 +855,11 @@ mod tests {
                 !err.message.contains(&resources.display().to_string()),
                 "{data}: {err}"
             );
-            assert_eq!(err.kind, crate::issue::IssueKind::Resource, "{data}");
+            assert_eq!(
+                err.kind,
+                concord_config::mitm::IssueKind::Resource,
+                "{data}"
+            );
         }
     }
 }

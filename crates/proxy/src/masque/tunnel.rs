@@ -12,8 +12,8 @@ use super::body::{Body, Sent};
 use super::config::Config;
 use super::h3::{Client, Driver};
 use super::{capsule, datagram};
+use crate::stack::{Stack, StackConfig, StackRecv, StackSend};
 use crate::wireguard::dns::RemoteDns;
-use crate::wireguard::stack::{Stack, StackConfig, StackRecv, StackSend};
 
 pub(super) struct Tunnel {
     pub(super) stack: Arc<Stack>,

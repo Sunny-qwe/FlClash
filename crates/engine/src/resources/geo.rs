@@ -16,10 +16,13 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use super::{GeoUpdateError, WriteError, download, touch};
+use super::fetch::{download, touch};
+use crate::error::{GeoUpdateError, WriteError};
 use crate::route::RouteCounters;
 
 const GEO_TIMEOUT: Duration = Duration::from_secs(90);
+/// Rounds of fetching geo files and parsing again; each round can only add the files a rule-set needs.
+pub(super) const GEO_REPARSES: usize = 2;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct GeoUrls {

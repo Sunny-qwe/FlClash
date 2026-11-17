@@ -1,8 +1,8 @@
+use concord_config::mitm::text::canonical_header;
 use http::header::{HeaderMap, HeaderName, HeaderValue};
 use http::{StatusCode, Version};
 
 use crate::script::HeaderList;
-use crate::text::canonical_header;
 
 pub(crate) fn to_list(map: &HeaderMap) -> HeaderList {
     let mut list = HeaderList::new();

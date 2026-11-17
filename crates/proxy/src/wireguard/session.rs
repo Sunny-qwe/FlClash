@@ -6,8 +6,8 @@ use std::sync::Arc;
 use concord_common::{HostResolver, Initiator};
 
 use super::Shared;
-use super::stack::{SessionTunnel, StackSession};
 use super::tunnel::Tunnel;
+use crate::stack::{SessionTunnel, StackSession};
 
 pub(super) struct WgUdp {
     tunnel: Arc<Tunnel>,
@@ -35,10 +35,6 @@ impl SessionTunnel for WgUdp {
                 )
                 .await
         }
-    }
-
-    fn usable(&self) -> bool {
-        true
     }
 }
 

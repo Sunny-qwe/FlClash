@@ -7,7 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use concord_common::BoxStream;
 use concord_common::sync::lock;
-use concord_config::mitm::ScriptDef;
+use concord_config::mitm::{IssueKind, LineError, ScriptDef};
 use sha2::{Digest, Sha256};
 
 pub use concord_config::mitm::{
@@ -16,7 +16,6 @@ pub use concord_config::mitm::{
 
 use crate::cron::CronSchedule;
 use crate::heads::HeadConditions;
-use crate::issue::{IssueKind, LineError};
 use crate::pattern::Pattern;
 use crate::rules::read_resource;
 use crate::view::{LineView, ScriptView, ScriptViewKind};

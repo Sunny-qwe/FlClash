@@ -1,10 +1,9 @@
+use concord_config::mitm::text::quote;
+use concord_config::mitm::{IssueKind, LineError};
 use jaq_core::compile;
 use jaq_core::load::{Arena, File, Loader, lex, parse};
 use jaq_core::{Compiler, Ctx, Vars, data, unwrap_valr};
 use jaq_json::{Val, read};
-
-use crate::issue::{IssueKind, LineError};
-use crate::text::quote;
 
 type Filter = jaq_core::Filter<data::JustLut<Val>>;
 

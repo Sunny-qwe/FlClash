@@ -13,13 +13,14 @@ use crate::client::{
 };
 use crate::dialer::{Connector, Cx};
 use crate::doh::DohTarget;
-use crate::session::SessionSlot;
+use crate::shared_dial::SharedDial;
 
 const ALPN: &str = "h3";
 const MAX_BODY: usize = 65_535;
 
 type Requests = h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>;
 
+#[derive(Clone)]
 struct Session {
     _endpoint: quinn::Endpoint,
     conn: quinn::Connection,
@@ -31,7 +32,7 @@ pub(crate) struct Doh3Client {
     target: DohTarget,
     connector: Arc<Connector>,
     config: quinn::ClientConfig,
-    session: SessionSlot<Session>,
+    session: SharedDial<Session>,
 }
 
 impl Doh3Client {
@@ -56,27 +57,8 @@ impl Doh3Client {
             target,
             connector,
             config: quinn::ClientConfig::new(Arc::new(crypto)),
-            session: SessionSlot::new(),
+            session: SharedDial::new(),
         })
-    }
-
-    async fn requests(&self, cx: Cx) -> io::Result<(Requests, bool)> {
-        self.session
-            .get(
-                |slot| {
-                    let session = slot.as_ref()?;
-                    session
-                        .conn
-                        .close_reason()
-                        .is_none()
-                        .then(|| session.requests.clone())
-                },
-                async {
-                    let session = self.dial(cx).await?;
-                    Ok((session.requests.clone(), Some(session)))
-                },
-            )
-            .await
     }
 
     async fn dial(&self, cx: Cx) -> io::Result<Session> {
@@ -145,10 +127,16 @@ impl Client for Doh3Client {
         with_timeout(async {
             let mut reused = true;
             loop {
-                let (requests, cached) = self.requests(cx).await?;
-                reused &= cached;
+                let session = self
+                    .session
+                    .get(
+                        |session| session.conn.close_reason().is_none(),
+                        self.dial(cx),
+                    )
+                    .await?;
+                reused &= session.reused;
                 let answer = self
-                    .round_trip(requests, &bytes)
+                    .round_trip(session.value.requests, &bytes)
                     .await
                     .and_then(|resp| checked(&query, resp));
                 match answer {
