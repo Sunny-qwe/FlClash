@@ -102,11 +102,10 @@ impl Engine {
             disable_keep_alive: general.disable_keep_alive,
             geo_auto_update: general.geo_auto_update,
             geo_update_interval: general.geo_update_interval,
-            geox_url: vec![
-                ("mmdb", urls.mmdb.clone()),
-                ("asn", urls.asn.clone()),
-                ("geosite", urls.geosite.clone()),
-            ],
+            geox_url: urls
+                .entries()
+                .map(|(key, url)| (key, url.to_string()))
+                .to_vec(),
             tun: TunView {
                 enable: applied.tun.enable,
                 device: applied.tun.device.clone(),

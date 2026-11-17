@@ -40,6 +40,15 @@ impl GeoUrls {
         }
     }
 
+    /// Each URL under its `geox-url` key.
+    pub fn entries(&self) -> [(&'static str, &str); 3] {
+        [
+            ("mmdb", &self.mmdb),
+            ("asn", &self.asn),
+            ("geosite", &self.geosite),
+        ]
+    }
+
     pub fn url(&self, file: GeoFile) -> &str {
         match file {
             GeoFile::Mmdb => &self.mmdb,
@@ -71,7 +80,7 @@ pub(crate) fn geo_file_of(kind: &str) -> Option<GeoFile> {
     }
 }
 
-pub(crate) fn geo_kind_of(file: GeoFile) -> &'static str {
+fn geo_kind_of(file: GeoFile) -> &'static str {
     match file {
         GeoFile::Mmdb => "MMDB",
         GeoFile::Asn => "ASN",
@@ -114,6 +123,22 @@ pub(crate) struct GeoUpdater {
     events: Arc<dyn EventSink>,
     route: Arc<RouteCounters>,
     auto: Mutex<Option<(CancellationToken, u32)>>,
+    /// Ends every update and the schedule; shutdown cancels it and init renews it, so
+    /// none of them holds up shutdown or outlives the engine's task tracker.
+    stop: Mutex<CancellationToken>,
+}
+
+/// One resource held for one update. Dropping it, when the update finishes or is
+/// cancelled, gives the resource back.
+pub(crate) struct Claim {
+    updater: Arc<GeoUpdater>,
+    file: GeoFile,
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        lock(&self.updater.claims).remove(geo_kind_of(self.file));
+    }
 }
 
 impl GeoUpdater {
@@ -130,6 +155,7 @@ impl GeoUpdater {
             events,
             route,
             auto: Mutex::new(None),
+            stop: Mutex::new(CancellationToken::new()),
         })
     }
 
@@ -140,15 +166,11 @@ impl GeoUpdater {
         }
     }
 
-    pub fn claim(&self, kind: &'static str) -> bool {
-        lock(&self.claims).insert(kind)
-    }
-
-    fn release(&self, kind: &str) {
-        {
-            let mut claims = lock(&self.claims);
-            claims.remove(kind);
-        }
+    pub fn claim(self: &Arc<Self>, file: GeoFile) -> Option<Claim> {
+        lock(&self.claims).insert(geo_kind_of(file)).then(|| Claim {
+            updater: self.clone(),
+            file,
+        })
     }
 
     fn report(&self, file: GeoFile, phase: ResourcePhase) {
@@ -276,12 +298,28 @@ impl GeoUpdater {
         Ok(home.write_atomic(self.store.path(file), bytes)?)
     }
 
-    /// The caller holds the claim; this gives it back.
-    pub async fn update(&self, file: GeoFile, fetcher: &dyn Fetcher) {
+    pub fn spawn_update(
+        self: &Arc<Self>,
+        claim: Claim,
+        fetcher: Arc<dyn Fetcher>,
+        tasks: &TaskTracker,
+    ) {
+        let stop = lock(&self.stop).clone();
+        let updater = self.clone();
+        tasks.spawn(async move {
+            tokio::select! {
+                () = stop.cancelled() => {}
+                () = updater.update(claim, &*fetcher) => {}
+            }
+        });
+    }
+
+    async fn update(&self, claim: Claim, fetcher: &dyn Fetcher) {
+        let file = claim.file;
         let kind = geo_kind_of(file);
         let fetch = Fetch::start(|phase| self.report(file, phase));
         let outcome = self.update_inner(file, fetcher).await;
-        self.release(kind);
+        drop(claim);
         match &outcome {
             Ok(Refresh::Updated) => self.route.moved(),
             Ok(Refresh::Unchanged) => {}
@@ -322,7 +360,13 @@ impl GeoUpdater {
         Ok(Refresh::Updated)
     }
 
-    pub fn sync_auto(self: &Arc<Self>, enabled: bool, hours: u32, fetcher: Arc<dyn Fetcher>) {
+    pub fn sync_auto(
+        self: &Arc<Self>,
+        enabled: bool,
+        hours: u32,
+        fetcher: Arc<dyn Fetcher>,
+        tasks: &TaskTracker,
+    ) {
         let mut auto = lock(&self.auto);
         if enabled && auto.as_ref().is_some_and(|(_, current)| *current == hours) {
             return;
@@ -337,10 +381,10 @@ impl GeoUpdater {
             tracing::info!("[GEO] Invalid update interval: {hours}");
             return;
         }
-        let stop = CancellationToken::new();
+        let stop = lock(&self.stop).child_token();
         *auto = Some((stop.clone(), hours));
         let updater = self.clone();
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             tokio::select! {
                 () = stop.cancelled() => {}
                 () = updater.auto_loop(hours, fetcher) => {}
@@ -358,17 +402,19 @@ impl GeoUpdater {
             })
     }
 
-    async fn update_all(&self, fetcher: &dyn Fetcher) {
+    async fn update_all(self: &Arc<Self>, fetcher: &dyn Fetcher) {
         tracing::info!("[GEO] Updating GEO database");
         for file in [GeoFile::Mmdb, GeoFile::Asn, GeoFile::GeoSite] {
-            if self.store.in_use(file) && self.claim(geo_kind_of(file)) {
-                self.update(file, fetcher).await;
+            if self.store.in_use(file)
+                && let Some(claim) = self.claim(file)
+            {
+                self.update(claim, fetcher).await;
             }
         }
     }
 
     /// mihomo gives up for good when the first update fails; this keeps its schedule.
-    async fn auto_loop(&self, hours: u32, fetcher: Arc<dyn Fetcher>) {
+    async fn auto_loop(self: &Arc<Self>, hours: u32, fetcher: Arc<dyn Fetcher>) {
         let interval = Duration::from_secs(u64::from(hours) * 3600);
         let Some(last) = self.last_update() else {
             tracing::info!("[GEO] Get GEO database update time error");
@@ -384,9 +430,16 @@ impl GeoUpdater {
         }
     }
 
-    pub fn stop_auto(&self) {
-        if let Some((stop, _)) = lock(&self.auto).take() {
-            stop.cancel();
+    /// Ends the schedule and every update in flight; each gives its claim back.
+    pub fn close(&self) {
+        lock(&self.stop).cancel();
+        lock(&self.auto).take();
+    }
+
+    pub fn reopen(&self) {
+        let mut stop = lock(&self.stop);
+        if stop.is_cancelled() {
+            *stop = CancellationToken::new();
         }
     }
 }
@@ -394,8 +447,51 @@ impl GeoUpdater {
 #[cfg(test)]
 mod tests {
     use concord_common::NullSink;
+    use concord_group::{FetchError, FetchResponse};
 
     use super::*;
+
+    struct Unanswered;
+
+    #[async_trait::async_trait]
+    impl Fetcher for Unanswered {
+        async fn get(&self, _request: FetchRequest) -> Result<FetchResponse, FetchError> {
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn close_ends_the_schedule_and_an_update_in_flight_and_gives_the_claim_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+        let geo = GeoUpdater::new(
+            Arc::new(GeoStore::new(dir.path())),
+            sink.clone(),
+            Arc::new(RouteCounters::new(sink)),
+        );
+        std::fs::write(geo.store.path(GeoFile::Mmdb), b"fresh").unwrap();
+        let tasks = TaskTracker::new();
+        let fetcher: Arc<dyn Fetcher> = Arc::new(Unanswered);
+        geo.sync_auto(true, 1, fetcher.clone(), &tasks);
+        let claim = geo.claim(GeoFile::Asn).unwrap();
+        geo.spawn_update(claim, fetcher.clone(), &tasks);
+        tokio::task::yield_now().await;
+        assert_eq!(tasks.len(), 2);
+
+        geo.close();
+        tasks.close();
+        tokio::time::timeout(Duration::from_secs(5), tasks.wait())
+            .await
+            .expect("the schedule or the update outlived close");
+        assert!(geo.claim(GeoFile::Asn).is_some());
+
+        tasks.reopen();
+        geo.reopen();
+        geo.sync_auto(true, 1, fetcher, &tasks);
+        tokio::task::yield_now().await;
+        assert_eq!(tasks.len(), 1, "the schedule runs again after reopen");
+        geo.close();
+    }
 
     #[test]
     fn a_panicked_holder_leaves_the_home_and_the_claims_usable() {
@@ -415,9 +511,9 @@ mod tests {
         );
 
         concord_test_support::poison(&geo.claims);
-        assert!(geo.claim("geoip"));
-        assert!(!geo.claim("geoip"));
-        geo.release("geoip");
-        assert!(geo.claim("geoip"));
+        let held = geo.claim(GeoFile::Mmdb).unwrap();
+        assert!(geo.claim(GeoFile::Mmdb).is_none());
+        drop(held);
+        assert!(geo.claim(GeoFile::Mmdb).is_some());
     }
 }

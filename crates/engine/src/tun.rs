@@ -1,6 +1,4 @@
 use std::net::IpAddr;
-#[cfg(unix)]
-use std::os::fd::OwnedFd;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -179,7 +177,9 @@ pub(crate) fn options_of(config: &TunConfig, inet4: Option<Prefix>, ipv6: bool) 
 
 /// `tun.Start`: how to run the descriptor the Android service hands over.
 #[cfg(unix)]
-pub(crate) fn vpn_options(tun: &InheritedTun) -> Result<(TunOptions, Congestion), String> {
+pub(crate) fn vpn_options(
+    tun: &InheritedTun,
+) -> Result<(TunOptions, Congestion), InheritedTunError> {
     let mut options = TunOptions {
         device: Some(concord_common::PRODUCT_NAME.to_owned()),
         mtu: tun.mtu.filter(|mtu| *mtu != 0).unwrap_or(DEFAULT_MTU),
@@ -190,8 +190,8 @@ pub(crate) fn vpn_options(tun: &InheritedTun) -> Result<(TunOptions, Congestion)
         if address.is_empty() {
             continue;
         }
-        let prefix =
-            Prefix::parse(address).ok_or_else(|| format!("invalid tun address {address}"))?;
+        let prefix = Prefix::parse(address)
+            .ok_or_else(|| InheritedTunError::Address(address.to_string()))?;
         if prefix.addr().is_ipv4() {
             options.inet4_address.push(prefix);
         } else {
@@ -204,7 +204,7 @@ pub(crate) fn vpn_options(tun: &InheritedTun) -> Result<(TunOptions, Congestion)
         }
         let ip: std::net::IpAddr = server
             .parse()
-            .map_err(|_| format!("invalid tun dns {server}"))?;
+            .map_err(|_| InheritedTunError::Dns(server.to_string()))?;
         options
             .dns_hijack
             .push(std::net::SocketAddr::new(ip, 53).to_string());
@@ -273,8 +273,24 @@ pub(crate) async fn stop_runner(runner: TunRunner) {
 pub enum TunStartError {
     #[error("TUN is unavailable: {0}")]
     Unavailable(String),
+    #[cfg(unix)]
+    #[error("the TUN device did not start: {0}")]
+    Request(#[from] InheritedTunError),
+    #[cfg(unix)]
+    #[error("the TUN device did not start: {0}")]
+    Start(#[from] StartError),
     #[error("applying the TUN change failed")]
     Failed(#[from] Failure),
+}
+
+/// What in an inherited device's settings cannot be used.
+#[cfg(unix)]
+#[derive(Debug, thiserror::Error)]
+pub enum InheritedTunError {
+    #[error("invalid tun address {0}")]
+    Address(String),
+    #[error("invalid tun dns {0}")]
+    Dns(String),
 }
 
 /// A device the host opened and hands over, with how to run it.
@@ -327,22 +343,6 @@ impl Engine {
             ..UpdateRequest::default()
         })
         .await
-    }
-
-    /// Runs TUN on a descriptor the host opened. The descriptor is closed if the start fails.
-    #[cfg(unix)]
-    pub async fn start_inherited_tun(
-        &self,
-        fd: OwnedFd,
-        tun: InheritedTun,
-    ) -> Result<(), TunStartError> {
-        let started = self.start_vpn_tun(fd, &tun).await;
-        if !started {
-            return Err(TunStartError::Unavailable(
-                "the TUN device did not start".to_string(),
-            ));
-        }
-        Ok(())
     }
 }
 

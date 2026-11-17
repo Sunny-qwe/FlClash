@@ -10,6 +10,10 @@ fn tun_error(error: TunStartError) -> ApiError {
     match error {
         TunStartError::Unavailable(message) => ApiError::unavailable("tun", message),
         TunStartError::Failed(failure) => core_error(failure),
+        #[cfg(unix)]
+        TunStartError::Request(_) | TunStartError::Start(_) => {
+            ApiError::unavailable("tun", error.to_string())
+        }
     }
 }
 

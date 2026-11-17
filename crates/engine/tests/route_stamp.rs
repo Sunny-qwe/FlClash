@@ -133,7 +133,7 @@ async fn an_apply_and_a_listener_start_advance_the_epoch() {
     assert_eq!(reapplied.epoch, applied.epoch + 1);
     assert_eq!(reapplied.version, applied.version + 1);
 
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     let started = rig.stamp();
     assert_eq!(started.epoch, reapplied.epoch + 1);
     assert_eq!(started.version, reapplied.version + 1);
@@ -147,12 +147,12 @@ async fn a_start_and_a_stop_report_the_listeners_with_the_epoch_they_move() {
     let applied = rig.engine.watch_route(true);
     assert!(!applied.running);
 
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     let started = rig.engine.route_view();
     assert!(started.running);
     assert_eq!(started.stamp.epoch, applied.stamp.epoch + 1);
 
-    rig.engine.stop_listeners().await.unwrap();
+    rig.engine.stop_listeners().await;
     let stopped = rig.engine.route_view();
     assert!(!stopped.running);
     assert_eq!(stopped.stamp.epoch, started.stamp.epoch + 1);

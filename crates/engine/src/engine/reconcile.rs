@@ -7,7 +7,6 @@ use concord_inbound::ListenSpec;
 use super::Engine;
 use crate::apply::{Applied, listen_spec};
 use crate::dns_server::DnsServer;
-use crate::error::Failure;
 use crate::faults::{Service, ServiceFault};
 
 impl Engine {
@@ -60,7 +59,7 @@ impl Engine {
         }
     }
 
-    pub async fn start_listeners(&self) -> Result<(), Failure> {
+    pub async fn start_listeners(&self) {
         let state = self.state.lock().await;
         self.set_running(true);
         if let Some(applied) = state.as_ref() {
@@ -68,10 +67,9 @@ impl Engine {
         }
         self.reset_resolver_connections();
         self.route.reset(self.is_running());
-        Ok(())
     }
 
-    pub async fn stop_listeners(&self) -> Result<(), Failure> {
+    pub async fn stop_listeners(&self) {
         let _state = self.state.lock().await;
         self.set_running(false);
         self.listeners.stop_all().await;
@@ -83,6 +81,5 @@ impl Engine {
         }
         self.reset_resolver_connections();
         self.route.reset(self.is_running());
-        Ok(())
     }
 }

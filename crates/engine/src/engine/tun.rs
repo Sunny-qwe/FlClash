@@ -10,7 +10,7 @@ use super::Engine;
 use crate::apply::Applied;
 use crate::faults::{Service, ServiceFault};
 #[cfg(unix)]
-use crate::tun::{InheritedTun, vpn_options};
+use crate::tun::{InheritedTun, TunStartError, vpn_options};
 use crate::tun::{KeepOffDevice, congestion_of, options_of, start_runner, stop_runner};
 
 impl Engine {
@@ -70,51 +70,37 @@ impl Engine {
         }
     }
 
-    /// `handleStartTun`. Takes the descriptor: it is closed on every failing path.
+    /// `handleStartTun`: runs TUN on a descriptor the host opened. Takes the
+    /// descriptor: it is closed on every failing path.
     #[cfg(unix)]
-    pub(crate) async fn start_vpn_tun(&self, fd: OwnedFd, tun: &InheritedTun) -> bool {
+    pub async fn start_inherited_tun(
+        &self,
+        fd: OwnedFd,
+        tun: InheritedTun,
+    ) -> Result<(), TunStartError> {
         self.shared.sockets.protect_held().await;
-        let started = {
+        {
             let mut slot = self.tun.lock().await;
             self.close_tun(&mut slot).await;
-            match vpn_options(tun) {
-                Ok((options, congestion)) => {
-                    match start_runner(
-                        &self.shared.tunnel,
-                        &self.shared.sockets,
-                        &options,
-                        DeviceSource::Adopt(fd),
-                        congestion,
-                        None,
-                    )
-                    .await
-                    {
-                        Ok(runner) => {
-                            *slot = Some(runner);
-                            true
-                        }
-                        Err(err) => {
-                            tracing::error!("TUN: {err}");
-                            false
-                        }
-                    }
-                }
-                Err(err) => {
-                    tracing::error!("TUN: {err}");
-                    false
-                }
-            }
-        };
-        if !started {
-            return false;
+            let (options, congestion) = vpn_options(&tun)?;
+            let runner = start_runner(
+                &self.shared.tunnel,
+                &self.shared.sockets,
+                &options,
+                DeviceSource::Adopt(fd),
+                congestion,
+                None,
+            )
+            .await?;
+            *slot = Some(runner);
         }
         if self.running.load(Ordering::SeqCst) {
             self.reset_resolver_connections();
             self.route.reset(self.is_running());
-        } else if let Err(err) = self.start_listeners().await {
-            tracing::error!("start listeners: {err:?}");
+        } else {
+            self.start_listeners().await;
         }
-        true
+        Ok(())
     }
 
     /// `StopTun`.
@@ -123,10 +109,8 @@ impl Engine {
             let mut slot = self.tun.lock().await;
             self.close_tun(&mut slot).await;
         }
-        if self.running.load(Ordering::SeqCst)
-            && let Err(err) = self.stop_listeners().await
-        {
-            tracing::error!("stop listeners: {err:?}");
+        if self.running.load(Ordering::SeqCst) {
+            self.stop_listeners().await;
         }
     }
 }

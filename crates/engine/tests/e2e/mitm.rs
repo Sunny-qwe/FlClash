@@ -56,7 +56,7 @@ async fn mitm_rewrites_plain_http_on_the_way_through() {
         )
     );
     rig.apply(&config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
 
     let body = http_through(rig.mixed, server, "mitm.test", "/kept").await;
     assert!(body.ends_with("from the server"), "{body}");
@@ -98,7 +98,7 @@ async fn an_intercepted_request_still_dialing_when_every_connection_closes_gets_
         server.port()
     );
     rig.apply(&config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
 
     let mixed = rig.mixed;
     let answer = tokio::spawn(async move {
@@ -198,7 +198,7 @@ async fn mitm_decrypts_a_listed_host_under_its_own_certificate() {
         )
     );
     rig.apply(&config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
 
     let mut roots = RootCertStore::empty();
     for certificate in CertificateDer::pem_slice_iter(certificate_pem.as_bytes()) {
@@ -462,7 +462,7 @@ async fn decrypting_rig(rules: &str, lines: &str, capture: bool) -> (Rig, Socket
     )
     .await
     .unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     (rig, server, info["pem"].as_str().unwrap().to_string())
 }
 
@@ -669,7 +669,7 @@ async fn mitm_drops_quic_to_a_listed_host_by_name_or_fake_ip() {
         info["fingerprint"].as_str().unwrap()
     );
     rig.apply(&config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     let listed_fake = fake_ip_of(dns, "faked.test").await;
     let unlisted_fake = fake_ip_of(dns, "plain.test").await;
     assert_eq!(listed_fake.octets()[..2], [198, 18], "{listed_fake}");
@@ -744,7 +744,7 @@ async fn mitm_tasks_follow_the_core_and_reach_the_network() {
         1,
         "an event script ran while stopped"
     );
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     assert!(
         eventually(|| hits.load(Ordering::SeqCst) == 2).await,
         "engine-started"
@@ -754,7 +754,7 @@ async fn mitm_tasks_follow_the_core_and_reach_the_network() {
         eventually(|| hits.load(Ordering::SeqCst) == 3).await,
         "network-changed"
     );
-    rig.engine.stop_listeners().await.unwrap();
+    rig.engine.stop_listeners().await;
     rig.engine.network_changed();
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(

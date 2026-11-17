@@ -365,7 +365,7 @@ async fn a_flow_goes_direct_and_shows_in_the_connection_table() {
     let echo = tcp_echo().await;
     let rig = Rig::new();
     rig.apply("rules:\n  - MATCH,DIRECT\n").await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
 
     let mut stream = socks_connect(rig.mixed, echo).await.unwrap();
     round_trip(&mut stream).await;
@@ -412,7 +412,7 @@ async fn a_flow_still_dialing_when_every_connection_closes_is_closed_as_well() {
          rules:\n  - MATCH,up\n"
     );
     rig.apply(&config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
 
     let mut stream = socks_connect(rig.mixed, echo).await.unwrap();
     timeout(PATIENCE, dialing)
@@ -442,7 +442,7 @@ async fn a_lazy_header_waits_for_a_slow_client_and_still_lets_a_server_speak_fir
          rules:\n  - MATCH,v\n"
     );
     rig.apply(&config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
 
     let mut slow = socks_connect(rig.mixed, echo).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -475,7 +475,7 @@ async fn rules_pick_a_group_and_a_selection_moves_it() {
         echo.port()
     );
     rig.apply(&config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
 
     assert!(
         rig.engine
@@ -540,7 +540,7 @@ async fn a_rejected_config_falls_back_to_direct_and_says_so() {
         "{}",
         failure.message
     );
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     assert!(
         socks_connect(rig.mixed, echo).await.is_err(),
         "the default config opens no port"
@@ -637,7 +637,7 @@ async fn providers_load_over_the_tunnel_and_update_on_request() {
          rules:\n  - RULE-SET,local,G\n  - MATCH,DIRECT\n"
     );
     rig.apply(&config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
 
     assert!(
         eventually(|| {
@@ -726,7 +726,7 @@ async fn a_rule_provider_that_failed_its_first_fetch_is_retried_before_the_inter
          rules:\n  - RULE-SET,local,REJECT\n  - MATCH,DIRECT\n"
     );
     rig.apply(&config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     assert!(
         wait_loaded(&rig, "local").await,
         "the provider was not retried"
@@ -749,7 +749,7 @@ async fn a_proxy_provider_without_an_interval_is_not_retried() {
          rules:\n  - MATCH,G\n"
     );
     rig.apply(&config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     assert!(!wait_loaded(&rig, "sub").await, "the provider was retried");
     assert_eq!(hits.load(Ordering::SeqCst), 1);
     rig.engine.shutdown().await;
@@ -765,7 +765,7 @@ async fn a_side_load_replaces_a_rule_set_without_a_reapply() {
          rules:\n  - RULE-SET,local,REJECT\n  - MATCH,DIRECT\n"
     );
     rig.apply(&config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     assert!(eventually(|| rig.events.loaded().iter().any(|name| name == "local")).await);
 
     let mut stream = socks_connect(rig.mixed, echo).await.unwrap();
@@ -788,7 +788,7 @@ async fn a_file_rule_provider_reloads_when_the_file_is_rewritten() {
     let config = "rule-providers:\n  local:\n    type: file\n    behavior: ipcidr\n    format: text\n    path: r.txt\n\
          rules:\n  - RULE-SET,local,REJECT\n  - MATCH,DIRECT\n";
     rig.apply(config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     assert!(eventually(|| rig.events.loaded().iter().any(|name| name == "local")).await);
 
     let mut stream = socks_connect(rig.mixed, echo).await.unwrap();
@@ -821,7 +821,7 @@ async fn a_file_rule_provider_serves_its_payload_until_the_file_loads() {
         echo.ip()
     );
     rig.apply(&config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     assert!(refused(rig.mixed, echo).await);
 
     std::fs::write(rig.home.path().join("r.txt"), "10.0.0.0/8\n").unwrap();
@@ -894,7 +894,7 @@ async fn a_reapplied_rule_set_keeps_matching_while_it_loads_again() {
         )
     };
     rig.apply(&config("r.txt")).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     assert!(eventually(|| rig.events.loaded().iter().any(|name| name == "local")).await);
     assert!(refused(rig.mixed, echo).await);
 
@@ -994,7 +994,7 @@ async fn udp_through_socks_reaches_its_target_and_back() {
     };
     let rig = Rig::new();
     rig.apply("rules:\n  - MATCH,DIRECT\n").await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
 
     let mut control = TcpStream::connect((Ipv4Addr::LOCALHOST, rig.mixed))
         .await
@@ -1043,7 +1043,7 @@ async fn a_dns_node_answers_from_the_core_over_tcp_and_udp() {
     )
     .await
     .unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     assert_eq!(rig.kind("dns-out"), "Dns");
     let resolver = SocketAddr::from(([192, 0, 2, 1], 53));
 
@@ -1099,7 +1099,7 @@ async fn a_live_update_changes_the_mode_and_the_route_stamp() {
     let echo = tcp_echo().await;
     let rig = Rig::new();
     rig.apply("rules:\n  - MATCH,REJECT\n").await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     assert!(refused(rig.mixed, echo).await);
 
     let before = rig.engine.watch_route(true).stamp;
@@ -1141,7 +1141,7 @@ async fn the_lan_keys_bind_and_filter_the_listeners() {
     )
     .await
     .unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     assert!(
         TcpStream::connect((Ipv6Addr::LOCALHOST, rig.mixed))
             .await
@@ -1210,19 +1210,19 @@ async fn listeners_follow_the_start_and_stop_calls() {
             .is_err(),
         "a config alone opens no port"
     );
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     assert!(
         TcpStream::connect((Ipv4Addr::LOCALHOST, rig.mixed))
             .await
             .is_ok()
     );
-    rig.engine.stop_listeners().await.unwrap();
+    rig.engine.stop_listeners().await;
     assert!(
         TcpStream::connect((Ipv4Addr::LOCALHOST, rig.mixed))
             .await
             .is_err()
     );
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     assert!(
         TcpStream::connect((Ipv4Addr::LOCALHOST, rig.mixed))
             .await
@@ -1295,7 +1295,7 @@ async fn a_core_that_shut_down_can_start_over() {
     let echo = tcp_echo().await;
     let rig = Rig::new();
     rig.apply("rules:\n  - MATCH,DIRECT\n").await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     rig.engine.shutdown().await;
     assert!(!rig.engine.is_initialized());
     assert!(
@@ -1307,7 +1307,7 @@ async fn a_core_that_shut_down_can_start_over() {
         .init(rig.home.path().to_str().unwrap(), 0)
         .unwrap();
     rig.apply("rules:\n  - MATCH,DIRECT\n").await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     let mut stream = socks_connect(rig.mixed, echo).await.unwrap();
     round_trip(&mut stream).await;
     rig.engine.shutdown().await;
@@ -1326,7 +1326,7 @@ async fn a_pass_in_a_group_moves_on_to_the_next_rule() {
         echo.port()
     );
     rig.apply(&config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     let mut stream = socks_connect(rig.mixed, echo).await.unwrap();
     round_trip(&mut stream).await;
     assert_eq!(lock(&seen).len(), 1);
@@ -1352,7 +1352,7 @@ async fn udp_skips_a_rule_whose_outbound_has_no_udp() {
         free_port()
     );
     rig.apply(&config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
 
     let mut control = TcpStream::connect((Ipv4Addr::LOCALHOST, rig.mixed))
         .await
@@ -1396,7 +1396,7 @@ async fn direct_refuses_a_loop_back_into_the_core() {
     };
     let rig = Rig::new();
     rig.apply("rules:\n  - MATCH,DIRECT\n").await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     let own = SocketAddr::from((Ipv4Addr::LOCALHOST, rig.mixed));
     let mut stream = socks_connect(rig.mixed, own).await.unwrap();
 
@@ -1437,7 +1437,7 @@ async fn a_fake_ip_flow_is_routed_by_the_name_behind_it() {
          rules:\n  - DOMAIN,faked.test,up\n  - MATCH,REJECT\n"
     );
     rig.apply(&config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
 
     let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     socket
@@ -1510,7 +1510,7 @@ async fn a_sniffed_name_is_what_rules_see() {
         server.port()
     );
     rig.apply(&config).await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
 
     let mut stream = socks_connect(rig.mixed, server).await.unwrap();
     stream
@@ -1553,7 +1553,7 @@ async fn many_flows_leave_nothing_behind() {
     });
     let rig = Rig::new();
     rig.apply("rules:\n  - MATCH,DIRECT\n").await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
 
     // macOS caps a listen backlog at kern.ipc.somaxconn, 128 by default; 200 simultaneous
     // connects can overflow the mixed listener's accept queue before it drains it.
@@ -1680,7 +1680,7 @@ async fn mitm_off_leaves_flows_alone_and_capabilities_say_whether_it_is_built() 
     let echo = tcp_echo().await;
     let rig = Rig::new();
     rig.apply("rules:\n  - MATCH,DIRECT\n").await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     let mut stream = socks_connect(rig.mixed, echo).await.unwrap();
     round_trip(&mut stream).await;
     assert_eq!(
@@ -1824,13 +1824,13 @@ async fn udp_after_a_switch(switch: Switch) {
     let (proxy, relayed) = upstream_socks_udp().await;
     let mut rig = Rig::new();
     rig.apply("rules:\n  - MATCH,DIRECT\n").await.unwrap();
-    rig.engine.start_listeners().await.unwrap();
+    rig.engine.start_listeners().await;
     let before = associate(rig.mixed).await;
     assert!(before.echoes(echo).await);
     assert_eq!(relayed.load(Ordering::SeqCst), 0);
 
     if switch.stop_around {
-        rig.engine.stop_listeners().await.unwrap();
+        rig.engine.stop_listeners().await;
     }
     if switch.move_port {
         rig.mixed = free_port();
@@ -1844,7 +1844,7 @@ async fn udp_after_a_switch(switch: Switch) {
         .await
         .unwrap();
     if switch.stop_around {
-        rig.engine.start_listeners().await.unwrap();
+        rig.engine.start_listeners().await;
     }
 
     let fresh = associate(rig.mixed).await;

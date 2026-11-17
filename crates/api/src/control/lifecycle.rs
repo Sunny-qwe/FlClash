@@ -127,14 +127,14 @@ impl Control {
 
     pub(super) async fn engine_start(&self, _params: Empty) -> Result<Empty, ApiError> {
         self.require_initialized()?;
-        self.engine.start_listeners().await.map_err(core_error)?;
+        self.engine.start_listeners().await;
         self.refresh();
         Ok(Empty {})
     }
 
     pub(super) async fn engine_stop(&self, _params: Empty) -> Result<Empty, ApiError> {
         self.require_initialized()?;
-        self.engine.stop_listeners().await.map_err(core_error)?;
+        self.engine.stop_listeners().await;
         self.refresh();
         Ok(Empty {})
     }

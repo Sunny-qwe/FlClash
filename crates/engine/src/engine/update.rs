@@ -123,6 +123,7 @@ impl Engine {
             general.geo_auto_update,
             general.geo_update_interval,
             self.shared.fetcher.clone(),
+            &self.tasks,
         );
         if reset {
             self.route.reset(self.is_running());
@@ -207,12 +208,8 @@ impl Settled {
 }
 
 fn geox_url_of(urls: &GeoUrls) -> BTreeMap<String, String> {
-    [
-        ("mmdb", urls.mmdb.clone()),
-        ("asn", urls.asn.clone()),
-        ("geosite", urls.geosite.clone()),
-    ]
-    .into_iter()
-    .map(|(kind, url)| (kind.to_string(), url))
-    .collect()
+    urls.entries()
+        .into_iter()
+        .map(|(key, url)| (key.to_string(), url.to_string()))
+        .collect()
 }

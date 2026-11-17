@@ -30,9 +30,9 @@ pub use error::Failure;
 pub use faults::{Service, ServiceFault};
 pub use probe::RouteHit;
 pub use route::RouteCounters;
-#[cfg(unix)]
-pub use tun::InheritedTun;
 pub use tun::TunStartError;
+#[cfg(unix)]
+pub use tun::{InheritedTun, InheritedTunError};
 pub use views::*;
 
 pub use concord_tunnel::ExplainFlow;

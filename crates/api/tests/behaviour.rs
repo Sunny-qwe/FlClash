@@ -1359,6 +1359,36 @@ async fn a_service_with_a_capability_it_lacks_answers_unsupported() {
     rig.finish().await;
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_inherited_tun_that_cannot_start_tells_the_host_why() {
+    let rig = Rig::new().await;
+    let fd = std::fs::File::open("/dev/null").unwrap().into();
+    let handle = rig.control.adopted_fds().adopt(fd);
+    let error = rig
+        .control
+        .tun_start(TunStartParams {
+            source: TunSource::Inherited { handle },
+            stack: None,
+            mtu: None,
+            address: vec!["nonsense".to_string()],
+            dns: vec![],
+            congestion_controller: None,
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error.data, ErrorData::Unavailable { ref target } if target.as_deref() == Some("tun"))
+    );
+    assert!(
+        error.message.contains("invalid tun address nonsense"),
+        "{}",
+        error.message
+    );
+    assert!(rig.control.adopted_fds().is_empty());
+    rig.finish().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mitm_validate_answers_each_line_with_its_view_or_its_issue() {
     let rig = Rig::new().await;

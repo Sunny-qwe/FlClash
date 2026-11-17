@@ -121,7 +121,8 @@ pub struct Engine {
     mitm: MitmService,
     handle: Handle,
     prober: Prober,
-    /// What a config's `stop` ends; shutdown waits for it, so nothing outlives the engine.
+    /// Every background task the engine starts; shutdown ends them and waits, so nothing
+    /// outlives the engine.
     tasks: TaskTracker,
     /// The last change of state a host keeps. Taken after `state`; held only to
     /// set a value and publish its change, never across a probe or a load.
@@ -231,6 +232,7 @@ impl Engine {
         self.sdk_version.store(sdk_version, Ordering::SeqCst);
         let home = Arc::new(HomeDir::new(home_dir));
         self.shared.geo.set_home(home.clone());
+        self.shared.geo.reopen();
         self.shared.geo.store.set_dir(home.root());
         #[cfg(unix)]
         home.reclaim();
@@ -410,6 +412,7 @@ impl Engine {
             applied.general.geo_auto_update,
             applied.general.geo_update_interval,
             self.shared.fetcher.clone(),
+            &self.tasks,
         );
         *state = Some(applied);
         drop(state);
@@ -484,7 +487,7 @@ impl Engine {
     pub fn update_system_dns(self: &Arc<Self>, value: String) {
         let seq = self.dns_update_seq.fetch_add(1, Ordering::SeqCst) + 1;
         let engine = self.clone();
-        self.handle.spawn(async move {
+        let update = async move {
             if engine.dns_update_seq.load(Ordering::SeqCst) != seq {
                 return;
             }
@@ -507,7 +510,8 @@ impl Engine {
             if let Some(runtime) = engine.runtime() {
                 runtime.dns.set_system_servers(servers);
             }
-        });
+        };
+        self.tasks.spawn_on(update, &self.handle);
     }
 
     fn publish_change(&self, seq: &mut u64, origin: Origin, change: Change) {
@@ -599,19 +603,14 @@ impl Engine {
     pub fn geo_update(self: &Arc<Self>, kind: &str) -> Result<(), Failure> {
         let file = resources::geo_file_of(kind)
             .ok_or_else(|| Failure::core(format!("unknown geo resource: {kind}")))?;
-        if !self.shared.geo.claim(resources::geo_kind_of(file)) {
-            return Err(Failure::core(format!(
-                "geo update already in progress: {kind}"
-            )));
-        }
-        let engine = self.clone();
-        tokio::spawn(async move {
-            engine
-                .shared
-                .geo
-                .update(file, &*engine.shared.fetcher)
-                .await;
-        });
+        let claim = self
+            .shared
+            .geo
+            .claim(file)
+            .ok_or_else(|| Failure::core(format!("geo update already in progress: {kind}")))?;
+        self.shared
+            .geo
+            .spawn_update(claim, self.shared.fetcher.clone(), &self.tasks);
         Ok(())
     }
 
@@ -671,7 +670,7 @@ impl Engine {
             self.close_tun(&mut slot).await;
         }
         *self.dns_server.lock().await = None;
-        self.shared.geo.stop_auto();
+        self.shared.geo.close();
         self.shared.rule_providers.store(None);
         if let Some(applied) = state.take() {
             applied.stop.cancel();
