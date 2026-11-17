@@ -7,7 +7,8 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use concord_common::sync::lock;
-use concord_netstack::{SocketOwner, SocketReady, SocketSource};
+use concord_netstack::{SocketOwner, SocketReady};
+use concord_platform::SocketObserver;
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Token};
 use tokio::io::unix::AsyncFd;
@@ -104,16 +105,13 @@ impl Reactor {
         })
     }
 
-    #[allow(unsafe_code, reason = "registering an Arc-owned source with Tokio")]
-    fn native(source: &Source, read_only: bool) -> io::Result<AsyncFd<SocketSource>> {
+    fn native(source: &Source, read_only: bool) -> io::Result<SocketObserver> {
         let interest = if read_only {
             tokio::io::Interest::READABLE
         } else {
             tokio::io::Interest::READABLE | tokio::io::Interest::WRITABLE
         };
-        // SAFETY: the source Arc keeps the descriptor open and stable until deregistration.
-        unsafe { AsyncFd::register_with_interest(SocketSource::new(Arc::clone(source)), interest) }
-            .map_err(|error| error.into_parts().1)
+        SocketObserver::register(Arc::clone(source), interest)
     }
 
     #[allow(

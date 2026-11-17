@@ -31,7 +31,7 @@ use concord_proxy::BuildCtx;
 use concord_rules::geo::{GeoError, GeoFile, GeoStore};
 use concord_rules::{CompileEnv, CompileError, RouteProgram, RuleSetStore};
 use concord_tls::{SystemRoots, TrustStore, parse_certificates};
-use concord_tun::{Congestion, Prefix};
+use concord_tun::{Congestion, Prefix, TunDevice};
 use concord_tunnel::sniff::{Dispatcher, DispatcherConfig, SnifferEntry, SnifferKind};
 use concord_tunnel::{Runtime, Tunnel};
 use rustls_pki_types::CertificateDer;
@@ -284,7 +284,7 @@ fn sniffer_of(config: &SnifferConfig, rules: &dyn RuleEnv) -> Result<Dispatcher,
 
 /// mihomo turns keep-alive off on Android for dialed and accepted sockets alike.
 fn keep_alive_disabled(general: &General) -> bool {
-    cfg!(target_os = "android") || general.disable_keep_alive
+    !concord_platform::KEEP_ALIVE || general.disable_keep_alive
 }
 
 pub(crate) fn sock_opts(general: &General) -> SockOpts {
@@ -530,7 +530,7 @@ async fn fetch_geo(shared: &Shared, problem: GeoProblem) -> Result<(), ApplyErro
 /// refuses the config. mihomo reads a UID only on Linux and Android.
 pub(crate) fn capabilities() -> Capabilities {
     let mut capabilities = concord_proxy::capabilities();
-    if !cfg!(any(target_os = "linux", target_os = "android")) {
+    if !concord_platform::owner::READS_UID {
         capabilities.rule_types.retain(|name| *name != "UID");
     }
     capabilities
@@ -750,7 +750,7 @@ pub(crate) fn warning_views(profile: &Profile, android: bool) -> Vec<WarningView
         })
         .collect::<Vec<_>>();
     warnings.extend(tun_congestion_warning(&profile.tun, android));
-    warnings.extend(tun_offload_warning(&profile.tun, cfg!(target_os = "linux")));
+    warnings.extend(tun_offload_warning(&profile.tun, TunDevice::OFFLOADS));
     warnings
 }
 
@@ -780,8 +780,8 @@ fn tun_congestion_warning(tun: &TunConfig, android: bool) -> Option<WarningView>
 
 /// The Linux device asks for offload whatever `gso` says, where sing-tun enables it only when
 /// asked (`tun_linux.go`); no other platform has it, in either core.
-fn tun_offload_warning(tun: &TunConfig, linux: bool) -> Option<WarningView> {
-    (tun.enable && linux && tun.gso == Some(false)).then(|| WarningView {
+fn tun_offload_warning(tun: &TunConfig, offloads: bool) -> Option<WarningView> {
+    (tun.enable && offloads && tun.gso == Some(false)).then(|| WarningView {
         level: "warning",
         code: "not_applied",
         path: "tun.gso".to_string(),

@@ -3,6 +3,7 @@
     reason = "socket options, process tables, rlimits and ownership syscalls have no safe std wrapper"
 )]
 
+mod accept;
 mod certs;
 mod clock;
 mod cpus;
@@ -17,6 +18,7 @@ mod native;
 mod netinfo;
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 mod nosplice;
+mod observer;
 pub mod owner;
 #[cfg(unix)]
 mod sigpipe;
@@ -38,6 +40,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use concord_common::{FlowKey, ProcessInfo, RawSocket};
 
+pub use accept::is_lost_connection;
 pub use certs::{certs_from_dirs, system_root_certs};
 pub use clock::{local_utc_offset, set_system_time};
 pub use cpus::{assignable_cpus, available_cpus};
@@ -51,13 +54,13 @@ pub use native::NativePlatform;
 pub use netinfo::{interface_addrs, interface_by_name, parse_resolv_conf};
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 pub use nosplice::SplicePipe;
+pub use observer::SocketObserver;
 #[cfg(unix)]
 pub use sigpipe::ignore_sigpipe;
-#[cfg(target_os = "linux")]
-pub use sockopt::try_send_vectored;
 pub use sockopt::{
-    SEND_TCP_VECTORED, bind_to_interface, enable_tfo, is_global_unicast, mptcp_protocol,
-    prepare_udp_socket, raw_socket_of, send_space, send_tcp_vectored, set_routing_mark,
+    KEEP_ALIVE, SEND_TCP_VECTORED, TRY_SEND_VECTORED, bind_to_interface, enable_tfo,
+    is_global_unicast, mptcp_protocol, prepare_udp_socket, raw_socket_of, send_space,
+    send_tcp_vectored, set_routing_mark, try_send_vectored,
 };
 pub use sparse::SparseBuf;
 #[cfg(any(target_os = "linux", target_os = "android"))]

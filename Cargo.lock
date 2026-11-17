@@ -1244,7 +1244,6 @@ dependencies = [
  "concord-platform",
  "concord-test-support",
  "httparse",
- "libc",
  "socket2",
  "thiserror 2.0.21",
  "tokio",

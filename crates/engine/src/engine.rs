@@ -234,7 +234,6 @@ impl Engine {
         self.shared.geo.set_home(home.clone());
         self.shared.geo.reopen();
         self.shared.geo.store.set_dir(home.root());
-        #[cfg(unix)]
         home.reclaim();
         self.start_mitm(&home);
         self.home.store(Some(home));

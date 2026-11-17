@@ -16,6 +16,10 @@ use std::net::SocketAddr;
 
 use concord_common::{Network, ProcessInfo};
 
+/// Whether an owner comes with the uid of its socket; mihomo refuses UID rules elsewhere
+/// (`rules/common/uid.go::NewUid`).
+pub const READS_UID: bool = cfg!(any(target_os = "linux", target_os = "android"));
+
 /// Blocking table scan, and `None` on Android where only the embedding app can answer.
 pub fn find_owner_blocking(network: Network, src: SocketAddr) -> Option<ProcessInfo> {
     #[cfg(target_os = "macos")]

@@ -8,6 +8,7 @@ use std::task::Poll;
 
 use arc_swap::ArcSwap;
 use concord_common::{Address, Datagram, PacketBuf, PacketSession, recv_packet, send_packet};
+use concord_platform::{UDP_BATCH, UdpBatch};
 use gotatun::packet::{Packet, PacketBufPool};
 use gotatun::udp::{UdpRecv, UdpSend, UdpTransportFactory, UdpTransportFactoryParams};
 use tokio::io::ReadBuf;
@@ -58,16 +59,12 @@ pub(super) struct WireSend {
     broken: Arc<AtomicBool>,
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
-const SEND_BATCH: usize = concord_platform::UDP_BATCH;
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-const SEND_BATCH: usize = 1;
+const SEND_BATCH: usize = if UdpBatch::SENDS { UDP_BATCH } else { 1 };
 
 struct OutSocket {
     socket: Arc<UdpSocket>,
     v4: bool,
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    batch: concord_platform::UdpBatch,
+    batch: UdpBatch,
 }
 
 enum SendHalf {
@@ -106,8 +103,7 @@ impl Wire {
                     .map(|socket| OutSocket {
                         v4: socket.local_addr().is_ok_and(|local| local.is_ipv4()),
                         socket: socket.clone(),
-                        #[cfg(any(target_os = "linux", target_os = "android"))]
-                        batch: concord_platform::UdpBatch::default(),
+                        batch: UdpBatch::default(),
                     })
                     .collect(),
             ),
@@ -169,7 +165,6 @@ impl WireSend {
 }
 
 impl WireSend {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
     async fn send_batch(&self, packets: &mut Vec<(Packet, SocketAddr)>) -> io::Result<()> {
         let SendHalf::Sockets(sockets) = &*self.carrier else {
             return Ok(());
@@ -211,10 +206,6 @@ fn apply_reserved(
 
 /// Hands `packets` to `send` a batch at a time until none is left, dropping each batch as it
 /// reports it sent. An error leaves the unsent packets in place.
-#[cfg_attr(
-    not(any(target_os = "linux", target_os = "android", test)),
-    allow(dead_code, reason = "only Linux and Android send in batches")
-)]
 fn drain(
     packets: &mut Vec<(Packet, SocketAddr)>,
     limit: usize,
@@ -247,7 +238,6 @@ impl UdpSend for WireSend {
         _buf: &mut Self::SendManyBuf,
         packets: &mut Vec<(Packet, SocketAddr)>,
     ) -> io::Result<()> {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
         if self.batches() {
             return self.send_batch(packets).await;
         }
