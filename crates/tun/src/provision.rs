@@ -7,7 +7,9 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
 
 use crate::options::TunOptions;
-use crate::route::{IfaceInfo, NetlinkBackend, Plan, RouteBackend, RouteError, RouteSession, Step};
+use crate::route::{
+    IfaceInfo, NetlinkBackend, Plan, RouteBackend, RouteError, RouteSession, Step, android_tables,
+};
 use crate::runner::{StartError, StartStep};
 
 pub struct Provisioned {
@@ -52,12 +54,14 @@ fn failed(step: StartStep, err: &io::Error) -> StartError {
     }
 }
 
-/// Removes the rules a run killed before its release left in the priority range `options` uses.
+/// Removes what a run killed before its release left: the rules in the priority range `options`
+/// uses and the routes in its tables.
 pub async fn clean_stale(options: &TunOptions) -> io::Result<usize> {
     let start = options.iproute2_rule_index;
-    NetlinkBackend::connect()?
-        .clean_stale((start, start + 10))
-        .await
+    let mut backend = NetlinkBackend::connect()?;
+    let rules = backend.clean_stale((start, start + 10)).await?;
+    let routes = backend.flush_tables(&android_tables(options)).await?;
+    Ok(rules + routes)
 }
 
 pub async fn provision(options: &TunOptions) -> Result<Provisioned, StartError> {

@@ -20,6 +20,8 @@ use concord_common::sync::lock;
 use crate::options::{Prefix, TunOptions};
 
 pub use desktop::{ManagerBackend, plan_desktop};
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(crate) use linux::android_tables;
 pub use linux::{plan_android, plan_linux, rules_for, rules_for_android};
 pub use ranges::{excluded_uids, subtract};
 pub use strict::{Cond, FilterSpec, Layer, StrictRoute, Verdict};

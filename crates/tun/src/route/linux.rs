@@ -51,6 +51,21 @@ fn plan(options: &TunOptions, iface: &IfaceInfo, android: bool) -> Plan {
             table: Some(options.iproute2_table_index),
         }));
     }
+    let p4 = !options.inet4_address.is_empty();
+    if android && (p4 || !options.inet6_address.is_empty()) {
+        let defaults = ["0.0.0.0/0", "::/0"]
+            .into_iter()
+            .filter(|dest| p4 || dest.contains(':'))
+            .filter_map(Prefix::parse);
+        for dest in defaults {
+            plan.steps.push(Step::Route(RouteSpec {
+                dest,
+                gateway: None,
+                if_index: iface.index,
+                table: Some(dns_table(options)),
+            }));
+        }
+    }
     plan.steps.extend(
         rules(options, &iface.name, android)
             .into_iter()
@@ -116,6 +131,21 @@ impl Cursor {
     }
 }
 
+/// Android's system resolver usually sits on the LAN, which a route address that leaves private
+/// ranges out keeps off the private table: queries leave the device unhijacked and come back with
+/// addresses the core never handed out. sing-tun keeps DNS off `main` with the rule this chain
+/// skips; here port 53 gets a table of its own that only holds the device, in both families
+/// even when the device has no IPv6 address, as a `VpnService` takes every system query.
+pub(crate) fn dns_table(options: &TunOptions) -> u32 {
+    options.iproute2_table_index + 1
+}
+
+/// The routing tables a privileged Android device fills.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(crate) fn android_tables(options: &TunOptions) -> [u32; 2] {
+    [options.iproute2_table_index, dns_table(options)]
+}
+
 pub fn rules_for(options: &TunOptions, name: &str) -> Vec<RuleSpec> {
     rules(options, name, false)
 }
@@ -148,10 +178,11 @@ fn rules(options: &TunOptions, name: &str, android: bool) -> Vec<RuleSpec> {
     if !p4 && !p6 {
         return Vec::new();
     }
+    let dns6 = android && !p6;
     let start = options.iproute2_rule_index;
     let mut cur = Cursor {
         p4,
-        p6,
+        p6: p6 || dns6,
         v4: start,
         v6: start,
         nop: start + 10,
@@ -233,11 +264,18 @@ fn rules(options: &TunOptions, name: &str, android: bool) -> Vec<RuleSpec> {
     }
 
     let loopback = |rule: &mut RuleSpec| rule.iif = Some("lo".to_owned());
+    let dns = |rule: &mut RuleSpec| {
+        loopback(rule);
+        rule.dport = Some((53, 53));
+    };
     if p4 {
         cur.push(Family::V4, RuleAction::Goto(nop), |rule| {
             rule.iif = Some(name.to_owned());
         });
         cur.v4 += 1;
+        if android {
+            cur.push(Family::V4, RuleAction::Table(dns_table(options)), dns);
+        }
         cur.push(Family::V4, RuleAction::Table(table), |rule| {
             rule.invert = true;
             loopback(rule);
@@ -258,6 +296,9 @@ fn rules(options: &TunOptions, name: &str, android: bool) -> Vec<RuleSpec> {
             rule.iif = Some(name.to_owned());
         });
         cur.v6 += 1;
+        if android {
+            cur.push(Family::V6, RuleAction::Table(dns_table(options)), dns);
+        }
         for address in &options.inet6_address {
             cur.push(Family::V6, RuleAction::Table(table), |rule| {
                 loopback(rule);
@@ -281,12 +322,18 @@ fn rules(options: &TunOptions, name: &str, android: bool) -> Vec<RuleSpec> {
         }
         cur.v6 += 1;
         cur.push(Family::V6, RuleAction::Table(table), |_| {});
+    } else if dns6 {
+        cur.push(Family::V6, RuleAction::Goto(nop), |rule| {
+            rule.iif = Some(name.to_owned());
+        });
+        cur.v6 += 1;
+        cur.push(Family::V6, RuleAction::Table(dns_table(options)), dns);
     }
     if p4 {
         cur.rules
             .push(RuleSpec::new(Family::V4, nop, RuleAction::Nop));
     }
-    if p6 {
+    if p6 || dns6 {
         cur.rules
             .push(RuleSpec::new(Family::V6, nop, RuleAction::Nop));
     }
@@ -330,6 +377,7 @@ mod netlink {
     use async_trait::async_trait;
     use futures_util::TryStreamExt;
     use rtnetlink::packet_route::AddressFamily;
+    use rtnetlink::packet_route::route::{RouteAttribute, RouteMessage};
     use rtnetlink::packet_route::rule::{
         RuleAction as NlAction, RuleAttribute, RuleFlags, RuleMessage, RulePortRange, RuleUidRange,
     };
@@ -387,6 +435,41 @@ mod netlink {
                 .execute()
                 .await
                 .map_err(nl_error)
+        }
+
+        /// Deletes every route in `tables`, in both families; the count of deleted routes.
+        pub async fn flush_tables(&self, tables: &[u32]) -> io::Result<usize> {
+            let mut removed = 0;
+            let dumps = [
+                RouteMessageBuilder::<Ipv4Addr>::new().build(),
+                RouteMessageBuilder::<Ipv6Addr>::new().build(),
+            ];
+            for dump in dumps {
+                let routes: Vec<RouteMessage> = self
+                    .handle
+                    .route()
+                    .get(dump)
+                    .execute()
+                    .try_collect()
+                    .await
+                    .map_err(nl_error)?;
+                for route in routes {
+                    let table = route
+                        .attributes
+                        .iter()
+                        .find_map(|attribute| match attribute {
+                            RouteAttribute::Table(table) => Some(*table),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| u32::from(route.header.table));
+                    if tables.contains(&table)
+                        && self.handle.route().del(route).execute().await.is_ok()
+                    {
+                        removed += 1;
+                    }
+                }
+            }
+            Ok(removed)
         }
 
         pub async fn delete_link(&self, index: u32) -> io::Result<()> {
@@ -475,7 +558,7 @@ mod netlink {
         message
     }
 
-    fn route_message(spec: &RouteSpec) -> rtnetlink::packet_route::route::RouteMessage {
+    fn route_message(spec: &RouteSpec) -> RouteMessage {
         let prefix = spec.dest;
         match prefix.addr() {
             IpAddr::V4(dest) => {
@@ -764,6 +847,7 @@ mod tests {
             summary(Family::V4),
             [
                 (9000, RuleAction::Goto(9010), false),
+                (9001, RuleAction::Table(2023), false),
                 (9001, RuleAction::Table(2022), true),
                 (9001, RuleAction::Table(2022), false),
                 (9001, RuleAction::Table(2022), false),
@@ -774,6 +858,7 @@ mod tests {
             summary(Family::V6),
             [
                 (9000, RuleAction::Goto(9010), false),
+                (9001, RuleAction::Table(2023), false),
                 (9001, RuleAction::Table(2022), false),
                 (9001, RuleAction::Table(2022), false),
                 (9002, RuleAction::Goto(9010), false),
@@ -782,10 +867,86 @@ mod tests {
                 (9010, RuleAction::Nop, false),
             ]
         );
-        assert_eq!(of(&rules, Family::V6)[2].src, Some(p("::/128")));
-        assert!(rules.iter().all(|rule| rule.dport.is_none()
-            && rule.suppress_prefixlen.is_none()
-            && rule.dst.is_none()));
+        assert_eq!(of(&rules, Family::V6)[3].src, Some(p("::/128")));
+        assert!(rules.iter().all(|rule| rule.suppress_prefixlen.is_none()
+            && rule.dst.is_none()
+            && (rule.dport.is_none() || rule.action == RuleAction::Table(2023))));
+    }
+
+    #[test]
+    fn android_without_ipv6_still_takes_ipv6_dns_past_the_excluded_uids() {
+        let mut o = options();
+        o.inet6_address.clear();
+        o.exclude_uid = vec![IdRange::single(10_123)];
+        let plan = plan_android(&o, &iface());
+        let rules: Vec<_> = plan
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::Rule(rule) if rule.family == Family::V6 => Some(rule),
+                _ => None,
+            })
+            .collect();
+        let summary: Vec<_> = rules
+            .iter()
+            .map(|rule| (rule.priority, rule.action, rule.dport, rule.uid_range))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                (9000, RuleAction::Goto(9010), None, Some((10_123, 10_123))),
+                (9001, RuleAction::Goto(9010), None, None),
+                (9002, RuleAction::Table(2023), Some((53, 53)), None),
+                (9010, RuleAction::Nop, None, None),
+            ]
+        );
+        assert!(plan.steps.iter().any(|step| matches!(
+            step,
+            Step::Route(route) if route.table == Some(2023) && route.dest == p("::/0")
+        )));
+        assert!(
+            !plan
+                .steps
+                .iter()
+                .any(|step| matches!(step, Step::Route(route) if route.table == Some(2022) && !route.dest.is_ipv4()))
+        );
+    }
+
+    #[test]
+    fn android_sends_local_dns_to_a_table_of_the_device_alone() {
+        let mut o = options();
+        o.exclude_uid = vec![IdRange::single(10_123)];
+        o.route_address = vec![p("1.0.0.0/8"), p("2000::/3")];
+        let plan = plan_android(&o, &iface());
+        let dns_rules: Vec<_> = plan
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::Rule(rule) if rule.dport.is_some() => Some(rule),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dns_rules.len(), 2);
+        for rule in &dns_rules {
+            assert_eq!(rule.dport, Some((53, 53)));
+            assert_eq!(rule.iif.as_deref(), Some("lo"));
+            assert_eq!(rule.action, RuleAction::Table(2023));
+            assert!(rule.priority > 9000, "after the excluded uids");
+        }
+        let dns_routes: Vec<_> = plan
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::Route(route) if route.table == Some(2023) => Some(route.dest),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dns_routes, [p("0.0.0.0/0"), p("::/0")]);
+        assert!(
+            rules_for(&o, "tun0")
+                .iter()
+                .all(|rule| rule.action != RuleAction::Table(2023))
+        );
     }
 
     #[test]
