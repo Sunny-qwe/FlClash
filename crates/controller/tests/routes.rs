@@ -270,11 +270,10 @@ async fn a_preflight_needs_no_secret_and_gets_mihomos_cors() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_host_that_lists_origins_lets_only_those_call_from_a_browser() {
-    async fn from(rig: &Rig, origin: &str) -> Reply {
-        rig.wait_open(rig.port).await;
-        raw(rig.port, "GET", "/", &[("Origin", origin)], None).await
-    }
     let rig = Rig::new(false).await;
+    // A settings change drops the listener with every connection it accepted and binds again,
+    // so once this one ends, the next connection can only reach the new listener.
+    let mut held = TcpStream::connect(("127.0.0.1", rig.port)).await.unwrap();
     rig.control
         .config_patch(ConfigPatchParams {
             external_controller_cors: Some(ControllerCorsPatch {
@@ -285,20 +284,18 @@ async fn a_host_that_lists_origins_lets_only_those_call_from_a_browser() {
         })
         .await
         .unwrap();
-    let mut listed = from(&rig, "http://board").await;
-    for _ in 0..100 {
-        if !listed.head.contains("access-control-allow-origin: *") {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        listed = from(&rig, "http://board").await;
-    }
+    let ended = timeout(PATIENCE, held.read(&mut [0; 1]))
+        .await
+        .expect("the old listener stayed up");
+    assert!(!matches!(ended, Ok(1..)), "{ended:?}");
+    rig.wait_open(rig.port).await;
+    let listed = from_origin(&rig, "http://board").await;
     assert!(
         listed
             .head
             .contains("access-control-allow-origin: http://board")
     );
-    let other = from(&rig, "http://other").await;
+    let other = from_origin(&rig, "http://other").await;
     assert!(!other.head.contains("access-control-allow-origin"));
     rig.control.shutdown().await;
 }
