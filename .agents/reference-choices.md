@@ -108,6 +108,17 @@ Concord already takes these from the references; keep them unless the reference 
   `adapter/outboundgroup/parser.go:155-163`: reject a provider with the group's name only when the group's
   `proxies` list is nonempty; a provider-only group may share a provider's name.
 
+- [language-neutral] **DoH connection concurrency** follows mihomo `v1.19.33`
+  `dns/doh.go:388-397`: its HTTP transport leaves `MaxConnsPerHost` unset. The pinned
+  metacubex/http `v0.1.8` starts an independent dial whenever no idle connection is available
+  (`transport.go:1539-1542`, `:1587-1625`); the idle HTTP/1 limit of two is not an active connection
+  limit (`:209-219`). Concord likewise lets cold queries dial concurrently, including before TLS
+  has selected HTTP/1 or HTTP/2. Established HTTP/2 senders remain shared; simultaneous HTTP/2
+  handshakes keep the first live cached sender and drop redundant ones, as metacubex/http does
+  in `h2_bundle.go:882-911`. The independent-dial and established-sender behaviours are held by
+  `concurrent_http1_queries_keep_independent_senders` and
+  `concurrent_queries_reuse_an_established_http2_connection` in the DNS tests.
+
 - [runtime-bound] **QUIC receive scratch** follows the polling lifetime. mihomo Alpha `3c0d10a5` pins
   metacubex/quic-go `2548683b76f4`, whose `buffer_pool.go:33-95` returns packet buffers to `sync.Pool` and
   `sys_conn_oob.go:161-178` borrows buffers for a receive batch. Quinn already copies received bytes into owned

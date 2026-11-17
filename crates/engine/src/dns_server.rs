@@ -10,6 +10,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 const STREAM_IDLE: Duration = Duration::from_secs(8);
 const MAX_DATAGRAM: usize = 512;
@@ -59,7 +60,12 @@ fn bound_socket(addr: SocketAddr, ty: Type, protocol: Protocol, mark: u32) -> io
 }
 
 impl DnsServer {
-    pub fn start(address: &str, mark: u32, resolver: Arc<Resolver>) -> io::Result<Self> {
+    pub fn start(
+        address: &str,
+        mark: u32,
+        resolver: Arc<Resolver>,
+        tasks: &TaskTracker,
+    ) -> io::Result<Self> {
         let addr = listen_address(address)?;
         let udp =
             UdpSocket::from_std(bound_socket(addr, Type::DGRAM, Protocol::UDP, mark)?.into())?;
@@ -69,8 +75,18 @@ impl DnsServer {
 
         let resolver = Arc::new(ArcSwap::new(resolver));
         let stop = CancellationToken::new();
-        tokio::spawn(serve_udp(Arc::new(udp), resolver.clone(), stop.clone()));
-        tokio::spawn(serve_tcp(tcp, resolver.clone(), stop.clone()));
+        tasks.spawn(serve_udp(
+            Arc::new(udp),
+            resolver.clone(),
+            stop.clone(),
+            tasks.clone(),
+        ));
+        tasks.spawn(serve_tcp(
+            tcp,
+            resolver.clone(),
+            stop.clone(),
+            tasks.clone(),
+        ));
         Ok(DnsServer {
             address: address.to_string(),
             mark,
@@ -96,6 +112,7 @@ async fn serve_udp(
     socket: Arc<UdpSocket>,
     resolver: Arc<ArcSwap<Resolver>>,
     stop: CancellationToken,
+    tasks: TaskTracker,
 ) {
     let mut buf = vec![0u8; MAX_DATAGRAM];
     loop {
@@ -111,7 +128,7 @@ async fn serve_udp(
         };
         let resolver = resolver.load_full();
         let socket = socket.clone();
-        tokio::spawn(async move {
+        tasks.spawn(stop.clone().run_until_cancelled_owned(async move {
             let answer = match admit(&query) {
                 Admission::Ignore => return,
                 Admission::Reply(reply) => Some(reply),
@@ -120,7 +137,7 @@ async fn serve_udp(
             if let Some(answer) = answer {
                 let _ = socket.send_to(&answer, peer).await;
             }
-        });
+        }));
     }
 }
 
@@ -128,6 +145,7 @@ async fn serve_tcp(
     listener: TcpListener,
     resolver: Arc<ArcSwap<Resolver>>,
     stop: CancellationToken,
+    tasks: TaskTracker,
 ) {
     loop {
         let accepted = tokio::select! {
@@ -138,7 +156,7 @@ async fn serve_tcp(
             Ok((stream, _)) => {
                 let resolver = resolver.clone();
                 let stop = stop.clone();
-                tokio::spawn(async move {
+                tasks.spawn(async move {
                     tokio::select! {
                         () = stop.cancelled() => {}
                         _ = serve_stream(stream, &resolver) => {}

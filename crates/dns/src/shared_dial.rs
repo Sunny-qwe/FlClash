@@ -27,23 +27,14 @@ pub(crate) struct Got<T> {
     pub(crate) reused: bool,
 }
 
-impl<T> Got<T> {
-    pub(crate) fn map<U>(self, f: impl FnOnce(T) -> U) -> Got<U> {
-        Got {
-            value: f(self.value),
-            reused: self.reused,
-        }
-    }
-}
-
-pub(crate) enum Join<'a, T> {
+enum Join<'a, T> {
     Ready(Got<T>),
     Dial(Turn<'a, T>),
 }
 
-/// The caller's turn to dial. Waiters are released by `publish`, `release` or
+/// The caller's turn to dial. Waiters are released by `publish` or
 /// `fail`; dropping the turn unfinished fails them as cancelled.
-pub(crate) struct Turn<'a, T> {
+struct Turn<'a, T> {
     slot: &'a SharedDial<T>,
     flight: Arc<Flight>,
 }
@@ -84,7 +75,7 @@ impl<T: Clone> SharedDial<T> {
         }
     }
 
-    pub(crate) async fn join(&self, live: impl Fn(&T) -> bool) -> io::Result<Join<'_, T>> {
+    async fn join(&self, live: impl Fn(&T) -> bool) -> io::Result<Join<'_, T>> {
         let mut reused = true;
         loop {
             let mut outcome = {
@@ -119,17 +110,11 @@ impl<T: Clone> SharedDial<T> {
 }
 
 impl<T> Turn<'_, T> {
-    pub(crate) fn publish(self, session: T) {
+    fn publish(self, session: T) {
         self.finish(Some(session), Ok(()));
     }
 
-    /// Ends the turn without a session to share, as for an HTTP/1 sender that
-    /// serves one request at a time; waiters look again.
-    pub(crate) fn release(self) {
-        self.finish(None, Ok(()));
-    }
-
-    pub(crate) fn fail(self, err: io::Error) -> io::Error {
+    fn fail(self, err: io::Error) -> io::Error {
         let err = Arc::new(err);
         self.finish(None, Err(Arc::clone(&err)));
         shared(err)

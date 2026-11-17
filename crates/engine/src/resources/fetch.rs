@@ -114,7 +114,7 @@ impl Fetcher for TunnelFetcher {
         }
         Err(fetch_error(
             FetchErrorKind::Other,
-            "stopped after 10 redirects",
+            format!("stopped after {MAX_REDIRECTS} redirects"),
         ))
     }
 }

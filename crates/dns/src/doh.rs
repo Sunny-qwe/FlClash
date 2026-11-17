@@ -17,7 +17,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use crate::client::{BoxIo, Client, Params, checked, decode, encode, with_random_id, with_timeout};
 use crate::dialer::{Connector, Cx};
 use crate::dot::{server_name, tls_connector};
-use crate::shared_dial::{Got, Join, SharedDial};
+use crate::shared_dial::Got;
 
 const MAX_BODY: usize = 65_535;
 const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -84,7 +84,7 @@ pub(crate) struct DohClient {
     target: DohTarget,
     connector: Arc<Connector>,
     tls: Option<tokio_rustls::TlsConnector>,
-    h2: SharedDial<http2::SendRequest<Body>>,
+    h2: Mutex<Option<http2::SendRequest<Body>>>,
     h1: Mutex<Vec<http1::SendRequest<Body>>>,
 }
 
@@ -108,30 +108,32 @@ impl DohClient {
             target,
             connector,
             tls,
-            h2: SharedDial::new(),
+            h2: Mutex::new(None),
             h1: Mutex::new(Vec::new()),
         })
     }
 
     async fn sender(&self, cx: Cx) -> io::Result<Got<Sender>> {
-        if let Some(idle) = self.idle_h1(true) {
+        if let Some(idle) = self.idle_h1() {
             return Ok(idle);
         }
-        let turn = match self.h2.join(|sender| !sender.is_closed()).await? {
-            Join::Ready(got) => return Ok(got.map(Sender::H2)),
-            Join::Dial(turn) => turn,
-        };
-        if let Some(idle) = self.idle_h1(false) {
-            turn.release();
-            return Ok(idle);
+        {
+            let mut cached = lock(&self.h2);
+            cached.take_if(|sender| sender.is_closed());
+            if let Some(sender) = &*cached {
+                return Ok(Got {
+                    value: Sender::H2(sender.clone()),
+                    reused: true,
+                });
+            }
         }
-        let sender = match self.dial(cx).await {
-            Ok(sender) => sender,
-            Err(err) => return Err(turn.fail(err)),
-        };
-        match &sender {
-            Sender::H2(h2) => turn.publish(h2.clone()),
-            Sender::H1(_) => turn.release(),
+        let mut sender = self.dial(cx).await?;
+        if let Sender::H2(connected) = &mut sender {
+            let mut cached = lock(&self.h2);
+            match cached.as_ref().filter(|sender| !sender.is_closed()) {
+                Some(current) => *connected = current.clone(),
+                None => *cached = Some(connected.clone()),
+            }
         }
         Ok(Got {
             value: sender,
@@ -139,15 +141,13 @@ impl DohClient {
         })
     }
 
-    /// `reused` is false once the caller has missed the cache, as a sender it then finds
-    /// was not there when it asked.
-    fn idle_h1(&self, reused: bool) -> Option<Got<Sender>> {
+    fn idle_h1(&self) -> Option<Got<Sender>> {
         let mut idle = lock(&self.h1);
         while let Some(sender) = idle.pop() {
             if !sender.is_closed() {
                 return Some(Got {
                     value: Sender::H1(sender),
-                    reused,
+                    reused: true,
                 });
             }
         }
@@ -289,7 +289,7 @@ impl Client for DohClient {
     }
 
     fn reset(&self) {
-        self.h2.take();
+        lock(&self.h2).take();
         {
             let mut idle = lock(&self.h1);
             idle.clear();
