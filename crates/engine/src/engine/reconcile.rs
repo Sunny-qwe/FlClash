@@ -23,7 +23,7 @@ impl Engine {
         if address.is_empty() {
             return;
         }
-        match DnsServer::start(address, mark, resolver, &self.tasks) {
+        match DnsServer::start(address, mark, resolver, &self.tasks, &self.handle) {
             Ok(started) => {
                 tracing::info!("DNS server listening at: {address}");
                 *server = Some(started);

@@ -114,7 +114,7 @@ impl DohClient {
     }
 
     async fn sender(&self, cx: Cx) -> io::Result<Got<Sender>> {
-        if let Some(idle) = self.idle_h1() {
+        if let Some(idle) = self.idle_h1().await {
             return Ok(idle);
         }
         {
@@ -141,17 +141,16 @@ impl DohClient {
         })
     }
 
-    fn idle_h1(&self) -> Option<Got<Sender>> {
-        let mut idle = lock(&self.h1);
-        while let Some(sender) = idle.pop() {
-            if !sender.is_closed() {
+    async fn idle_h1(&self) -> Option<Got<Sender>> {
+        loop {
+            let mut sender = lock(&self.h1).pop()?;
+            if sender.ready().await.is_ok() {
                 return Some(Got {
                     value: Sender::H1(sender),
                     reused: true,
                 });
             }
         }
-        None
     }
 
     async fn dial(&self, cx: Cx) -> io::Result<Sender> {
@@ -296,3 +295,6 @@ impl Client for DohClient {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -9,6 +9,7 @@ use concord_dns::{Admission, Resolver, admit};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::runtime::Handle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -65,8 +66,10 @@ impl DnsServer {
         mark: u32,
         resolver: Arc<Resolver>,
         tasks: &TaskTracker,
+        handle: &Handle,
     ) -> io::Result<Self> {
         let addr = listen_address(address)?;
+        let _runtime = handle.enter();
         let udp =
             UdpSocket::from_std(bound_socket(addr, Type::DGRAM, Protocol::UDP, mark)?.into())?;
         let stream = bound_socket(addr, Type::STREAM, Protocol::TCP, mark)?;
@@ -75,18 +78,10 @@ impl DnsServer {
 
         let resolver = Arc::new(ArcSwap::new(resolver));
         let stop = CancellationToken::new();
-        tasks.spawn(serve_udp(
-            Arc::new(udp),
-            resolver.clone(),
-            stop.clone(),
-            tasks.clone(),
-        ));
-        tasks.spawn(serve_tcp(
-            tcp,
-            resolver.clone(),
-            stop.clone(),
-            tasks.clone(),
-        ));
+        let udp_task = serve_udp(Arc::new(udp), resolver.clone(), stop.clone(), tasks.clone());
+        let tcp_task = serve_tcp(tcp, resolver.clone(), stop.clone(), tasks.clone());
+        tasks.spawn_on(udp_task, handle);
+        tasks.spawn_on(tcp_task, handle);
         Ok(DnsServer {
             address: address.to_string(),
             mark,

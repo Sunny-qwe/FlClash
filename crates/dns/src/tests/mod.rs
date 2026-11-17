@@ -1,6 +1,6 @@
 mod alloc;
 mod shared_dial;
-mod support;
+pub(super) mod support;
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
