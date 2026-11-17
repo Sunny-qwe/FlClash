@@ -104,6 +104,10 @@ confirming it with a run.
 
 Concord already takes these from the references; keep them unless the reference moves.
 
+- [language-neutral] **Proxy group/provider name collisions** follow mihomo `v1.19.33` (`3f27ef39`)
+  `adapter/outboundgroup/parser.go:155-163`: reject a provider with the group's name only when the group's
+  `proxies` list is nonempty; a provider-only group may share a provider's name.
+
 - [runtime-bound] **QUIC receive scratch** follows the polling lifetime. mihomo Alpha `3c0d10a5` pins
   metacubex/quic-go `2548683b76f4`, whose `buffer_pool.go:33-95` returns packet buffers to `sync.Pool` and
   `sys_conn_oob.go:161-178` borrows buffers for a receive batch. Quinn already copies received bytes into owned
@@ -368,8 +372,9 @@ MiB, GiB, ns, µs, ms, s, min, h), or as the source text in backticks; `cfg` var
 | `engine::tun::DEFAULT_MTU` | 9000 | B | mihomo's TUN listener defaults MTU to 9000 (`listener/sing_tun/server.go:192-194`); Concord 9000 matches. |
 | `engine::tun::PING_WAIT` | 10 s | B | Wait for a forwarded ICMP echo reply: sing-box's TUN takes `C.ICMPTimeout` (`protocol/tun/inbound.go:499`), 10 s (`constant/timeout.go:13`). |
 | `group::check::SHARE_ROUND` | 1 s | B | mihomo's health check runs through `singledo.NewSingle(time.Second)` (`adapter/provider/healthcheck.go:215`), reusing a result younger than 1 s (`common/singledo/singledo.go:31`); Concord 1 s matches. |
-| `group::deps::DEFAULT_TEST_TIMEOUT` | 5 s | B | mihomo's health check defaults timeout to 5000 ms (`adapter/provider/healthcheck.go:200-201`); Concord 5 s matches. |
+| `group::deps::DEFAULT_TEST_TIMEOUT` | 5 s | B | mihomo v1.19.33 (`3f27ef39`) defaults health-check and group timeouts to 5000 ms (`adapter/provider/healthcheck.go:200-201`, `adapter/outboundgroup/groupbase.go:94-95`); Concord 5 s matches. |
 | `group::health::HISTORY` | 10 | B | mihomo keeps defaultHistoriesNum = 10 delay records per proxy (`adapter/adapter.go:26`, trimmed at `:178`); Concord 10 matches. |
+| `group::outbounds::build::DEFAULT_MAX_FAILED_TIMES` | 5 | B | mihomo v1.19.33 (`3f27ef39`) defaults maxFailedTimes to 5 (`adapter/outboundgroup/groupbase.go:97-98`); Concord's group failure threshold matches. |
 | `group::outbounds::select::PROBE_TIMEOUT` | 5 s | B | mihomo's Fallback.Set tests a dead selected proxy with a 5000 ms timeout (`adapter/outboundgroup/fallback.go:140-141`); Concord's fallback selection probe 5 s matches. |
 | `group::provider::HTTP_TIMEOUT` | 20 s | B | mihomo fetches proxy providers with DefaultHttpTimeout = 20 s (`component/resource/vehicle.go:20`, used at `adapter/provider/parser.go:94`); Concord 20 s matches. |
 | `group::shared::LOOP_REPORT_INTERVAL` | 3 s | O | The dialer-loop event exists for the host banner, which the FlClash host throttles to one per 3 s, firing on the leading edge (FlClash `rs` `lib/manager/core_manager.dart:353-362`, `lib/common/function.dart:88-98`). A window up to 3 s drops only events the host would drop; a longer one would hide a banner. Change it with the host constant. |

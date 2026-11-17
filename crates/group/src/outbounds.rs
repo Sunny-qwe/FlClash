@@ -256,15 +256,11 @@ impl Outbounds {
             return Some(node_exit(leaf.info()));
         }
         let Resolved::Route {
-            leaf,
-            chain,
-            exit_group,
-            ..
+            leaf, exit_group, ..
         } = resolved
         else {
             return None;
         };
-        let _ = chain;
         Some(match exit_group {
             Some(group) => load_balancer_exit(group),
             None => node_exit(leaf.info()),

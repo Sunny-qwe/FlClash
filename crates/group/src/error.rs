@@ -3,7 +3,7 @@ use std::fmt;
 #[derive(Debug, thiserror::Error)]
 pub enum GroupError {
     #[error("{0}")]
-    Config(String),
+    Config(#[from] concord_config::ConfigError),
     #[error("loop is detected in ProxyGroup, please check following ProxyGroups: {0:?}")]
     Cycle(Vec<String>),
     #[error("{group}: `use` or `proxies` missing")]

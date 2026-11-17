@@ -8,13 +8,14 @@ use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use concord_common::sync::lock;
 use concord_common::{Address, BoxStream, CoreError, DialCx, NodeDialer, PacketSession};
+use concord_config::ConfigError;
 use concord_config::filter::{Matcher, compile_pattern};
 use concord_config::group::{GroupDef, GroupKind, LbStrategy};
 use concord_config::profile::Profile;
 
 use super::{Entry, Outbounds};
 use crate::check::{Check, CheckParams, Source, Supervisor};
-use crate::deps::{Builtin, GroupDeps};
+use crate::deps::{Builtin, DEFAULT_TEST_TIMEOUT, GroupDeps};
 use crate::error::GroupError;
 use crate::group::{Group, GroupParts, Policy};
 use crate::health::StatusRanges;
@@ -22,6 +23,8 @@ use crate::node::{Ghost, Item, Leaf, Node};
 use crate::provider::ProxyProvider;
 use crate::shared::Shared;
 use crate::strategy::Strategy;
+
+const DEFAULT_MAX_FAILED_TIMES: u32 = 5;
 
 struct WeakNodes(Weak<Outbounds>);
 
@@ -47,12 +50,12 @@ impl NodeDialer for WeakNodes {
     }
 }
 
-fn compile_parts(text: &str, sep: char) -> Result<Vec<Matcher>, GroupError> {
+fn compile_parts(text: &str, sep: char) -> Result<Vec<Matcher>, ConfigError> {
     if text.is_empty() {
         return Ok(Vec::new());
     }
     text.split(sep)
-        .map(|part| compile_pattern(part, false).map_err(|err| GroupError::Config(err.message)))
+        .map(|part| compile_pattern(part, false))
         .collect()
 }
 
@@ -103,7 +106,7 @@ impl Builder<'_> {
         }
         let profile = self.profile;
         let Some(def) = profile.groups.iter().find(|def| def.name == name) else {
-            return Err(GroupError::Config(format!("proxy group {name} not found")));
+            return Err(ConfigError::new(format!("proxy group {name} not found")).into());
         };
         self.building.push(name.to_string());
         let group = self.build_group(def)?;
@@ -174,7 +177,7 @@ impl Builder<'_> {
             Some(leaf) => leaf,
             None => match self.table.get("COMPATIBLE") {
                 Some(Entry::Leaf(leaf)) => leaf.clone(),
-                _ => return Err(GroupError::Config("COMPATIBLE is missing".into())),
+                _ => return Err(ConfigError::new("COMPATIBLE is missing").into()),
             },
         };
         Ok(EmptyFallback {
@@ -256,23 +259,25 @@ impl Builder<'_> {
             own,
             uses,
             use_position: def.use_position.clone(),
-            filter: compile_parts(&def.filter, '`')?,
-            exclude_filter: compile_parts(&def.exclude_filter, '`')?,
+            filter: compile_parts(&def.filter, '`')
+                .map_err(|err| err.prefixed(&format!("{}: filter: ", def.name)))?,
+            exclude_filter: compile_parts(&def.exclude_filter, '`')
+                .map_err(|err| err.prefixed(&format!("{}: exclude-filter: ", def.name)))?,
             exclude_type: if def.exclude_type.is_empty() {
                 Vec::new()
             } else {
                 def.exclude_type.split('|').map(str::to_string).collect()
             },
             own_check,
-            test_timeout: Duration::from_millis(if def.timeout > 0 {
-                u64::from(def.timeout)
+            test_timeout: if def.timeout > 0 {
+                Duration::from_millis(u64::from(def.timeout))
             } else {
-                5000
-            }),
+                DEFAULT_TEST_TIMEOUT
+            },
             max_failed: if def.max_failed_times > 0 {
                 def.max_failed_times
             } else {
-                5
+                DEFAULT_MAX_FAILED_TIMES
             },
             shared,
         }))
@@ -304,10 +309,9 @@ impl Outbounds {
         for def in std::mem::take(&mut profile.proxies) {
             let name: Arc<str> = Arc::from(def.name.as_str());
             if table.contains_key(&name) {
-                return Err(GroupError::Config(format!(
-                    "proxy {} is the duplicate name",
-                    def.name
-                )));
+                return Err(
+                    ConfigError::new(format!("proxy {} is the duplicate name", def.name)).into(),
+                );
             }
             match factory.build_def(&def) {
                 Ok(outbound) => {
