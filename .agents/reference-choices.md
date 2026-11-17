@@ -26,6 +26,8 @@ commit. xtask's
   `go.mod`: `metacubex/sing v0.5.8`, `sing-shadowsocks2 v0.2.8`, `sing-vmess v0.2.5`, `sing-mux v0.3.12`,
   `smux 20260105030934`, `yamux 20250918083631`, `sing-quic 20260904234848`, `quic-go v0.61.1-0.20260727080200`,
   `sing-tun v0.4.28`, `wireguard-go 20250820062549`; mieru from `enfein/mieru/v3 v3.38.1`.
+- mihomo `v1.19.34` (`0455d0d2`), the peer CI fetches (`.github/actions/mihomo`) for the interop job and the
+  bench smoke: the first release with the Snell v6 listener (`f1f640b1`). Measurements keep `v1.19.33`.
 - mihomo Alpha `3c0d10a5`, Snell v6 wire/profile and adapter validation (`f1f640b1`, `d569d9eb`).
 - mihomo Alpha `3c0d10a5`, the reference for TCP JLS (`transport/jls/` and `adapter/outbound/jls.go`).
 - mihomo Alpha `3c0d10a5`, the xhttp HTTP/3 reference (`transport/xhttp/client.go`).

@@ -10,6 +10,7 @@ deliberate differences, what is left out, and what is supported only in part.
 | The profile is rejected, and the built-in empty config runs instead, routing everything direct | The profile is wrong: an unknown or malformed rule, an illegal field, a reference to something that does not exist |
 | The node is set aside with a warning | The node uses something Concord does not support, or its options cannot be built into a working node (a certificate that cannot be read, a malformed fingerprint pin, REALITY over `ws`). A group left empty by this, or whose selected node was set aside, refuses connections instead of falling back to another member; `empty-fallback` applies when given |
 | The key is ignored with a warning | It does not change where traffic goes |
+| The key is accepted with no effect and no warning | It changes nothing mihomo's results depend on either, or the host owns it: `geodata-loader` (how much of a `.dat` file mihomo keeps in memory while reading it) and `profile.store-selected` (see Not Supported) |
 
 A key that a node's type does not have in mihomo, such as `reality-opts` on `hysteria2` or `alpn` on `socks5`, is
 ignored with a warning, as is a `smux` that is not a map. A number mihomo keeps without checking its range, such as

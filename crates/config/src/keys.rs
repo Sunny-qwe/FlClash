@@ -7,7 +7,64 @@ pub enum Tier {
     T0,
     T1,
     T2,
+    Inert,
 }
+
+pub struct Tiers {
+    pub t0: &'static [&'static str],
+    pub t1: &'static [&'static str],
+    pub t2: &'static [&'static str],
+    pub inert: &'static [&'static str],
+}
+
+impl Tiers {
+    pub fn of(&self, key: &str) -> Option<Tier> {
+        [
+            (self.t0, Tier::T0),
+            (self.t1, Tier::T1),
+            (self.t2, Tier::T2),
+            (self.inert, Tier::Inert),
+        ]
+        .into_iter()
+        .find(|(keys, _)| keys.contains(&key))
+        .map(|(_, tier)| tier)
+    }
+}
+
+const fn tiers(
+    t0: &'static [&'static str],
+    t1: &'static [&'static str],
+    t2: &'static [&'static str],
+    inert: &'static [&'static str],
+) -> Tiers {
+    Tiers { t0, t1, t2, inert }
+}
+
+/// mihomo's `geodata.SetLoader` only picks how much of a `.dat` file stays in memory.
+const TOP_INERT: &[&str] = &["geodata-loader"];
+
+/// The host saves the selected nodes and hands them back with each profile it applies.
+const PROFILE_INERT: &[&str] = &["store-selected"];
+
+pub const TOP: Tiers = tiers(TOP_T0, TOP_T1, TOP_T2, TOP_INERT);
+pub const DNS: Tiers = tiers(DNS_T0, DNS_T1, &[], &[]);
+pub const FALLBACK_FILTER_TIERS: Tiers = tiers(FALLBACK_FILTER, &[], &[], &[]);
+pub const TUN: Tiers = tiers(TUN_T0, TUN_T1, TUN_T2, &[]);
+pub const SNIFFER: Tiers = tiers(SNIFFER_T0, SNIFFER_T1, SNIFFER_T2, &[]);
+pub const NTP: Tiers = tiers(NTP_KEYS, &[], &[], &[]);
+pub const GEOX: Tiers = tiers(GEOX_KEYS, &[], GEOX_T2, &[]);
+pub const PROFILE: Tiers = tiers(&["store-fake-ip"], &[], &[], PROFILE_INERT);
+
+pub const SECTIONS: [(&str, &Tiers); 8] = [
+    ("", &TOP),
+    ("dns", &DNS),
+    ("dns.fallback-filter", &FALLBACK_FILTER_TIERS),
+    ("tun", &TUN),
+    ("sniffer", &SNIFFER),
+    ("ntp", &NTP),
+    ("geox-url", &GEOX),
+    ("profile", &PROFILE),
+];
 
 pub const TOP_T0: &[&str] = &[
     "mixed-port",
@@ -40,7 +97,6 @@ pub const TOP_T0: &[&str] = &[
     "geox-url",
     "geo-auto-update",
     "geo-update-interval",
-    "geodata-loader",
     "profile",
     "mitm",
 ];
@@ -225,33 +281,7 @@ pub const NTP_KEYS: &[&str] = &[
 pub const GEOX_KEYS: &[&str] = &["mmdb", "asn", "geosite"];
 pub const GEOX_T2: &[&str] = &["geoip"];
 
-pub const PROFILE_KEYS: &[&str] = &["store-selected", "store-fake-ip"];
-
 pub const DEFAULT_GLOBAL_UA: &str = "clash.meta/1.10.0";
-
-pub fn top_tier(key: &str) -> Option<Tier> {
-    if TOP_T0.contains(&key) {
-        Some(Tier::T0)
-    } else if TOP_T1.contains(&key) {
-        Some(Tier::T1)
-    } else if TOP_T2.contains(&key) {
-        Some(Tier::T2)
-    } else {
-        None
-    }
-}
-
-pub fn tier_in(key: &str, t0: &[&str], t1: &[&str], t2: &[&str]) -> Option<Tier> {
-    if t0.contains(&key) {
-        Some(Tier::T0)
-    } else if t1.contains(&key) {
-        Some(Tier::T1)
-    } else if t2.contains(&key) {
-        Some(Tier::T2)
-    } else {
-        None
-    }
-}
 
 pub fn general_defaults() -> Map {
     let value = json!({

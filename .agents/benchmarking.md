@@ -499,3 +499,5 @@ tiers; select it with `--only gost-relay` and set `CONCORD_GOST3`.
 The relay server is launched with `nodelay=true`: mihomo and Concord both await CONNECT before application data.
 Its interop test is `gost_relay::gost_relay_round_trips_with_upstream_gost`; it covers authenticated relay,
 forward mode, TLS, smux, TCP and destination-bound UDP against upstream gost v3.
+CI's interop job runs both tests against gost v2.12.0 and v3.3.3, the releases they were written against
+(`.github/actions/gost`).

@@ -41,6 +41,9 @@ belongs in `.agents/`.
   even when a benchmark improves. An experiment that moves a number is evidence until its cause is known.
 - When Concord behaves differently from mihomo (wire defaults, padding, framing, queue sizes, edge cases), align it to
   mihomo unless the deviation is a clear improvement with no compatibility risk.
+- Whether a profile key takes effect is what `concord -t` reports and what `crates/config/tests/tiers.rs` proves for
+  its tier, never what a search for the field name suggests. A key joins the inert tier in `keys.rs` only when mihomo's
+  results ignore it too or the host owns it, with that reason beside its list and an entry in `docs/compatibility.md`.
 - Keep the layering: `cargo xtask check-layers` holds each crate to its exact dependencies and release `opt-level`.
   Every outbound socket goes through `concord_net::Sockets`; `clippy.toml` rejects the bypasses.
 - Before reporting a change done, run the full gate in `commands.md`. Name any check you could not run and why.

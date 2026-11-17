@@ -5,7 +5,7 @@ use crate::Map;
 use crate::crypt;
 use crate::error::{ConfigError, Result};
 use crate::general::General;
-use crate::keys::{self, Tier};
+use crate::keys::{self, Tier, Tiers};
 use crate::lenient::scalar_text;
 use crate::report::LoadReport;
 use crate::rule::RuleLines;
@@ -134,16 +134,9 @@ pub(crate) fn asks_for_something(value: &Value) -> bool {
     }
 }
 
-fn section_user_keys(
-    report: &mut LoadReport,
-    name: &str,
-    user: &Map,
-    t0: &[&str],
-    t1: &[&str],
-    t2: &[&str],
-) {
+fn section_user_keys(report: &mut LoadReport, name: &str, user: &Map, tiers: &Tiers) {
     for (key, value) in user {
-        match keys::tier_in(key, t0, t1, t2) {
+        match tiers.of(key) {
             Some(Tier::T2) if !asks_for_something(value) => {}
             Some(Tier::T2) => report.warn(
                 "unsupported_key",
@@ -232,60 +225,23 @@ impl RawConfig {
                     }
                 }
                 "hosts" => raw.hosts = expect_map(value, "hosts")?,
-                "dns" => {
-                    raw.dns = raw.section(
-                        "dns",
-                        value,
-                        keys::dns_defaults(),
-                        keys::DNS_T0,
-                        keys::DNS_T1,
-                        &[],
-                    )?
-                }
+                "dns" => raw.dns = raw.section("dns", value, keys::dns_defaults(), &keys::DNS)?,
                 "tun" => {
-                    raw.tun = raw.section(
-                        "tun",
-                        value,
-                        keys::tun_defaults(),
-                        keys::TUN_T0,
-                        keys::TUN_T1,
-                        keys::TUN_T2,
-                    )?;
+                    raw.tun = raw.section("tun", value, keys::tun_defaults(), &keys::TUN)?;
                 }
                 "sniffer" => {
-                    raw.sniffer = raw.section(
-                        "sniffer",
-                        value,
-                        keys::sniffer_defaults(),
-                        keys::SNIFFER_T0,
-                        keys::SNIFFER_T1,
-                        keys::SNIFFER_T2,
-                    )?;
+                    raw.sniffer =
+                        raw.section("sniffer", value, keys::sniffer_defaults(), &keys::SNIFFER)?;
                     stringify_sniff_ports(&mut raw.sniffer);
                 }
-                "ntp" => {
-                    raw.ntp =
-                        raw.section("ntp", value, keys::ntp_defaults(), keys::NTP_KEYS, &[], &[])?
-                }
+                "ntp" => raw.ntp = raw.section("ntp", value, keys::ntp_defaults(), &keys::NTP)?,
                 "geox-url" => {
-                    raw.geox_url = raw.section(
-                        "geox-url",
-                        value,
-                        keys::geox_defaults(),
-                        keys::GEOX_KEYS,
-                        &[],
-                        keys::GEOX_T2,
-                    )?;
+                    raw.geox_url =
+                        raw.section("geox-url", value, keys::geox_defaults(), &keys::GEOX)?;
                 }
                 "profile" => {
-                    raw.profile = raw.section(
-                        "profile",
-                        value,
-                        keys::profile_defaults(),
-                        keys::PROFILE_KEYS,
-                        &[],
-                        &[],
-                    )?;
+                    raw.profile =
+                        raw.section("profile", value, keys::profile_defaults(), &keys::PROFILE)?;
                 }
                 "experimental" => {
                     let user = expect_map(value, "experimental")?;
@@ -299,8 +255,8 @@ impl RawConfig {
                     let user = expect_map(value, "mitm")?;
                     raw.mitm = keys::overlay(&keys::mitm_defaults(), user);
                 }
-                other => match keys::top_tier(other) {
-                    Some(Tier::T0 | Tier::T1) => {
+                other => match keys::TOP.of(other) {
+                    Some(Tier::T0 | Tier::T1 | Tier::Inert) => {
                         scalars.insert(key, value);
                     }
                     Some(Tier::T2) => {
@@ -328,17 +284,9 @@ impl RawConfig {
         Ok(raw)
     }
 
-    fn section(
-        &mut self,
-        name: &str,
-        value: Value,
-        defaults: Map,
-        t0: &[&str],
-        t1: &[&str],
-        t2: &[&str],
-    ) -> Result<Map> {
+    fn section(&mut self, name: &str, value: Value, defaults: Map, tiers: &Tiers) -> Result<Map> {
         let user = expect_map(value, name)?;
-        section_user_keys(&mut self.report, name, &user, t0, t1, t2);
+        section_user_keys(&mut self.report, name, &user, tiers);
         if name == "dns"
             && let Some(Value::Object(filter)) = user.get("fallback-filter")
         {
@@ -346,9 +294,7 @@ impl RawConfig {
                 &mut self.report,
                 "dns.fallback-filter",
                 filter,
-                keys::FALLBACK_FILTER,
-                &[],
-                &[],
+                &keys::FALLBACK_FILTER_TIERS,
             );
         }
         Ok(keys::overlay(&defaults, user))

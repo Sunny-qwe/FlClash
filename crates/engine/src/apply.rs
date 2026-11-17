@@ -591,6 +591,7 @@ pub(crate) async fn build(
         .store(profile.general.unified_delay, Ordering::Relaxed);
 
     let warnings = warning_views(&profile, shared.android);
+    log_warnings(&warnings);
     let deferred_geo = program.deferred_geo().to_vec();
 
     let runtime = Arc::new(Runtime::new(
@@ -731,7 +732,8 @@ fn build_outbounds(
     .map_err(ApplyError::from)
 }
 
-fn warning_views(profile: &Profile, android: bool) -> Vec<WarningView> {
+/// Everything an apply of `profile` warns about; `concord -t` reports the same list.
+pub(crate) fn warning_views(profile: &Profile, android: bool) -> Vec<WarningView> {
     let mut warnings = profile
         .report
         .warnings
@@ -748,14 +750,17 @@ fn warning_views(profile: &Profile, android: bool) -> Vec<WarningView> {
         .collect::<Vec<_>>();
     warnings.extend(tun_congestion_warning(&profile.tun, android));
     warnings.extend(tun_offload_warning(&profile.tun, cfg!(target_os = "linux")));
-    for warning in &warnings {
+    warnings
+}
+
+fn log_warnings(warnings: &[WarningView]) {
+    for warning in warnings {
         if warning.level == "info" {
             tracing::info!("[Config] {}: {}", warning.path, warning.message);
         } else {
             tracing::warn!("[Config] {}: {}", warning.path, warning.message);
         }
     }
-    warnings
 }
 
 /// Android takes the congestion control from the host's VPN options, not the profile.

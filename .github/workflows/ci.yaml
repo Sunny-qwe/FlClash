@@ -84,6 +84,9 @@ jobs:
       - name: Check generated schema
         run: cargo run --locked -p xtask -- schema --check
 
+      - name: Check that the interop job has every peer
+        run: cargo run --locked -p xtask -- check-interop-peers
+
       - name: Check dependencies
         run: cargo deny check
 
@@ -162,7 +165,14 @@ jobs:
       - name: Fetch mihomo
         uses: ./.github/actions/mihomo
 
-      # The Hysteria v1 case needs its own server, which mihomo does not provide.
+      - name: Fetch gost
+        uses: ./.github/actions/gost
+
+      - name: Fetch Xray
+        uses: ./.github/actions/xray
+
+      # hysteria_talks_to_the_reference_server needs a server built from the Hysteria v1 core, which mihomo does
+      # not provide and this job does not build.
       - name: Run the interop tests
         run: >-
           cargo test --locked -p concord-proxy --test interop --

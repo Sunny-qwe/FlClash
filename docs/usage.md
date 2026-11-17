@@ -31,6 +31,16 @@ Concord loads the profile, opens the listeners it declares (`mixed-port`, `port`
 
 TUN needs the privileges the platform requires to create a device and change routes.
 
+### Checking A Profile
+
+```sh
+concord -t -c config.yaml
+```
+
+Loads the profile without running it and prints what applying it would warn about as JSON,
+`{"warnings": [{"level", "code", "path", "message"}]}`, or `{"error": "..."}` with exit status 1 when it does not
+load. `--android` checks it as the Android build loads it.
+
 ### Reloading
 
 On macOS and Linux, SIGHUP reads the profile again. A profile that fails validation leaves the running configuration

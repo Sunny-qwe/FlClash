@@ -13,7 +13,6 @@ file-lines crates/tls/src/record.rs 997 raised from 996: the key schedule lock i
 file-lines crates/tun/src/stack/driver.rs 833 raised from 809: the driver drains the adopted UDP sessions' replies each round, offers the queue poller to adopted sessions and polls with the waker that drops its own drain's wakes; no split planned yet
 fn-lines crates/config/src/profile.rs::load_raw 204
 fn-lines crates/config/src/profile.rs::resolve_groups 144 raised from 142: a group in `use` and GLOBAL as a member are refused at load, as mihomo does
-fn-lines crates/config/src/raw.rs::RawConfig::from_document 128
 fn-lines crates/config/src/rule.rs::build_cond 131 raised from 130: REMATCH-NAME uses the existing metadata list parser; back down when metadata predicates leave build_cond
 fn-lines crates/config/src/share_link/decode.rs::decode_line 294
 fn-lines crates/config/src/share_link/decode.rs::decode_vmess 172

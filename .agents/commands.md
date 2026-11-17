@@ -63,6 +63,9 @@ release `libconcord.so` of the other two Android ABIs against their budgets).
   After a change that moves one, `cargo test -p xtask ratchets::tests::regenerate -- --ignored` rewrites the file,
   keeping raise notes and marking a new growth `raised from <old>: ?` for you to replace with the reason.
 - `cargo xtask schema` rewrites `schema/config-schema.json` and `schema/api.json`; commit them with the change.
+- `cargo xtask mihomo-keys <mihomo checkout>` rewrites `schema/mihomo-keys.json`, the keys mihomo's
+  `config/config.go` decodes per section, from the reference commit it names. Rerun it when the reference moves;
+  `schema::tests::every_key_mihomo_decodes_has_a_tier` then fails on each new key until it has a tier.
 - A change to config parsing that changes output: `CONCORD_BLESS=1 cargo test -p concord-config --test golden`
   rewrites the golden files, and the diff is reviewed like code.
 - Clippy for Android (`--target aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android`) runs with `-A clippy::missing_const_for_thread_local`. On
@@ -72,10 +75,13 @@ release `libconcord.so` of the other two Android ABIs against their budgets).
   fails rather than passing silently. mihomo's Snell listener can lose a frame when its peek deadline falls between
   the two reads of that frame, so the Snell interop cases retry TCP once. Run the ones a change touches, for example
   `CONCORD_MIHOMO=<mihomo> cargo test -p concord-proxy --test interop -- --ignored`.
+  CI's `interop` job fetches each peer through an action in `.github/actions/` and skips a test only with a comment
+  that names it; `cargo xtask check-interop-peers` (in the lint job and `cargo test -p xtask`) holds the two together.
 
   | Variable | Peer |
   |---|---|
   | `CONCORD_MIHOMO` | An upstream mihomo binary, for protocol interop |
+  | `CONCORD_GOST2`, `CONCORD_GOST3` | gost v2 and v3, for the gost plugin and relay interop tests and the `ss-gost` and `gost-relay` bench cases |
   | `CONCORD_XRAY` | Xray-core for xhttp over HTTP/3 interop (`--test interop xhttp_h3_talks_to_xray -- --ignored`) and `vless-xhttp-h3-*` bench cases |
   | `CONCORD_WGSERVER` | A WireGuard test server |
   | `CONCORD_SSHD`, `CONCORD_SSH_KEYGEN` | OpenSSH |
