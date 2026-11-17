@@ -4,13 +4,24 @@ use std::net::IpAddr;
 use concord_common::RawSocket;
 use socket2::{Protocol, Socket};
 
+/// Whether a vectored TCP write goes through [`send_tcp_vectored`] instead of the stream's
+/// own: on Linux std's vectored TCP write uses writev, unlike its signal-safe scalar send.
+pub const SEND_TCP_VECTORED: bool = cfg!(any(target_os = "linux", target_os = "android"));
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn send_tcp_vectored(
     stream: &tokio::net::TcpStream,
     buffers: &[io::IoSlice<'_>],
 ) -> io::Result<usize> {
-    // std's vectored TCP write uses writev, unlike its signal-safe scalar send.
     socket2::SockRef::from(stream).send_vectored_with_flags(buffers, libc::MSG_NOSIGNAL)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+pub fn send_tcp_vectored(
+    _stream: &tokio::net::TcpStream,
+    _buffers: &[io::IoSlice<'_>],
+) -> io::Result<usize> {
+    Err(io::Error::from(io::ErrorKind::Unsupported))
 }
 
 #[cfg(unix)]

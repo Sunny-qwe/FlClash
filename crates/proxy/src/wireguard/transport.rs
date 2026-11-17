@@ -67,7 +67,7 @@ struct OutSocket {
     socket: Arc<UdpSocket>,
     v4: bool,
     #[cfg(any(target_os = "linux", target_os = "android"))]
-    gso: concord_platform::UdpGso,
+    batch: concord_platform::UdpBatch,
 }
 
 enum SendHalf {
@@ -107,7 +107,7 @@ impl Wire {
                         v4: socket.local_addr().is_ok_and(|local| local.is_ipv4()),
                         socket: socket.clone(),
                         #[cfg(any(target_os = "linux", target_os = "android"))]
-                        gso: concord_platform::UdpGso::default(),
+                        batch: concord_platform::UdpBatch::default(),
                     })
                     .collect(),
             ),
@@ -187,7 +187,7 @@ impl WireSend {
         loop {
             out.socket.writable().await?;
             match drain(packets, SEND_BATCH, |batch| {
-                concord_platform::send_udp_batch(&out.socket, batch, &out.gso)
+                out.batch.send(&out.socket, batch)
             }) {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
                 result => return result,
