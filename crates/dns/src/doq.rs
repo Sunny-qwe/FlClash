@@ -16,7 +16,6 @@ const MAX_RESPONSE: usize = 65_535;
 type Session = (quinn::Endpoint, quinn::Connection);
 
 /// `quic://`: one QUIC connection kept between queries, a stream per query.
-/// The socket comes from the `SocketFactory`; a tunnel route is not supported.
 pub(crate) struct DoqClient {
     host: String,
     port: u16,
@@ -60,17 +59,14 @@ impl DoqClient {
     }
 
     async fn dial(&self, cx: Cx) -> io::Result<quinn::Connection> {
-        let Some((sock, peer)) = self
+        let (socket, peer) = self
             .connector
             .quic_socket(&self.host, self.port, cx)
-            .await?
-        else {
-            return Err(io::Error::other("DNS over QUIC cannot go through a proxy"));
-        };
-        let mut endpoint = quinn::Endpoint::new(
+            .await?;
+        let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
             quinn::EndpointConfig::default(),
             None,
-            sock.into_std()?,
+            socket,
             Arc::new(quinn::TokioRuntime),
         )?;
         endpoint.set_default_client_config(self.config.clone());

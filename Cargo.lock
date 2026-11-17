@@ -1122,6 +1122,7 @@ dependencies = [
  "concord-net",
  "concord-platform",
  "concord-tls",
+ "concord-transport",
  "futures-util",
  "h3",
  "h3-quinn",

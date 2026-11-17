@@ -21,6 +21,7 @@ use rand::Rng;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use concord_tls::{QuicTls, TlsOptions, TrustStore};
+use concord_transport::SessionSocket;
 
 use crate::ctx::BuildError;
 use crate::link::EnvSlot;
@@ -34,7 +35,7 @@ use self::datagram::CappedFrame;
 use self::obfs::{Gecko, Salamander, WeChat, XPlus};
 pub(crate) use self::socket::Hop;
 use self::socket::Obfs;
-use self::socket::{SessionSocket, WrappedSocket};
+use self::socket::WrappedSocket;
 
 /// quic-go's starting point, which mihomo's QUIC clients share: a 100 ms initial RTT
 /// (`DefaultInitialRTT`) and Cubic with a 32-packet initial window

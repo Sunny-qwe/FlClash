@@ -745,6 +745,14 @@ mod tests {
         assert_eq!(up.params.get("ecs").map(String::as_str), Some("1.2.3.0/24"));
         let up = parse_upstream("1.1.1.1#proxy").unwrap();
         assert_eq!(up.proxy.as_deref(), Some("proxy"));
+        let up = parse_upstream("https://1.1.1.1/dns-query#DIRECT&h3=true").unwrap();
+        assert_eq!(up.proxy.as_deref(), Some("DIRECT"));
+        assert_eq!(up.params.get("h3").map(String::as_str), Some("true"));
+        let up = parse_upstream("quic://dns.adguard.com#DIRECT").unwrap();
+        assert_eq!(
+            (up.scheme, up.proxy.as_deref()),
+            (UpstreamScheme::Quic, Some("DIRECT"))
+        );
         let up = parse_upstream("tls://[2606:4700::1111]:853").unwrap();
         assert_eq!((up.host.as_str(), up.port), ("2606:4700::1111", 853));
     }

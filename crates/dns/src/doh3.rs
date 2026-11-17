@@ -25,8 +25,7 @@ struct Session {
     requests: Requests,
 }
 
-/// `https://` over HTTP/3. The QUIC socket comes from the `SocketFactory`, so a
-/// proxy route is not supported.
+/// `https://` over HTTP/3.
 pub(crate) struct Doh3Client {
     target: DohTarget,
     connector: Arc<Connector>,
@@ -71,19 +70,14 @@ impl Doh3Client {
     }
 
     async fn dial(&self, cx: Cx) -> io::Result<Requests> {
-        let Some((sock, peer)) = self
+        let (socket, peer) = self
             .connector
             .quic_socket(&self.target.host, self.target.port, cx)
-            .await?
-        else {
-            return Err(io::Error::other(
-                "DNS over HTTP/3 cannot go through a proxy",
-            ));
-        };
-        let mut endpoint = quinn::Endpoint::new(
+            .await?;
+        let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
             quinn::EndpointConfig::default(),
             None,
-            sock.into_std()?,
+            socket,
             Arc::new(quinn::TokioRuntime),
         )?;
         endpoint.set_default_client_config(self.config.clone());
