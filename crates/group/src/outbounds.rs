@@ -1,9 +1,11 @@
-use std::collections::{HashMap, HashSet};
+mod build;
+mod select;
+
+use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -12,26 +14,18 @@ use concord_common::{
     Address, BoxStream, CoreError, DialCx, DialEnv, FlowMeta, InboundInfo, InboundKind, Network,
     NodeDialer, Outbound, OutboundKind, PacketSession,
 };
-use concord_config::filter::{Matcher, compile_pattern};
-use concord_config::group::{GroupDef, GroupKind, LbStrategy};
-use concord_config::profile::Profile;
 use futures_util::future::join_all;
 use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
-use crate::check::{Check, CheckParams, Source, Supervisor};
-use crate::deps::{Builtin, GroupDeps};
-use crate::error::GroupError;
+use crate::check::{Check, Supervisor};
 use crate::first_write::FirstWrite;
-use crate::group::{Emptiness, Group, GroupParts, Pick, Policy, Touch};
-use crate::health::StatusRanges;
+use crate::group::{Group, Pick, Policy, Touch};
 use crate::node::{Ghost, Item, Leaf, Node};
 use crate::provider::{self, ProxyProvider};
-use crate::selection::Probing;
 use crate::shared::Shared;
-use crate::strategy::Strategy;
 
-const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+pub use self::select::{SelectOutcome, Staged};
 
 pub(crate) enum Entry {
     Leaf(Arc<Leaf>),
@@ -57,19 +51,6 @@ pub enum Resolved {
     PassRule,
     Rejected(Arc<str>),
     Unknown,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SelectOutcome {
-    pub message: String,
-    pub changed: bool,
-}
-
-pub struct Staged {
-    target: Arc<Group>,
-    proxy: String,
-    before: String,
-    probing: Option<Probing>,
 }
 
 pub fn load_balancer_exit(group: &str) -> String {
@@ -100,39 +81,6 @@ pub struct Outbounds {
     background: AtomicBool,
 }
 
-struct WeakNodes(Weak<Outbounds>);
-
-#[async_trait]
-impl NodeDialer for WeakNodes {
-    async fn dial_via(&self, name: &str, cx: &DialCx<'_>, dst: &Address) -> io::Result<BoxStream> {
-        match self.0.upgrade() {
-            Some(outbounds) => outbounds.dial_via(name, cx, dst).await,
-            None => Err(CoreError::UnknownNode(name.to_string()).into()),
-        }
-    }
-
-    async fn associate_via(
-        &self,
-        name: &str,
-        cx: &DialCx<'_>,
-        hint: &Address,
-    ) -> io::Result<Arc<dyn PacketSession>> {
-        match self.0.upgrade() {
-            Some(outbounds) => outbounds.associate_via(name, cx, hint).await,
-            None => Err(CoreError::UnknownNode(name.to_string()).into()),
-        }
-    }
-}
-
-fn compile_parts(text: &str, sep: char) -> Result<Vec<Matcher>, GroupError> {
-    if text.is_empty() {
-        return Ok(Vec::new());
-    }
-    text.split(sep)
-        .map(|part| compile_pattern(part, false).map_err(|err| GroupError::Config(err.message)))
-        .collect()
-}
-
 pub(crate) fn dummy_flow(dst: Address, network: Network) -> FlowMeta {
     FlowMeta {
         dscp: 0,
@@ -145,303 +93,7 @@ pub(crate) fn dummy_flow(dst: Address, network: Network) -> FlowMeta {
 
 type Dialed = (Arc<dyn Outbound>, Box<[Arc<str>]>, bool);
 
-struct Builder<'a> {
-    profile: &'a Profile,
-    shared: &'a Arc<Shared>,
-    table: HashMap<Arc<str>, Entry>,
-    providers: &'a [Arc<ProxyProvider>],
-    quarantined: Arc<HashSet<String>>,
-    building: Vec<String>,
-}
-
-impl Builder<'_> {
-    fn group(&mut self, name: &str) -> Result<Arc<Group>, GroupError> {
-        if let Some(Entry::Group(group)) = self.table.get(name) {
-            return Ok(group.clone());
-        }
-        if self.building.iter().any(|building| building == name) {
-            return Err(GroupError::Cycle(self.building.clone()));
-        }
-        let profile = self.profile;
-        let Some(def) = profile.groups.iter().find(|def| def.name == name) else {
-            return Err(GroupError::Config(format!("proxy group {name} not found")));
-        };
-        self.building.push(name.to_string());
-        let group = self.build_group(def)?;
-        self.building.pop();
-        self.table
-            .insert(group.name().clone(), Entry::Group(group.clone()));
-        Ok(group)
-    }
-
-    fn build_group(&mut self, def: &GroupDef) -> Result<Arc<Group>, GroupError> {
-        let mut own: Vec<Item> = Vec::new();
-        for name in &def.proxies {
-            let node = match self.table.get(name.as_str()) {
-                Some(Entry::Leaf(leaf)) => Node::Leaf(leaf.clone()),
-                Some(Entry::Ghost(_)) => continue,
-                Some(Entry::Group(group)) => Node::Group(group.clone()),
-                None if self.profile.groups.iter().any(|group| &group.name == name) => {
-                    Node::Group(self.group(name)?)
-                }
-                None => {
-                    return Err(GroupError::NotFound {
-                        group: def.name.clone(),
-                        name: name.clone(),
-                    });
-                }
-            };
-            own.push(Item::Live(node));
-        }
-        let mut uses = Vec::with_capacity(def.use_providers.len());
-        for name in &def.use_providers {
-            let provider = self
-                .providers
-                .iter()
-                .find(|provider| provider.name().as_ref() == name.as_str());
-            uses.push(provider.cloned().ok_or_else(|| GroupError::NotFound {
-                group: def.name.clone(),
-                name: name.clone(),
-            })?);
-        }
-        if !def.proxies.is_empty()
-            && self
-                .providers
-                .iter()
-                .any(|provider| provider.name().as_ref() == def.name.as_str())
-        {
-            return Err(GroupError::DuplicateProvider {
-                group: def.name.clone(),
-            });
-        }
-
-        let shared = self.shared.clone();
-        let url = if let Some(explicit_url) = &def.explicit_url {
-            explicit_url.clone()
-        } else {
-            uses.iter()
-                .map(|provider| provider.health_check_url().to_string())
-                .find(|url| !url.is_empty())
-                .unwrap_or_else(|| shared.default_url())
-        };
-        let expected = StatusRanges::parse(&def.expected_status).unwrap_or_default();
-
-        let fallback_leaf = match self.table.get(def.empty_fallback.as_str()) {
-            Some(Entry::Leaf(leaf)) => Some(leaf.clone()),
-            _ => None,
-        };
-        let explicit_fallback = def.explicit_empty_fallback && fallback_leaf.is_some();
-        let empty_fallback = match fallback_leaf {
-            Some(leaf) => leaf,
-            None => match self.table.get("COMPATIBLE") {
-                Some(Entry::Leaf(leaf)) => leaf.clone(),
-                _ => return Err(GroupError::Config("COMPATIBLE is missing".into())),
-            },
-        };
-
-        let policy = match def.kind {
-            GroupKind::Select => Policy::Select {
-                default_selected: Arc::from(def.default_selected.as_str()),
-            },
-            GroupKind::UrlTest => Policy::UrlTest {
-                tolerance: def.tolerance,
-            },
-            GroupKind::Fallback => Policy::Fallback,
-            GroupKind::LoadBalance => {
-                let in_user = def.hash_key == "in-user";
-                Policy::LoadBalance(match def.strategy {
-                    LbStrategy::ConsistentHashing => Strategy::ConsistentHashing { in_user },
-                    LbStrategy::RoundRobin => Strategy::RoundRobin(Mutex::new(0)),
-                    LbStrategy::StickySessions => Strategy::StickySessions {
-                        in_user,
-                        cache: Mutex::new(Default::default()),
-                    },
-                })
-            }
-        };
-
-        let own_check = if own.is_empty() {
-            None
-        } else {
-            let nodes = own
-                .iter()
-                .filter_map(|item| match item {
-                    Item::Live(node) => Some(node.clone()),
-                    Item::Ghost(_) => None,
-                })
-                .collect();
-            Some(Check::new(
-                CheckParams {
-                    id: format!("group:{}", def.name),
-                    url: url.clone(),
-                    timeout_ms: def.timeout,
-                    interval_secs: def.interval,
-                    lazy: def.lazy,
-                    expected: expected.clone(),
-                },
-                Source::Static(nodes),
-            ))
-        };
-        if let Some(explicit_url) = &def.explicit_url
-            && !uses.is_empty()
-        {
-            let interval =
-                if !own.is_empty() && def.kind != GroupKind::Select && def.interval_is_zero {
-                    0
-                } else {
-                    def.interval
-                };
-            for provider in &uses {
-                provider
-                    .check()
-                    .register_extra(explicit_url, &expected, &def.filter, interval);
-            }
-        }
-
-        Ok(Group::new(GroupParts {
-            name: Arc::from(def.name.as_str()),
-            policy,
-            url,
-            expected_text: def.expected_status.clone(),
-            expected,
-            disable_udp: def.disable_udp,
-            hidden: def.hidden,
-            icon: def.icon.clone(),
-            empty_fallback,
-            explicit_fallback,
-            refused: self.profile.refused_groups.contains(&def.name),
-            quarantined: self.quarantined.clone(),
-            own,
-            uses,
-            use_position: def.use_position.clone(),
-            filter: compile_parts(&def.filter, '`')?,
-            exclude_filter: compile_parts(&def.exclude_filter, '`')?,
-            exclude_type: if def.exclude_type.is_empty() {
-                Vec::new()
-            } else {
-                def.exclude_type.split('|').map(str::to_string).collect()
-            },
-            own_check,
-            test_timeout: Duration::from_millis(if def.timeout > 0 {
-                u64::from(def.timeout)
-            } else {
-                5000
-            }),
-            max_failed: if def.max_failed_times > 0 {
-                def.max_failed_times
-            } else {
-                5
-            },
-            shared,
-        }))
-    }
-}
-
 impl Outbounds {
-    /// Takes the proxy definitions out of `profile`, freeing each as its node is built.
-    pub fn build(profile: &mut Profile, deps: GroupDeps) -> Result<Arc<Outbounds>, GroupError> {
-        let shared = Shared::new(&deps);
-        let factory = deps.factory.clone();
-        let mut table: HashMap<Arc<str>, Entry> = HashMap::new();
-        let mut node_order: Vec<Arc<str>> = Vec::new();
-        for (name, which) in [
-            ("DIRECT", Builtin::Direct),
-            ("REJECT", Builtin::Reject),
-            ("REJECT-DROP", Builtin::RejectDrop),
-            ("COMPATIBLE", Builtin::Compatible),
-            ("PASS", Builtin::Pass),
-            ("PASS-RULE", Builtin::PassRule),
-        ] {
-            let name: Arc<str> = Arc::from(name);
-            table.insert(
-                name.clone(),
-                Entry::Leaf(Leaf::new(factory.builtin(which), None)),
-            );
-            node_order.push(name);
-        }
-        for def in std::mem::take(&mut profile.proxies) {
-            let name: Arc<str> = Arc::from(def.name.as_str());
-            if table.contains_key(&name) {
-                return Err(GroupError::Config(format!(
-                    "proxy {} is the duplicate name",
-                    def.name
-                )));
-            }
-            match factory.build_def(&def) {
-                Ok(outbound) => {
-                    table.insert(name.clone(), Entry::Leaf(Leaf::new(outbound, None)));
-                }
-                Err(failure) => {
-                    let message = format!("{}: {}", def.name, failure.message);
-                    profile
-                        .report
-                        .warn("proxy_quarantined", format!("proxies.{name}"), message);
-                    table.insert(
-                        name.clone(),
-                        Entry::Ghost(ghost(&def.name, def.kind.type_name(), &failure.message)),
-                    );
-                }
-            }
-            node_order.push(name);
-        }
-        let profile: &Profile = profile;
-        for item in profile
-            .quarantined
-            .iter()
-            .filter(|item| item.provider.is_none())
-        {
-            let name: Arc<str> = Arc::from(item.name.as_str());
-            table.insert(
-                name,
-                Entry::Ghost(ghost(&item.name, &item.kind, &item.reason)),
-            );
-        }
-
-        let mut providers = Vec::with_capacity(profile.proxy_providers.len());
-        for def in &profile.proxy_providers {
-            providers.push(ProxyProvider::new(def, shared.clone())?);
-        }
-
-        let mut builder = Builder {
-            profile,
-            shared: &shared,
-            table,
-            providers: &providers,
-            quarantined: Arc::new(profile.quarantined_names.clone()),
-            building: Vec::new(),
-        };
-        let mut groups = Vec::with_capacity(profile.groups.len());
-        for def in &profile.groups {
-            groups.push(builder.group(&def.name)?);
-        }
-        let table = builder.table;
-        let mut checks: Vec<Arc<Check>> = Vec::new();
-        for group in &groups {
-            checks.extend(group.own_check().cloned());
-        }
-        checks.extend(providers.iter().map(|provider| provider.check().clone()));
-
-        let outbounds = Arc::new_cyclic(|weak: &Weak<Outbounds>| {
-            let nodes: Arc<dyn NodeDialer> = Arc::new(WeakNodes(weak.clone()));
-            Outbounds {
-                env: ArcSwap::from_pointee((deps.env)(nodes)),
-                me: weak.clone(),
-                shared,
-                table,
-                groups,
-                builtin_global: profile.groups.iter().any(|def| def.builtin_global),
-                node_order,
-                providers,
-                checks,
-                supervisor: Mutex::new(Supervisor::default()),
-                last_picks: Mutex::new(HashMap::new()),
-                background: AtomicBool::new(false),
-            }
-        });
-        *lock(&outbounds.last_picks) = outbounds.pick_snapshot();
-        Ok(outbounds)
-    }
-
     pub fn env(&self) -> Arc<DialEnv> {
         self.env.load_full()
     }
@@ -662,109 +314,6 @@ impl Outbounds {
         }
     }
 
-    pub fn selections(&self) -> Vec<(String, String)> {
-        self.shared.selections.entries()
-    }
-
-    /// The saved pick of `group`, empty when it has none.
-    pub fn selection(&self, group: &str) -> String {
-        self.shared
-            .selections
-            .get(group)
-            .map(|proxy| proxy.to_string())
-            .unwrap_or_default()
-    }
-
-    pub async fn select(&self, group: &str, proxy: &str) -> SelectOutcome {
-        match self.stage_selection(group, proxy) {
-            Ok(staged) => {
-                self.probe_selection(&staged).await;
-                self.settle_selection(staged)
-            }
-            Err(failed) => failed,
-        }
-    }
-
-    /// Stores the pick, as mihomo's `Set` does before it tests a fallback
-    /// member (`fallback.go:139-145`); `settle_selection` tells whether routing
-    /// moved once `probe_selection` has run. A fallback member believed dead is
-    /// marked under test before it is stored, so routing in between cannot drop
-    /// the pick before the test decides.
-    pub fn stage_selection(&self, group: &str, proxy: &str) -> Result<Staged, SelectOutcome> {
-        let fail = |message: &str| SelectOutcome {
-            message: message.to_string(),
-            changed: false,
-        };
-        let target = match self.lookup(group) {
-            Some(Found::Node(Node::Group(target))) => target,
-            Some(_) => return Err(fail("Group is not selectable")),
-            None => return Err(fail("Not found group")),
-        };
-        if !target.is_selectable() {
-            return Err(fail("Group is not selectable"));
-        }
-        let before = target.now(&dummy_flow(Address::new("", 0), Network::Tcp));
-        let store = &self.shared.selections;
-        let mut probing = None;
-        if proxy.is_empty() {
-            if matches!(target.policy(), Policy::Select { .. }) {
-                store.set(group, "");
-            } else {
-                store.remove(group);
-            }
-        } else {
-            let members = target.members();
-            let listed = members.find(proxy).is_some()
-                || (members.emptiness() == Emptiness::Fallback
-                    && target.empty_fallback().name().as_ref() == proxy);
-            if !listed {
-                return Err(fail("proxy not exist"));
-            }
-            if matches!(target.policy(), Policy::Fallback)
-                && members
-                    .find(proxy)
-                    .is_some_and(|node| !node.health().alive_for(target.url()))
-            {
-                probing = Some(store.probing(target.name()));
-            }
-            store.set(group, proxy);
-        }
-        Ok(Staged {
-            target,
-            proxy: proxy.to_string(),
-            before,
-            probing,
-        })
-    }
-
-    /// A fallback member believed dead is tested before traffic is routed to
-    /// it. Holds no lock, so a slow probe never delays another change.
-    pub async fn probe_selection(&self, staged: &Staged) {
-        let target = &staged.target;
-        if staged.probing.is_some()
-            && let Some(node) = target.members().find(&staged.proxy)
-        {
-            self.url_test_node(node, target.url(), target.expected(), PROBE_TIMEOUT)
-                .await;
-        }
-    }
-
-    pub fn settle_selection(&self, staged: Staged) -> SelectOutcome {
-        let Staged {
-            target,
-            before,
-            probing,
-            ..
-        } = staged;
-        drop(probing);
-        let changed = target.now(&dummy_flow(Address::new("", 0), Network::Tcp)) != before;
-        self.refresh_picks();
-        SelectOutcome {
-            message: String::new(),
-            changed,
-        }
-    }
-
     pub fn reset_sessions(&self) {
         for entry in self.table.values() {
             if let Entry::Leaf(leaf) = entry {
@@ -955,15 +504,6 @@ impl Outbounds {
             self.shared.report_loop(&Arc::from(name.as_str()));
         }
     }
-}
-
-fn ghost(name: &str, kind: &str, reason: &str) -> Arc<Ghost> {
-    Arc::new(Ghost {
-        name: Arc::from(name),
-        kind: Arc::from(kind),
-        reason: Arc::from(reason),
-        provider: None,
-    })
 }
 
 #[async_trait]
