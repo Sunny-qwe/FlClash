@@ -12,13 +12,6 @@ pub struct Credential {
     pub pass: String,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum GeodataLoader {
-    Standard,
-    #[default]
-    MemConservative,
-}
-
 /// Which browser origins may call the external controller, as mihomo's `external-controller-cors`.
 /// No origin at all refuses every cross-origin request; a profile cannot ask for that, since mihomo
 /// reads an empty `allow-origins` as every origin.
@@ -76,7 +69,6 @@ pub struct General {
     pub global_ua: String,
     pub geo_auto_update: bool,
     pub geo_update_interval: u32,
-    pub geodata_loader: GeodataLoader,
     pub external_controller: String,
     pub secret: String,
     pub external_controller_cors: ControllerCors,
@@ -107,7 +99,6 @@ impl Default for General {
             global_ua: DEFAULT_GLOBAL_UA.to_string(),
             geo_auto_update: false,
             geo_update_interval: 24,
-            geodata_loader: GeodataLoader::MemConservative,
             external_controller: String::new(),
             secret: String::new(),
             external_controller_cors: ControllerCors::default(),
@@ -179,10 +170,7 @@ impl General {
         general.geo_auto_update = f.boolean("geo-auto-update")?;
         general.geo_update_interval =
             f.loose("geo-update-interval", general.geo_update_interval)?;
-        general.geodata_loader = match f.string("geodata-loader")?.to_ascii_lowercase().as_str() {
-            "standard" => GeodataLoader::Standard,
-            _ => GeodataLoader::MemConservative,
-        };
+        f.string("geodata-loader")?;
         general.external_controller = f.string("external-controller")?;
         general.secret = f.string("secret")?;
         if let Some(mut cors) = f.sub("external-controller-cors")? {

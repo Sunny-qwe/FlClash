@@ -31,7 +31,7 @@ use concord_proxy::BuildCtx;
 use concord_rules::geo::{GeoError, GeoFile, GeoStore};
 use concord_rules::{CompileEnv, CompileError, RouteProgram, RuleSetStore};
 use concord_tls::{SystemRoots, TrustStore, parse_certificates};
-use concord_tun::Prefix;
+use concord_tun::{Congestion, Prefix};
 use concord_tunnel::sniff::{Dispatcher, DispatcherConfig, SnifferEntry, SnifferKind};
 use concord_tunnel::{Runtime, Tunnel};
 use rustls_pki_types::CertificateDer;
@@ -591,7 +591,7 @@ pub(crate) async fn build(
         .unified_delay
         .store(profile.general.unified_delay, Ordering::Relaxed);
 
-    let warnings = warning_views(&profile);
+    let warnings = warning_views(&profile, shared.android);
     let deferred_geo = program.deferred_geo().to_vec();
 
     let runtime = Arc::new(Runtime::new(
@@ -733,8 +733,8 @@ fn build_outbounds(
     .map_err(ApplyError::from)
 }
 
-fn warning_views(profile: &Profile) -> Vec<WarningView> {
-    let warnings = profile
+fn warning_views(profile: &Profile, android: bool) -> Vec<WarningView> {
+    let mut warnings = profile
         .report
         .warnings
         .iter()
@@ -748,6 +748,7 @@ fn warning_views(profile: &Profile) -> Vec<WarningView> {
             message: warning.message.clone(),
         })
         .collect::<Vec<_>>();
+    warnings.extend(tun_congestion_warning(&profile.tun, android));
     for warning in &warnings {
         if warning.level == "info" {
             tracing::info!("[Config] {}: {}", warning.path, warning.message);
@@ -756,6 +757,20 @@ fn warning_views(profile: &Profile) -> Vec<WarningView> {
         }
     }
     warnings
+}
+
+/// Android takes the congestion control from the host's VPN options, not the profile.
+fn tun_congestion_warning(tun: &TunConfig, android: bool) -> Option<WarningView> {
+    let name = &tun.congestion_controller;
+    if !tun.enable || android || Congestion::parse(name).1 {
+        return None;
+    }
+    Some(WarningView {
+        level: "warning",
+        code: "not_applied",
+        path: "tun.congestion-controller".to_string(),
+        message: format!("{name} is not available, so cubic runs instead"),
+    })
 }
 
 fn user_agent(general: &General) -> String {
@@ -789,5 +804,27 @@ mod tests {
         general.disable_keep_alive = true;
         assert!(!listen_spec(&general, false).tcp_keepalive);
         assert!(sock_opts(&general).disable_keep_alive);
+    }
+
+    #[test]
+    fn an_unavailable_tun_congestion_control_is_reported() {
+        let mut tun = TunConfig {
+            enable: true,
+            congestion_controller: "bbr".into(),
+            ..TunConfig::default()
+        };
+        let warning = tun_congestion_warning(&tun, false).unwrap();
+        assert_eq!(
+            (warning.code, warning.path.as_str()),
+            ("not_applied", "tun.congestion-controller")
+        );
+        assert!(tun_congestion_warning(&tun, true).is_none());
+        for name in ["", "cubic", "Reno"] {
+            tun.congestion_controller = name.into();
+            assert!(tun_congestion_warning(&tun, false).is_none(), "{name}");
+        }
+        tun.congestion_controller = "bbr3".into();
+        tun.enable = false;
+        assert!(tun_congestion_warning(&tun, false).is_none());
     }
 }

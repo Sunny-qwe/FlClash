@@ -63,7 +63,6 @@ pub struct Profile {
     /// of them at once cost several times the text.
     pub rules: RuleLines,
     pub sub_rules: IndexMap<String, Vec<RuleDef>>,
-    pub store_selected: bool,
     pub store_fake_ip: bool,
     pub dialer_ip4p_convert: bool,
     pub lan_listener_refused: bool,
@@ -89,13 +88,10 @@ impl Profile {
             tun: TunConfig::default(),
             sniffer: SnifferConfig::default(),
             hosts: HostsConfig::default(),
-            geo: GeoConfig::from_maps(&General::default(), &Map::new()).unwrap_or(GeoConfig {
+            geo: GeoConfig::from_map(&Map::new()).unwrap_or(GeoConfig {
                 mmdb_url: String::new(),
                 asn_url: String::new(),
                 geosite_url: String::new(),
-                auto_update: false,
-                update_interval_hours: 24,
-                loader: crate::general::GeodataLoader::MemConservative,
             }),
             ntp: NtpConfig {
                 enable: false,
@@ -114,7 +110,6 @@ impl Profile {
             rule_providers: Vec::new(),
             rules: RuleLines::default(),
             sub_rules: IndexMap::new(),
-            store_selected: false,
             store_fake_ip: false,
             dialer_ip4p_convert: false,
             lan_listener_refused: false,
@@ -711,7 +706,7 @@ pub fn load_raw(mut raw: RawConfig, options: &LoadOptions) -> Result<Profile> {
     let (ntp, ntp_notes) = NtpConfig::read(&raw.ntp)?;
     let notes = [general_notes, dns_notes, ntp_notes].concat();
     report.warn_ignored("", &notes);
-    let geo = GeoConfig::from_maps(&general, &raw.geox_url)?;
+    let geo = GeoConfig::from_map(&raw.geox_url)?;
     let hosts = parse_hosts(&raw.hosts, &mut report)?;
 
     if !options.android {
@@ -905,7 +900,6 @@ pub fn load_raw(mut raw: RawConfig, options: &LoadOptions) -> Result<Profile> {
         proxy_providers,
         rule_providers,
         sub_rules,
-        store_selected: flag(&raw.profile, "store-selected"),
         store_fake_ip: flag(&raw.profile, "store-fake-ip"),
         dialer_ip4p_convert: flag(&raw.experimental, "dialer-ip4p-convert"),
         lan_listener_refused,

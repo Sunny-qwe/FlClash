@@ -107,6 +107,8 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
 - A rule provider's `path-in-bundle`: `BundleMRS.7z` is not read, so a provider whose local file is missing loads
   from its `url` or fails to load, as in mihomo when the home directory has no `BundleMRS.7z`. The key is ignored
   with a warning.
+- `profile.store-selected`: Concord does not save the selected nodes itself. The host saves them and hands them back
+  with each profile it applies, so the key is accepted and has no effect.
 - The `relay` group type, which mihomo also removed; use `dialer-proxy`.
 - Shadowsocks ciphers that only `sing-shadowsocks2` has: `aes-192-gcm`, `aes-192-ccm`, `chacha8-ietf-poly1305`,
   `xchacha8-ietf-poly1305`, `rabbit128-poly1305`, `aegis-128l`, `aegis-256`, `aez-384`, `deoxys-ii-256-128`,

@@ -3,18 +3,10 @@ use crate::error::{ConfigError, Result};
 use crate::lenient::Fields;
 use crate::net::{IpCidr, parse_cidr};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum TunStack {
-    #[default]
-    Userspace,
-    System,
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TunConfig {
     pub enable: bool,
     pub device: String,
-    pub stack: TunStack,
     pub stack_name: String,
     pub auto_route: bool,
     pub auto_detect_interface: bool,
@@ -64,15 +56,15 @@ impl TunConfig {
     pub fn from_map(map: &Map) -> Result<TunConfig> {
         let mut f = Fields::new(map, "tun", false);
         let stack_name = f.string("stack")?;
-        let stack = match stack_name.to_ascii_lowercase().as_str() {
-            "" | "gvisor" | "mips" | "mixed" => TunStack::Userspace,
-            "system" => TunStack::System,
-            _ => return Err(ConfigError::new("invalid tun stack")),
-        };
+        if !matches!(
+            stack_name.to_ascii_lowercase().as_str(),
+            "" | "gvisor" | "mips" | "mixed" | "system"
+        ) {
+            return Err(ConfigError::new("invalid tun stack"));
+        }
         Ok(TunConfig {
             enable: f.boolean("enable")?,
             device: f.string("device")?,
-            stack,
             stack_name,
             auto_route: f.boolean("auto-route")?,
             auto_detect_interface: f.boolean("auto-detect-interface")?,
@@ -112,14 +104,13 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn defaults_and_stack_mapping() {
+    fn defaults_and_stack_names() {
         let tun = TunConfig::from_map(&tun_defaults()).unwrap();
         assert!(!tun.enable && tun.auto_route && tun.auto_detect_interface);
-        assert_eq!(tun.stack, TunStack::Userspace);
         assert_eq!(tun.dns_hijack, ["0.0.0.0:53"]);
         let mut map = tun_defaults();
         map.insert("stack".into(), json!("System"));
-        assert_eq!(TunConfig::from_map(&map).unwrap().stack, TunStack::System);
+        assert_eq!(TunConfig::from_map(&map).unwrap().stack_name, "System");
         map.insert("stack".into(), json!("bogus"));
         assert!(TunConfig::from_map(&map).is_err());
     }
