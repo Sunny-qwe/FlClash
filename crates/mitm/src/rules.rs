@@ -684,10 +684,17 @@ impl Rules {
             .collect()
     }
 
-    pub(crate) fn script_for(&self, url: &str, response: bool) -> Option<&std::sync::Arc<Script>> {
+    /// The first script whose URL and conditions match; one whose conditions do not
+    /// leaves the turn to the next.
+    pub(crate) fn script_for(
+        &self,
+        url: &str,
+        response: bool,
+        heads: &Heads<'_>,
+    ) -> Option<&std::sync::Arc<Script>> {
         self.scripts
             .iter()
-            .find(|script| script.matches_http(url, response))
+            .find(|script| script.matches_http(url, response) && heads.allow(&script.conditions))
     }
 }
 

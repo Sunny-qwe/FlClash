@@ -5,8 +5,8 @@ use std::cell::OnceCell;
 use crate::pattern::Pattern;
 use crate::text::Field;
 
-const REQUEST_HEAD: &str = "request-head";
-const RESPONSE_HEAD: &str = "response-head";
+pub(crate) const REQUEST_HEAD: &str = "request-head";
+pub(crate) const RESPONSE_HEAD: &str = "response-head";
 
 /// Concord's `request-head <re>` and `response-head <re>` after a header or body rewrite's
 /// URL: patterns over a head as [crate::headers::head_text] writes it.

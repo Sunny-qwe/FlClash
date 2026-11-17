@@ -194,6 +194,9 @@ A `map-local` line takes `request-head <re>` after its URL as well. `request-bod
 Loon's `mock-request-body`, takes `map-local`'s parameters but `status-code`: the first line whose URL and condition
 match sends its data upstream in place of the request's body, a request that had none included, with `header=`
 set over the request's headers; the header and body rewrites and the script after it see the mocked body.
+An `http-request` or `http-response` script takes the same conditions as parameters, `request-head=<re>` and on
+an `http-response` script `response-head=<re>`. The first script whose URL and conditions match runs, so one whose
+conditions fail leaves the turn to the next.
 `client-source-address` takes Surge's comma-separated addresses and CIDRs, `-` before one left out, and decrypts
 only for the clients it names, all of them while it is empty. Under a TUN the device's own apps reach Concord from the
 TUN's address, so a list that names only other clients leaves them as they are, as Surge does on a Mac.

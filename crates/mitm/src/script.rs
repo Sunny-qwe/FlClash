@@ -10,6 +10,7 @@ use concord_common::sync::lock;
 use sha2::{Digest, Sha256};
 
 use crate::cron::CronSchedule;
+use crate::heads::{HeadConditions, REQUEST_HEAD, RESPONSE_HEAD};
 use crate::pattern::Pattern;
 use crate::rules::read_resource;
 use crate::text::{quote, split_fields};
@@ -216,6 +217,7 @@ pub struct Script {
     pub path: String,
     pub kind: ScriptKind,
     pattern: Option<Pattern>,
+    pub(crate) conditions: HeadConditions,
     pub requires_body: bool,
     pub binary_body: bool,
     pub max_size: i64,
@@ -301,6 +303,7 @@ pub(crate) fn parse_script(
         path,
         kind,
         pattern: None,
+        conditions: HeadConditions::default(),
         requires_body: false,
         binary_body: false,
         max_size: 0,
@@ -311,7 +314,9 @@ pub(crate) fn parse_script(
         argument: None,
     };
     match kind {
-        ScriptKind::HttpRequest | ScriptKind::HttpResponse => script.read_http(&params)?,
+        ScriptKind::HttpRequest | ScriptKind::HttpResponse => {
+            script.read_http(&params, kind == ScriptKind::HttpResponse)?
+        }
         ScriptKind::Cron => {
             script.cronexp = param("cronexp");
             if script.cronexp.is_empty() {
@@ -360,6 +365,7 @@ struct ScriptDraft {
     path: String,
     kind: ScriptKind,
     pattern: Option<Pattern>,
+    conditions: HeadConditions,
     requires_body: bool,
     binary_body: bool,
     max_size: i64,
@@ -371,10 +377,17 @@ struct ScriptDraft {
 }
 
 impl ScriptDraft {
-    fn read_http(&mut self, params: &Params) -> Result<(), String> {
+    fn read_http(&mut self, params: &Params, response: bool) -> Result<(), String> {
         let pattern = params.get("pattern").cloned().unwrap_or_default();
         if pattern.is_empty() {
             return Err("pattern is missing".to_string());
+        }
+        for keyword in [REQUEST_HEAD, RESPONSE_HEAD] {
+            if let Some(condition) = params.get(keyword) {
+                self.conditions
+                    .set(keyword, Some(condition), response)
+                    .map_err(String::from)?;
+            }
         }
         self.requires_body = script_bool(params, "requires-body")?;
         self.binary_body = script_bool(params, "binary-body-mode")?;
@@ -401,6 +414,7 @@ impl ScriptDraft {
             path: self.path,
             kind: self.kind,
             pattern: self.pattern,
+            conditions: self.conditions,
             requires_body: self.requires_body,
             binary_body: self.binary_body,
             max_size: self.max_size,
@@ -828,6 +842,25 @@ mod tests {
     }
 
     #[test]
+    fn script_lines_read_head_conditions() {
+        let (_home, resources, host) = setup();
+        let script = parse_script(
+            r#"Ads = type=http-response,pattern=^https://a\.com/,request-head="^(?=POST )",response-head=" 200\r\n",script-path=a.js"#,
+            &resources,
+            &host,
+        )
+        .unwrap();
+        assert!(script.conditions.request.is_some() && script.conditions.response.is_some());
+        let plain = parse_script(
+            r"Ads = type=http-response,pattern=^https://a\.com/,script-path=a.js",
+            &resources,
+            &host,
+        )
+        .unwrap();
+        assert!(plain.conditions.request.is_none() && plain.conditions.response.is_none());
+    }
+
+    #[test]
     fn script_lines_reject_what_they_cannot_run() {
         let (_home, resources, host) = setup();
         let cases = [
@@ -890,6 +923,14 @@ mod tests {
             (
                 "X = type=http-request,pattern=a,script-path=a.js,requires-body=sometimes",
                 "invalid requires-body",
+            ),
+            (
+                "X = type=http-request,pattern=a,script-path=a.js,response-head=200",
+                "response-head needs an http-response rule",
+            ),
+            (
+                r#"X = type=http-response,pattern=a,script-path=a.js,request-head="(""#,
+                "parenthesis",
             ),
         ];
         for (line, want) in cases {

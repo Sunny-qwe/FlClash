@@ -59,13 +59,14 @@ impl Session {
         let rules = &self.core.config.rules;
         let max_body = self.core.config.limits.max_body_size;
         let address = out.url.raw.clone();
-        let (header_rules, mock, body_rules) = {
+        let (header_rules, mock, body_rules, script) = {
             let request = || request_text(out, target.version);
             let heads = Heads::new(Some(&request), None);
             (
                 rules.header_rewrites_for(&address, false, &heads),
                 rules.request_mock(&address, &heads),
                 rules.body_rewrites_for(&address, false, &heads),
+                rules.script_for(&address, false, &heads),
             )
         };
         let mut rewritten = false;
@@ -106,7 +107,7 @@ impl Session {
                 }
             }
         }
-        if let Some(script) = rules.script_for(&address, false) {
+        if let Some(script) = script {
             self.run_request_script(out, target, script).await;
         }
         if !grpc && self.rewrites_response_body(&out.url.raw) {
@@ -117,11 +118,10 @@ impl Session {
 
     fn rewrites_response_body(&self, address: &str) -> bool {
         let rules = &self.core.config.rules;
-        !rules
-            .body_rewrites_for(address, true, &Heads::new(None, None))
-            .is_empty()
+        let heads = Heads::new(None, None);
+        !rules.body_rewrites_for(address, true, &heads).is_empty()
             || rules
-                .script_for(address, true)
+                .script_for(address, true, &heads)
                 .is_some_and(|script| script.requires_body)
     }
 
@@ -178,7 +178,7 @@ impl Session {
         let rules = &self.core.config.rules;
         let max_body = self.core.config.limits.max_body_size;
         let address = sent.url.raw.clone();
-        let (header_rules, body_rules) = {
+        let (header_rules, body_rules, script) = {
             let request = || {
                 let line = format!(
                     "{} {} {}",
@@ -191,6 +191,7 @@ impl Session {
             (
                 rules.header_rewrites_for(&address, true, &heads),
                 rules.body_rewrites_for(&address, true, &heads),
+                rules.script_for(&address, true, &heads),
             )
         };
         let mut rewritten = false;
@@ -224,7 +225,7 @@ impl Session {
             target.cap.note("body-rewrite", PHASE_RESPONSE, "");
             tracing::info!("[MITM] rewrite response body of {address}");
         }
-        if let Some(script) = rules.script_for(&address, true) {
+        if let Some(script) = script {
             self.run_response_script(head, body, sent, target, script)
                 .await?;
         }
