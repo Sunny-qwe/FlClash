@@ -1,6 +1,6 @@
 # Behaviour checklist
 
-An embedding host relies on behaviour that no method signature shows. This file lists 45 such items and the test that holds each one. The items were drawn up when Concord was checked against the Go core's control protocol, so their numbering and the method and field names in the Behaviour column are that protocol's; `schema/api.json` is Concord's protocol, and the last section maps each item to its test on it. Tests are named as `crate::path::name`; a name without a crate prefix lives in the same file as the row above it.
+An embedding host relies on behaviour that no method signature shows. This file lists 50 such items and the test that holds each one. The items were drawn up when Concord was checked against the Go core's control protocol, so their numbering and the method and field names in the Behaviour column are that protocol's; `schema/api.json` is Concord's protocol, and the last section maps each item to its test on it. Tests are named as `crate::path::name`; a name without a crate prefix lives in the same file as the row above it.
 
 Status values:
 

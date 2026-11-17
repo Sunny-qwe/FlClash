@@ -24,7 +24,7 @@ drops `/EHsc`.
 
 A change is done when all of these pass. `.github/workflows/ci.yaml` runs them on Linux with `--locked`, split into
 parallel jobs, and fails if they changed a tracked file; it also runs clippy and the tests on macOS, clippy for the
-three Android ABIs FlClash ships and for Windows (the Windows job does not fail the run yet), the arm64-v8a release
+three Android ABIs FlClash ships and for Windows (the Windows job does not fail the run), the arm64-v8a release
 `libconcord.so` against its size budget, and the interop tests that need only mihomo or OpenSSH. Run the clippy of
 every platform whose code the change touches.
 
