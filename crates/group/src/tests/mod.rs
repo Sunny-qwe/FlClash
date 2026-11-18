@@ -3,6 +3,7 @@ mod delays;
 mod dialing;
 mod groups;
 mod providers;
+mod public_suffix;
 mod views;
 
 use std::collections::HashMap;

@@ -8,6 +8,7 @@ use concord_common::{Address, FlowMeta};
 use tokio::time::{Duration, Instant};
 
 use crate::node::Node;
+use crate::public_suffix;
 
 const STICKY_TTL: Duration = Duration::from_secs(600);
 const STICKY_SIZE: usize = 1000;
@@ -177,7 +178,7 @@ fn destination_key(dst: &Address, host: Option<&str>) -> String {
         if host.parse::<IpAddr>().is_ok() {
             return host.to_string();
         }
-        if let Some(domain) = registrable_domain(host) {
+        if let Some(domain) = public_suffix::registrable_domain(host) {
             return domain;
         }
     }
@@ -185,20 +186,6 @@ fn destination_key(dst: &Address, host: Option<&str>) -> String {
         Address::Socket(addr) => addr.ip().to_string(),
         Address::Domain(..) => String::new(),
     }
-}
-
-/// Go's `publicsuffix.EffectiveTLDPlusOne`: the full public suffix list with
-/// its private section, `*` for unknown TLDs, and no answer for a host that is
-/// itself a suffix or that has an empty label or a trailing dot.
-fn registrable_domain(host: &str) -> Option<String> {
-    if host.starts_with('.') || host.ends_with('.') || host.contains("..") {
-        return None;
-    }
-    let host = host.to_ascii_lowercase();
-    let domain = psl::domain(host.as_bytes())?;
-    std::str::from_utf8(domain.as_bytes())
-        .ok()
-        .map(str::to_owned)
 }
 
 #[cfg(test)]

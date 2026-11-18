@@ -1224,6 +1224,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "idna",
  "indexmap",
  "md-5 0.10.6",
  "psl",
@@ -6450,6 +6451,7 @@ version = "0.1.0"
 dependencies = [
  "concord-config",
  "concord-proto",
+ "idna",
  "proc-macro2",
  "quote",
  "serde",

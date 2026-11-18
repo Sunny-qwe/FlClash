@@ -9,6 +9,7 @@ description = "Repository checks and the benchmark driver for Concord"
 repository.workspace = true
 
 [dependencies]
+idna = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 concord-proto = { workspace = true }

@@ -66,6 +66,12 @@ release `libconcord.so` of the other two Android ABIs against their budgets).
 - `cargo xtask mihomo-keys <mihomo checkout>` rewrites `schema/mihomo-keys.json`, the keys mihomo's
   `config/config.go` decodes per section, from the reference commit it names. Rerun it when the reference moves;
   `schema::tests::every_key_mihomo_decodes_has_a_tier` then fails on each new key until it has a tier.
+- `cargo xtask public-suffix` rewrites the public suffix table in `crates/group/data/public-suffix/` from the
+  `public_suffix_list.dat` beside it; xtask's `public_suffix` test fails when the table, the list or the sha256 in
+  `VERSION` disagree. To move the list, take `public_suffix_list.dat` from a publicsuffix/list commit, record that
+  commit and the file's sha256 in `VERSION`, run the command, and pin `psl` in `Cargo.toml` to the release built
+  from the same list (its `data/rules.txt` holds the same rules) and record that version in `VERSION`:
+  `concord-group`'s `public_suffix` tests compare every rule against it. One commit, apart from code changes.
 - A change to config parsing that changes output: `CONCORD_BLESS=1 cargo test -p concord-config --test golden`
   rewrites the golden files, and the diff is reviewed like code.
 - Clippy for Android (`--target aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android`) runs with `-A clippy::missing_const_for_thread_local`. On

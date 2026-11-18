@@ -12,6 +12,7 @@ pub mod http;
 mod node;
 mod outbounds;
 mod provider;
+mod public_suffix;
 mod selection;
 mod shared;
 mod strategy;

@@ -15,6 +15,8 @@ behaviour closely enough for its licence to matter, the project is listed here w
 | FlClash's Go core (`core/` in the FlClash repository) | GPL-3.0-or-later | The method set, event semantics and response handling behind `crates/proto`, `crates/api` and `crates/engine`. |
 | uTLS (`u_parrots.go`, via the MetaCubeX fork v1.8.8) | BSD-3-Clause, Copyright 2017 Google Inc.; repository licence Copyright (c) 2009 The Go Authors | ClientHello fingerprint tables transcribed into `crates/tls/src/fingerprints.rs`. |
 | golang.org/x/net `http2/hpack` | BSD-3-Clause, Copyright 2009 The Go Authors | Huffman and static tables in `crates/tunnel/src/sniff/hpack_tables.rs` and `crates/transport/src/xhttp/padding.rs`. |
+| golang.org/x/net `publicsuffix` v0.35.0 | BSD-3-Clause, Copyright 2009 The Go Authors | The table layout, its generator and the lookup in `xtask/src/public_suffix.rs` and `crates/group/src/public_suffix.rs`. |
+| Public Suffix List (publicsuffix.org), commit `3955e3ec29b94c3cca7bd4509c5f14a7c0959e26` | MPL-2.0 | `crates/group/data/public-suffix/public_suffix_list.dat`, unmodified, and the table generated from it in the same directory, which is compiled into the core. Source for the MPL-covered work is this repository. |
 | go-wildcard (IGLOU-EU), commit ce22b7af, as modified in mihomo `component/wildcard` | BSD-3-Clause, Copyright (c) 2023 Iglou.eu and Adrien Kara | The wildcard matcher in `crates/rules/src/text.rs` and `crates/dns/src/matchers.rs`. |
 | v2fly/v2ray-core QUIC sniffing, via mihomo | MIT, Copyright (c) 2015-2025 V2Fly Community | `crates/tunnel/src/sniff/quic*.rs`. |
 | Xray-core XTLS Vision, via mihomo | MPL-2.0 | The Vision framing in `crates/proxy/src/vless/stream.rs`. Source for the MPL-covered work is this repository. |
@@ -148,8 +150,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ### MPL-2.0
 
-Applies to gotatun and the Xray-core Vision framing. The full text is at https://www.mozilla.org/MPL/2.0/ and in the
-`LICENSE` file of https://github.com/mullvad/gotatun.
+Applies to gotatun, the Xray-core Vision framing and the Public Suffix List. The full text is at
+https://www.mozilla.org/MPL/2.0/ and in the `LICENSE` file of https://github.com/mullvad/gotatun.
 
 ### GPL-3.0-or-later
 

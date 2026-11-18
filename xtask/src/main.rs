@@ -6,6 +6,7 @@ mod internal_marks;
 mod interop_peers;
 mod layers;
 mod mihomo_keys;
+mod public_suffix;
 #[cfg(test)]
 mod public_tree;
 #[cfg(test)]
@@ -37,10 +38,11 @@ fn main() -> ExitCode {
         Some("check-commits") => commits::check(&args.collect::<Vec<_>>()),
         Some("mihomo-keys") => mihomo_keys::run(args.next().as_deref()),
         Some("check-interop-peers") => interop_peers::check(),
+        Some("public-suffix") => public_suffix::run(),
         _ => Err(
             "usage: xtask check-layers | schema [--check] | check-size <file> <max-bytes> \
              | check-commits <git log revisions> | mihomo-keys <mihomo checkout> | check-interop-peers \
-             | bench [--quick|--full] [--base <rev>|--no-baseline] [--mihomo <path>] [concord-bench run options]"
+             | public-suffix | bench [--quick|--full] [--base <rev>|--no-baseline] [--mihomo <path>] [concord-bench run options]"
                 .to_string(),
         ),
     };

@@ -131,7 +131,6 @@ argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 sha1 = "0.10"
 sha2 = "0.10"
 md-5 = "0.10"
-psl = "2"
 hmac = "0.12"
 blake2 = "0.10"
 blake3 = "1"
@@ -158,8 +157,11 @@ compact_str = { version = "0.10", features = ["serde"] }
 hex = "0.4"
 log = "0.4"
 num-bigint = { version = "0.4", default-features = false }
+idna = "1"
 percent-encoding = "2"
 proc-macro2 = { version = "1", default-features = false }
+# Built from the list revision `crates/group/data/public-suffix/VERSION` pins; they move together.
+psl = "=2.1.232"
 quote = { version = "1", default-features = false }
 rand = "0.9"
 smallvec = "1"
