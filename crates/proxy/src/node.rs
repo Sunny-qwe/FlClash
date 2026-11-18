@@ -7,7 +7,7 @@ use concord_common::{
     SockOpts, Tasks,
 };
 use concord_config::proxy::{CommonOpts, IpVersionPref, ProxyDef};
-use concord_net::dial_tcp;
+use concord_net::dial_stream;
 use concord_tls::{TlsConn, TlsConnector};
 use concord_transport::TransportStack;
 
@@ -96,8 +96,7 @@ impl Egress {
             return cx.env.nodes.dial_via(via, &inner, server).await;
         }
         let proxy_cx = DialCx::new(cx.env, Initiator::Proxy, cx.deadline);
-        let stream = dial_tcp(&proxy_cx, server, self.version, &self.sock_opts(cx.env)).await?;
-        Ok(Box::new(stream))
+        dial_stream(&proxy_cx, server, self.version, &self.sock_opts(cx.env)).await
     }
 }
 

@@ -149,6 +149,12 @@ pub struct SockOpts {
 pub trait SocketFactory: Send + Sync {
     async fn connect_tcp(&self, target: SocketAddr, opts: &SockOpts) -> io::Result<TcpStream>;
 
+    /// `connect_tcp` for a caller that keeps only a `Stream`, where `tfo` may also defer the
+    /// handshake to the first write.
+    async fn connect_stream(&self, target: SocketAddr, opts: &SockOpts) -> io::Result<BoxStream> {
+        Ok(Box::new(self.connect_tcp(target, opts).await?))
+    }
+
     fn bind_udp(&self, peer: IpAddr, opts: &SockOpts) -> io::Result<UdpSocket>;
 
     /// Where a UDP server address really points once `dialer-ip4p-convert` is on.

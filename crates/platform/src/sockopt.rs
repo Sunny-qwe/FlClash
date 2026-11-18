@@ -162,7 +162,7 @@ pub fn set_routing_mark(_socket: &Socket, _mark: u32) -> io::Result<()> {
     Ok(())
 }
 
-/// macOS and Windows need `connectx`/`ConnectEx` to carry data, which tokio cannot issue.
+/// macOS uses [`preconnect`]; Windows needs `ConnectEx`, which tokio cannot issue.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn enable_tfo(socket: &Socket) -> io::Result<()> {
     use std::os::fd::AsRawFd;
@@ -187,6 +187,66 @@ pub fn enable_tfo(socket: &Socket) -> io::Result<()> {
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 pub fn enable_tfo(_socket: &Socket) -> io::Result<()> {
     Ok(())
+}
+
+/// XNU `bsd/netinet/tcp_private.h`; set while the socket is still closed.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const TCP_FASTOPEN_FORCE_ENABLE: libc::c_int = 0x218;
+
+/// Connects `socket` the way Fast Open needs where the kernel cannot defer an ordinary
+/// connect: the SYN leaves with the first write, carrying it once the peer's cookie is cached,
+/// or with the first read. False where there is no such call, and the caller connects this
+/// socket as usual; after an error it may be bound, so the caller connects a new one.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub fn preconnect(socket: &Socket, target: std::net::SocketAddr) -> io::Result<bool> {
+    use std::os::fd::AsRawFd;
+
+    let fd = socket.as_raw_fd();
+    let force: libc::c_int = 1;
+    // SAFETY: pointer and length describe `force`; the descriptor belongs to `socket`.
+    let rc = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::IPPROTO_TCP,
+            TCP_FASTOPEN_FORCE_ENABLE,
+            std::ptr::from_ref(&force).cast(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let target = socket2::SockAddr::from(target);
+    let endpoints = libc::sa_endpoints_t {
+        sae_srcif: 0,
+        sae_srcaddr: std::ptr::null(),
+        sae_srcaddrlen: 0,
+        sae_dstaddr: target.as_ptr().cast(),
+        sae_dstaddrlen: target.len(),
+    };
+    // SAFETY: `endpoints` points at `target`, which outlives the call; no data is passed and
+    // no out-pointer is asked for.
+    let rc = unsafe {
+        libc::connectx(
+            fd,
+            &endpoints,
+            libc::SAE_ASSOCID_ANY,
+            libc::CONNECT_RESUME_ON_READ_WRITE | libc::CONNECT_DATA_IDEMPOTENT,
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(true)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+pub fn preconnect(_socket: &Socket, _target: std::net::SocketAddr) -> io::Result<bool> {
+    Ok(false)
 }
 
 #[cfg(target_os = "linux")]

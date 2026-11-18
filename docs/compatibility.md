@@ -118,7 +118,12 @@ paths, fields, status codes, `Authorization: Bearer` secret and CORS. The differ
 - Hysteria `faketcp`; ShadowQUIC over QUIC v2.
 - sing-mux brutal on the client's own socket, which needs a Linux kernel module. The sing-mux exchange is done, so
   the server still paces its sends.
-- A node's `tfo` on macOS and Windows, where it does nothing.
+- A node's `tfo` on Windows, where it does nothing. On macOS it works as in mihomo, which also means a SYN carrying
+  Fast Open data that the path drops is sent again unchanged rather than as a plain SYN, so such a path fails the
+  connection where Linux falls back to an ordinary handshake. With `tfo`, as in mihomo, a dial also counts as
+  connected before its handshake (on macOS always, on Linux once the server's cookie is cached): of several server
+  addresses the first is used, and one that does not answer holds the connection until the system's connect timeout
+  instead of handing over to the next address.
 - SSH RSA host keys. Modern servers offer ed25519; RSA client keys are supported.
 - `global-client-fingerprint`, which mihomo also removed, and a node's `ws-path` and `ws-headers`, which it removed
   in favour of `ws-opts`; a node that writes them gets a warning.

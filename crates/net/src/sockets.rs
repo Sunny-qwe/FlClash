@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use concord_common::{CoreError, SockOpts, SocketFactory, io_error, ip4p_target};
+use concord_common::{BoxStream, CoreError, SockOpts, SocketFactory, io_error, ip4p_target};
 use concord_platform::{
     IcmpSocket, Platform, bind_to_interface, enable_tfo, grow_udp_buffers, icmp_echo_socket,
     is_global_unicast, mptcp_protocol, prepare_udp_socket, raw_socket_of, set_routing_mark,
@@ -13,6 +13,7 @@ use concord_platform::{
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 
+use crate::fast_open::{self, Start};
 use crate::held::Held;
 
 const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(15);
@@ -197,6 +198,16 @@ impl Sockets {
         }
         Ok(())
     }
+
+    fn open_tcp(&self, target: SocketAddr, opts: &SockOpts) -> io::Result<(Socket, SocketAddr)> {
+        let target = self.ip4p(target);
+        self.check_pressure()?;
+        let socket = Self::new_tcp_socket(opts, domain_of(target.ip()))?;
+        self.route(&socket, opts, target.ip())?;
+        Self::configure_tcp(&socket, opts)?;
+        socket.set_nonblocking(true)?;
+        Ok((socket, target))
+    }
 }
 
 struct EchoRequest {
@@ -237,15 +248,24 @@ impl EchoRequest {
 #[async_trait]
 impl SocketFactory for Sockets {
     async fn connect_tcp(&self, target: SocketAddr, opts: &SockOpts) -> io::Result<TcpStream> {
-        let target = self.ip4p(target);
-        self.check_pressure()?;
-        let socket = Self::new_tcp_socket(opts, domain_of(target.ip()))?;
-        self.route(&socket, opts, target.ip())?;
-        Self::configure_tcp(&socket, opts)?;
-        socket.set_nonblocking(true)?;
+        let (socket, target) = self.open_tcp(target, opts)?;
         TcpSocket::from_std_stream(socket.into())
             .connect(target)
             .await
+    }
+
+    async fn connect_stream(&self, target: SocketAddr, opts: &SockOpts) -> io::Result<BoxStream> {
+        let (mut socket, addr) = self.open_tcp(target, opts)?;
+        if opts.tfo {
+            match fast_open::start(socket, addr, || Ok(self.open_tcp(target, opts)?.0))? {
+                Start::FastOpen(stream) => return Ok(Box::new(stream)),
+                Start::Connect(plain) => socket = plain,
+            }
+        }
+        let stream = TcpSocket::from_std_stream(socket.into())
+            .connect(addr)
+            .await?;
+        Ok(Box::new(stream))
     }
 
     fn bind_udp(&self, peer: IpAddr, opts: &SockOpts) -> io::Result<UdpSocket> {

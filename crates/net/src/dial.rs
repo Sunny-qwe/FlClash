@@ -3,7 +3,9 @@ use std::net::{IpAddr, SocketAddr};
 use std::pin::pin;
 use std::time::Duration;
 
-use concord_common::{Address, CoreError, DialCx, IpVersion, LookupIps, SockOpts, no_retry};
+use concord_common::{
+    Address, BoxStream, CoreError, DialCx, IpVersion, LookupIps, SockOpts, no_retry,
+};
 use concord_platform::is_local_exhaustion;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
@@ -280,7 +282,38 @@ pub async fn dial_tcp(
     opts: &SockOpts,
 ) -> io::Result<TcpStream> {
     let sockets = &cx.env.sockets;
-    let work = dial_each(cx, target, version, |addr| sockets.connect_tcp(addr, opts));
+    until_deadline(
+        cx,
+        target,
+        dial_each(cx, target, version, |addr| sockets.connect_tcp(addr, opts)),
+    )
+    .await
+}
+
+/// `dial_tcp` through `SocketFactory::connect_stream`, for a caller that keeps only a
+/// `Stream`; a deferred Fast Open handshake is not waited for.
+pub async fn dial_stream(
+    cx: &DialCx<'_>,
+    target: &Address,
+    version: IpVersion,
+    opts: &SockOpts,
+) -> io::Result<BoxStream> {
+    let sockets = &cx.env.sockets;
+    until_deadline(
+        cx,
+        target,
+        dial_each(cx, target, version, |addr| {
+            sockets.connect_stream(addr, opts)
+        }),
+    )
+    .await
+}
+
+async fn until_deadline<T>(
+    cx: &DialCx<'_>,
+    target: &Address,
+    work: impl Future<Output = io::Result<T>>,
+) -> io::Result<T> {
     match cx.deadline {
         Some(deadline) => timeout_at(deadline, work).await.unwrap_or_else(|_| {
             Err(io::Error::new(
