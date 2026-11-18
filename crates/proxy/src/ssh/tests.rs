@@ -42,6 +42,22 @@ fn client(port: u16, extra: Value) -> Result<Arc<dyn Outbound>, BuildError> {
     super::build(&def, opts, &BuildCtx::new(TrustStore::new(b"", Vec::new())))
 }
 
+fn tracked_client(port: u16, tracked: &crate::testing::Tracked) -> Arc<dyn Outbound> {
+    let proxy = json!({
+        "name": "ssh", "type": "ssh", "server": "127.0.0.1", "port": port,
+        "username": "tester", "password": "hunter2",
+    });
+    let ProxyParse::Ok(def) =
+        parse_proxy(proxy.as_object().unwrap(), &Capabilities::full()).unwrap()
+    else {
+        unreachable!()
+    };
+    let ProxyKind::Ssh(opts) = &def.kind else {
+        unreachable!()
+    };
+    super::build(&def, opts, &tracked.ctx()).unwrap()
+}
+
 async fn echo_server() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -516,4 +532,26 @@ fn bad_key_material_is_reported_at_build_time() {
     assert!(client(1, json!({"host-key": ["not a key"]})).is_err());
     assert!(client(1, json!({"host-key-algorithms": ["no-such-algorithm"]})).is_err());
     assert!(client(1, json!({"password": "x"})).is_ok());
+}
+
+#[tokio::test]
+async fn a_session_s_task_ends_when_its_outbound_is_dropped() {
+    let (port, _ended) = serve_reporting().await;
+    let target = echo_server().await;
+    let tracked = crate::testing::Tracked::new();
+    let outbound = tracked_client(port, &tracked);
+    echo_through(&*outbound, target, 5).await.unwrap();
+    assert!(tracked.running() > 0, "the session is not tracked");
+    drop(outbound);
+    assert!(tracked.ended_within(Duration::from_secs(5)).await);
+}
+
+#[tokio::test]
+async fn a_disconnect_still_pending_ends_at_a_stop() {
+    let tracked = crate::testing::Tracked::new();
+    tracked
+        .tasks
+        .spawn_detached(super::bounded(std::future::pending()));
+    tracked.stop();
+    assert!(tracked.ended_within(Duration::from_secs(1)).await);
 }

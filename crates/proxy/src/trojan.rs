@@ -98,6 +98,7 @@ impl Outbound for Trojan {
             TrojanFrames,
             TrojanFrames,
             hint.clone(),
+            self.link.tasks(),
         )))
     }
 }
@@ -314,7 +315,13 @@ mod tests {
 
         let (near, mut far) = tokio::io::duplex(1 << 16);
         let dst = Address::new("1.2.3.4", 53);
-        let session = StreamSession::new(Box::new(near), TrojanFrames, TrojanFrames, dst.clone());
+        let session = StreamSession::new(
+            Box::new(near),
+            TrojanFrames,
+            TrojanFrames,
+            dst.clone(),
+            &Default::default(),
+        );
         let data: Vec<u8> = (0..10_000u32).map(|i| (i % 251) as u8).collect();
         let mut pkt = PacketBuf::with_headroom(session.headroom());
         pkt.extend_from_slice(&data);

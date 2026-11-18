@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll, ready};
 
 use concord_common::sync::lock;
-use concord_common::{Address, PacketBuf, PacketSession, recv_packet, send_packet};
+use concord_common::{Address, PacketBuf, PacketSession, Tasks, recv_packet, send_packet};
 use futures_util::future::BoxFuture;
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};
@@ -44,12 +44,12 @@ impl Drop for SessionSocket {
 }
 
 impl SessionSocket {
-    pub fn new(session: Arc<dyn PacketSession>, remote: SocketAddr) -> Arc<Self> {
+    pub fn new(session: Arc<dyn PacketSession>, remote: SocketAddr, tasks: &Tasks) -> Arc<Self> {
         let (outgoing, mut queued) = mpsc::channel::<Vec<u8>>(SESSION_QUEUE);
         let (deliver, incoming) = mpsc::channel::<(Vec<u8>, SocketAddr)>(SESSION_QUEUE);
         let sender = session.clone();
         let target = Address::Socket(remote);
-        let send_pump = tokio::spawn(async move {
+        let send_pump = tasks.spawn(async move {
             while let Some(data) = queued.recv().await {
                 let mut pkt = PacketBuf::with_headroom(sender.headroom());
                 pkt.extend_from_slice(&data);
@@ -59,7 +59,7 @@ impl SessionSocket {
             }
         });
         let receiver = session.clone();
-        let recv_pump = tokio::spawn(async move {
+        let recv_pump = tasks.spawn(async move {
             while let Ok((pkt, from)) = recv_packet(&*receiver).await {
                 let from = match from {
                     Address::Socket(addr) => addr,

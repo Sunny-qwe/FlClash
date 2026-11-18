@@ -48,6 +48,53 @@ impl HostResolver for IpOnly {
 
 const TEST_WAIT: Duration = Duration::from_secs(10);
 
+/// Tasks registered with a tracker the test can stop and wait on, as the engine's are.
+pub(crate) struct Tracked {
+    pub(crate) tasks: concord_common::Tasks,
+    tracker: tokio_util::task::TaskTracker,
+    stop: tokio_util::sync::CancellationToken,
+}
+
+impl Tracked {
+    pub(crate) fn new() -> Tracked {
+        let tracker = tokio_util::task::TaskTracker::new();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let tasks = concord_common::Tasks::new(
+            tracker.clone(),
+            stop.clone(),
+            tokio::runtime::Handle::current(),
+        );
+        Tracked {
+            tasks,
+            tracker,
+            stop,
+        }
+    }
+
+    pub(crate) fn ctx(&self) -> crate::ctx::BuildCtx {
+        let mut ctx = crate::ctx::BuildCtx::new(concord_tls::TrustStore::new(b"", Vec::new()));
+        ctx.tasks = self.tasks.clone();
+        ctx
+    }
+
+    pub(crate) fn running(&self) -> usize {
+        self.tracker.len()
+    }
+
+    pub(crate) fn stop(&self) {
+        self.stop.cancel();
+    }
+
+    pub(crate) async fn ended_within(&self, bound: Duration) -> bool {
+        self.tracker.close();
+        let ended = tokio::time::timeout(bound, self.tracker.wait())
+            .await
+            .is_ok();
+        self.tracker.reopen();
+        ended
+    }
+}
+
 /// What a spawned task returns; the test fails if it takes longer than ten seconds.
 pub(crate) async fn settled<T>(task: tokio::task::JoinHandle<T>) -> T {
     match tokio::time::timeout(TEST_WAIT, task).await {

@@ -89,6 +89,7 @@ pub(crate) fn tls_options(
         return Ok(TlsOptions {
             server_name: non_empty(&spec.sni),
             alpn: spec.alpn,
+            tasks: ctx.tasks.clone(),
             client_fingerprint: client_fingerprint(&tls.client_fingerprint),
             jls: Some(concord_tls::JlsAuth {
                 username: auth.username.clone(),
@@ -150,6 +151,7 @@ pub(crate) fn tls_options(
     Ok(TlsOptions {
         server_name: non_empty(&spec.sni),
         alpn: spec.alpn,
+        tasks: ctx.tasks.clone(),
         skip_cert_verify: tls.skip_cert_verify,
         name_cert_verify: non_empty(&tls.name_cert_verify),
         fingerprint: non_empty(&tls.fingerprint),

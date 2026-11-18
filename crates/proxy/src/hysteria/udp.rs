@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
-use concord_common::{Address, PacketBuf, PacketSession};
+use concord_common::{Address, PacketBuf, PacketSession, Tasks};
 use rand::Rng;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
@@ -77,12 +77,13 @@ impl Hy1Packets {
         id: u32,
         control: QuicStream,
         conn_hold: Arc<dyn Send + Sync>,
+        tasks: &Tasks,
     ) -> Self {
         let incoming = hub.register(id);
         let closed = Arc::new(AtomicBool::new(false));
         let hold = {
             let (hub, closed) = (hub.clone(), closed.clone());
-            tokio::spawn(async move {
+            tasks.spawn(async move {
                 let mut control = control;
                 let mut sink = [0u8; 1024];
                 while matches!(control.read(&mut sink).await, Ok(n) if n > 0) {}

@@ -223,3 +223,58 @@ async fn shutdown_ends_a_geo_update_in_flight_and_frees_its_claim() {
     assert!(engine.geo_update("ASN").is_ok());
     engine.shutdown().await;
 }
+
+fn bare_engine() -> Arc<Engine> {
+    Engine::new(EngineConfig {
+        sink: Arc::new(NoEvents),
+        android: false,
+        platform: Arc::new(NativePlatform::new()),
+    })
+}
+
+#[tokio::test]
+async fn shutdown_stops_the_proxy_tasks_and_waits_for_their_teardown() {
+    let engine = bare_engine();
+    let tasks = engine.shared.proxy_tasks.tasks();
+    let torn_down = Arc::new(AtomicBool::new(false));
+    tasks.spawn(std::future::pending());
+    tasks.spawn_detached(std::future::pending());
+    tasks.spawn_to_end({
+        let (tasks, torn_down) = (tasks.clone(), torn_down.clone());
+        async move {
+            tasks.stopped().await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            torn_down.store(true, Ordering::SeqCst);
+        }
+    });
+    engine.shutdown().await;
+    assert!(torn_down.load(Ordering::SeqCst));
+    assert!(engine.tasks.is_empty());
+    let next = engine.shared.proxy_tasks.tasks();
+    let (ran, done) = tokio::sync::oneshot::channel();
+    next.spawn(async move {
+        let _ = ran.send(());
+    });
+    assert!(
+        done.await.is_ok(),
+        "a config built after shutdown starts stopped"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn shutdown_returns_at_its_bound_when_a_task_never_ends() {
+    let engine = bare_engine();
+    engine
+        .shared
+        .proxy_tasks
+        .tasks()
+        .spawn_to_end(std::future::pending());
+    let started = tokio::time::Instant::now();
+    engine.shutdown().await;
+    let took = started.elapsed();
+    assert!(
+        (SHUTDOWN_GRACE..SHUTDOWN_GRACE + Duration::from_secs(1)).contains(&took),
+        "{took:?}"
+    );
+    assert_eq!(engine.tasks.len(), 1);
+}

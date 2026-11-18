@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use concord_common::sync::lock;
-use concord_common::{BoxRead, BoxStream, BoxWrite, Stream};
+use concord_common::{BoxRead, BoxStream, BoxWrite, Stream, Tasks};
 use futures_util::future::BoxFuture;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::sync::{Notify, mpsc, oneshot};
@@ -54,6 +54,7 @@ struct Core {
     bucket: AtomicI64,
     bucket_notify: Notify,
     fin_queued: Option<AtomicBool>,
+    tasks: Tasks,
 }
 
 impl Core {
@@ -83,15 +84,15 @@ pub(super) struct SmuxSession {
 }
 
 impl SmuxSession {
-    pub fn new(io: BoxStream) -> Self {
-        Self::start(io, FIRST_STREAM_ID, false)
+    pub fn new(io: BoxStream, tasks: &Tasks) -> Self {
+        Self::start(io, FIRST_STREAM_ID, false, tasks)
     }
 
-    pub(super) fn with_first_id(io: BoxStream, first_id: u32) -> Self {
-        Self::start(io, first_id, true)
+    pub(super) fn with_first_id(io: BoxStream, first_id: u32, tasks: &Tasks) -> Self {
+        Self::start(io, first_id, true, tasks)
     }
 
-    fn start(io: BoxStream, first_id: u32, drain_on_drop: bool) -> Self {
+    fn start(io: BoxStream, first_id: u32, drain_on_drop: bool, tasks: &Tasks) -> Self {
         let (read, write) = Box::new(io).into_split();
         let (tx, rx) = mpsc::channel(QUEUE);
         let (stop, stopped) = if drain_on_drop {
@@ -108,17 +109,18 @@ impl SmuxSession {
             bucket: AtomicI64::new(MAX_RECEIVE_BUFFER),
             bucket_notify: Notify::new(),
             fin_queued: drain_on_drop.then(|| AtomicBool::new(false)),
+            tasks: tasks.clone(),
         });
         let reader = {
             let core = core.clone();
-            tokio::spawn(async move {
+            tasks.spawn(async move {
                 let _ = read_loop(&core, read).await;
                 core.close();
             })
         };
         let writer = {
             let core = core.clone();
-            tokio::spawn(async move {
+            tasks.spawn(async move {
                 if let Some(stopped) = stopped {
                     let _ = write_frames_draining(write, rx, stopped, &core, first_id).await;
                 } else {
@@ -214,6 +216,15 @@ async fn read_loop(core: &Core, mut io: BoxRead) -> io::Result<()> {
     }
 }
 
+/// Without a runtime to drain on, the writer stops with the session.
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 impl Drop for SmuxSession {
     fn drop(&mut self) {
         self.core.close();
@@ -225,19 +236,17 @@ impl Drop for SmuxSession {
             }
             if let Some(mut writer) = tasks.next() {
                 let deadline = tokio::time::Instant::now() + DRAIN_TIMEOUT;
-                if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    handle.spawn(async move {
-                        if tokio::time::timeout_at(deadline, &mut writer)
-                            .await
-                            .is_err()
-                        {
-                            writer.abort();
-                            let _ = writer.await;
-                        }
-                    });
-                } else {
-                    writer.abort();
-                }
+                let guard = AbortOnDrop(writer.abort_handle());
+                self.core.tasks.spawn_detached(async move {
+                    let _guard = guard;
+                    if tokio::time::timeout_at(deadline, &mut writer)
+                        .await
+                        .is_err()
+                    {
+                        writer.abort();
+                        let _ = writer.await;
+                    }
+                });
             }
         } else {
             for task in &self.tasks {
@@ -415,7 +424,11 @@ impl Drop for SmuxWrite {
         let shared = &*self.shared;
         if !shared.closed.swap(true, Ordering::Relaxed) {
             if shared.core.fin_queued.is_none() {
-                send_detached(&shared.core.tx, frame(CMD_FIN, shared.id, &[]));
+                send_detached(
+                    &shared.core.tasks,
+                    &shared.core.tx,
+                    frame(CMD_FIN, shared.id, &[]),
+                );
             }
             shared.release();
         }
@@ -480,7 +493,7 @@ mod tests {
     #[tokio::test]
     async fn first_smux_syn_matches_mihomo_and_sing_box_client_bytes() {
         let (near, mut far) = duplex(128);
-        let session = SmuxSession::new(Box::new(near));
+        let session = SmuxSession::new(Box::new(near), &Default::default());
         let _first = session.open().await.unwrap();
         let mut header = [0; 8];
         far.read_exact(&mut header).await.unwrap();
@@ -495,7 +508,7 @@ mod tests {
         for read_first in [true, false] {
             let (near, far) = duplex(64 * 1024);
             let (mut far_read, mut far_write) = tokio::io::split(far);
-            let session = SmuxSession::new(Box::new(near));
+            let session = SmuxSession::new(Box::new(near), &Default::default());
             let first = session.open().await.unwrap();
             let mut second = session.open().await.unwrap();
             assert_eq!(next_frame(&mut far_read).await, (CMD_SYN, FIRST_STREAM_ID));

@@ -31,10 +31,13 @@ use crate::stack::{Stack, StackConfig, Wired};
 use crate::testing::test_env;
 
 fn stack() -> Wired {
-    let wired = Stack::start(&StackConfig {
-        addrs: vec!["10.8.0.1".parse().unwrap(), "fd08::1".parse().unwrap()],
-        mtu: 9000,
-    });
+    let wired = Stack::start(
+        &StackConfig {
+            addrs: vec!["10.8.0.1".parse().unwrap(), "fd08::1".parse().unwrap()],
+            mtu: 9000,
+        },
+        &Default::default(),
+    );
     wired.stack.serve_tcp_echo(7);
     wired.stack.serve_udp(7, |data| Some(data.to_vec()));
     wired.stack.serve_udp(53, dns_answer);

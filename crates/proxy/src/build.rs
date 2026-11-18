@@ -16,7 +16,7 @@ pub fn build_outbound(def: &ProxyDef, ctx: &BuildCtx) -> Result<Arc<dyn Outbound
         return Ok(outbound);
     }
     match def.smux.as_ref().filter(|smux| smux.enabled) {
-        Some(smux) => crate::smux::wrap(outbound, smux),
+        Some(smux) => crate::smux::wrap(outbound, smux, &ctx.tasks),
         None => Ok(outbound),
     }
 }
@@ -27,9 +27,10 @@ fn build_kind(def: &ProxyDef, ctx: &BuildCtx) -> Result<Arc<dyn Outbound>, Build
             direct::info(&def.name, OutboundKind::Direct),
             Some(Egress::new(&def.name, &def.common)),
             ctx.loopback.clone(),
+            ctx.tasks.clone(),
         ))),
         ProxyKind::Reject(_) => Ok(Arc::new(Reject::new(&def.name, OutboundKind::Reject))),
-        ProxyKind::Dns(_) => Ok(Arc::new(Dns::new(&def.name))),
+        ProxyKind::Dns(_) => Ok(Arc::new(Dns::new(&def.name, ctx.tasks.clone()))),
         ProxyKind::Rematch(opts) => Ok(Arc::new(crate::rematch::Rematch::new(&def.name, opts))),
         ProxyKind::Socks5(opts) => crate::socks5::build(def, opts, ctx),
         ProxyKind::GostRelay(opts) => crate::gost_relay::build(def, opts, ctx),

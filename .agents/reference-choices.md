@@ -104,6 +104,15 @@ confirming it with a run.
 
 Concord already takes these from the references; keep them unless the reference moves.
 
+- [language-neutral] **What a stop sends** follows sing-box `824dbcf`: an outbound's close cancels its context
+  and runs its cleanups (`adapter/lifecycle.go:128-142`); TUIC closes its QUIC connection with
+  CONNECTION_CLOSE (`protocol/tuic/outbound.go:164-171`) and SSH closes the TCP connection without
+  SSH_MSG_DISCONNECT (`protocol/ssh/outbound.go:263-270`). mihomo Alpha `3c0d10a5` closes no outbound on shutdown
+  (`hub/executor/executor.go:532-538`). Concord's engine stop cancels every teardown that only tells a peer
+  goodbye (an SSH disconnect, a sing-mux close, a queued control frame) and keeps only a QUIC connection's
+  CONNECTION_CLOSE and its drain; `proxy::quic::tests::a_stop_sends_connection_close_and_the_drivers_end_with_the_connection`
+  holds it.
+
 - [language-neutral] **Proxy group/provider name collisions** follow mihomo `v1.19.33` (`3f27ef39`)
   `adapter/outboundgroup/parser.go:155-163`: reject a provider with the group's name only when the group's
   `proxies` list is nonempty; a provider-only group may share a provider's name.
@@ -372,6 +381,7 @@ MiB, GiB, ns, µs, ms, s, min, h), or as the source text in backticks; `cfg` var
 | `dns::system::REFRESH` | 300 s | B | mihomo re-reads system DNS servers after SystemDnsFlushTime = 5 min (`dns/system.go:16`); Concord 300 s matches. |
 | `engine::dns_server::MAX_DATAGRAM` | 512 | B | Query buffer of the `dns.listen` UDP server: mihomo's is a miekg/dns `Server` with `UDPSize` unset (`dns/server.go:114`), which takes `MinMsgSize` = 512 (miekg/dns v1.1.63 `server.go:285-286`, `dns.go:15`). Answers are not bounded by it. |
 | `engine::dns_server::STREAM_IDLE` | 8 s | B | mihomo's DNS listener is a miekg/dns Server (`dns/server.go:126`) whose TCP idle timeout defaults to tcpIdleTimeout = 8 s (`miekg/dns@v1.1.63/client.go:17`, used at `server.go:572`); Concord 8 s matches. |
+| `engine::engine::SHUTDOWN_GRACE` | 5 s | B | How long shutdown waits for the background tasks it stopped before it logs how many still run and returns: sing-box's `StopTimeout` = 5 s (`824dbcf` `constant/timeout.go:17`), after which it warns about a service still closing (`adapter/lifecycle.go:104`, `common/taskmonitor/monitor.go:25`); its process gives up at `FatalStopTimeout` = 10 s (`cmd/sing-box/cmd_run.go:226`). Concord stops waiting at the first bound because the engine is restarted in place. What a stop leaves running is within it (C): a QUIC connection drains for 3 PTO after its close (RFC 9000 §10.2), PTO = smoothed RTT + 4 × RTT variance + 25 ms max ack delay (RFC 9002 §6.2.1), about 1 s at the 100 ms initial RTT `proxy::quic::transport_config` sets and under 5 s while RTT plus four variances stays below 1.6 s; gotatun 0.10.2's `Device::stop` aborts and joins its tasks (`device/mod.rs:279`). |
 | `engine::engine::proxies::DEFAULT_DELAY_TIMEOUT` | 5 s | B | Delay test timeout when none is given: mihomo's health check defaults timeout to 5000 ms (`adapter/provider/healthcheck.go:200-201`); Concord 5 s matches. |
 | `engine::ntp::ATTEMPTS` | 3 | B | mihomo's NTP update tries the exchange 3 times (`ntp/ntp/service.go:68`); Concord 3 matches. |
 | `engine::ntp::EXCHANGE_TIMEOUT` | 5 s | B | sing's NTP exchange, which mihomo calls, sets the deadline defaultTimeout = 5 s (metacubex sing v0.5.8 `common/ntp/message.go:42`, used at `common/ntp/ntp.go:19`); Concord 5 s matches. |

@@ -233,6 +233,7 @@ fn client_link(port: u16) -> QuicLink {
         .unwrap();
     let controllers = SwitchFactory::new(controller("", 32, BbrProfile::Standard));
     let mut link = QuicLink {
+        tasks: Default::default(),
         egress: Egress::new("sq", &Default::default()),
         server: Address::new("127.0.0.1", port),
         server_name: Some("localhost".to_string()),

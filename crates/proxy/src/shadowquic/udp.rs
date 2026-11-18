@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
-use concord_common::{Address, PacketBuf, PacketSession, Stream};
+use concord_common::{Address, PacketBuf, PacketSession, Stream, Tasks};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
@@ -188,6 +188,7 @@ impl ShadowPackets {
         control: QuicStream,
         over_stream: bool,
         hold: Arc<dyn Send + Sync>,
+        tasks: &Tasks,
     ) -> Self {
         let (inbox, incoming) = mpsc::channel(INBOX);
         let weak_inbox = inbox.downgrade();
@@ -197,7 +198,7 @@ impl ShadowPackets {
         let recv_ids = Arc::new(Mutex::new(HashSet::<u16>::new()));
         let writer = {
             let (conn, closed) = (conn.clone(), closed.clone());
-            tokio::spawn(async move {
+            tasks.spawn(async move {
                 let mut streams: HashMap<u16, quinn::SendStream> = HashMap::new();
                 while let Some(job) = queued.recv().await {
                     let result = match job {
@@ -220,7 +221,7 @@ impl ShadowPackets {
         let reader = {
             let (shared, closed, recv_ids) = (shared.clone(), closed.clone(), recv_ids.clone());
             let writer = writer.abort_handle();
-            tokio::spawn(async move {
+            tasks.spawn(async move {
                 while let Ok((addr, id)) = read_control_entry(&mut control_read).await {
                     let mut ids = lock(&recv_ids);
                     if closed.load(Ordering::Relaxed) {

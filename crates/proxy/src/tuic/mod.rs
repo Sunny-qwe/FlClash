@@ -112,7 +112,7 @@ impl Outbound for Tuic {
     ) -> io::Result<Arc<dyn PacketSession>> {
         if let Some(version) = self.uot {
             let stream = self.open_stream(cx, &uot::destination(version)).await?;
-            return uot::session(stream, version, hint);
+            return uot::session(stream, version, hint, &self.shared.link.tasks);
         }
         let slot = self.udp.pick(true, self.max_open);
         let live = slot.live(&self.shared, cx).await?;
@@ -280,6 +280,7 @@ pub(crate) fn build(
         obfs: ObfsSpec::None,
         hop: None,
         datagram_frame: u64::try_from(frame).ok(),
+        tasks: ctx.tasks.clone(),
     };
     let shared = Arc::new(Shared {
         link,

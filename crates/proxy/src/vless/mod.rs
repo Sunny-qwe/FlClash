@@ -84,6 +84,7 @@ impl Outbound for Vless {
                 XudpFrames::new(cx.source()),
                 XudpFrames::new(None),
                 hint.clone(),
+                self.link.tasks(),
             )));
         }
         let magic = Address::new(PACKET_ADDR_MAGIC, 443);
@@ -93,6 +94,7 @@ impl Outbound for Vless {
             PacketAddrFrames,
             PacketAddrFrames,
             hint.clone(),
+            self.link.tasks(),
         )))
     }
 }

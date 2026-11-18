@@ -69,6 +69,7 @@ impl Outbound for GostRelay {
             wire::Frames(remote.clone()),
             wire::Frames(remote.clone()),
             remote,
+            self.link.tasks(),
         )))
     }
 
@@ -89,7 +90,7 @@ pub(crate) fn build(
     }
     let mut link = simple_link(def, &opts.server, opts.port, &opts.tls, ctx)?;
     if opts.mux {
-        link.stack = TransportStack::new(vec![Layer::Smux]);
+        link.stack = TransportStack::new(vec![Layer::Smux], ctx.tasks.clone());
     }
     Ok(Arc::new(GostRelay {
         info: info_for(

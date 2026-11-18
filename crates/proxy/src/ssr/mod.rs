@@ -138,7 +138,7 @@ pub(crate) fn build(
         &opts.protocol_param,
         ctx.clock.clone(),
     )?;
-    let link = Link::plain(def, &opts.server, opts.port);
+    let link = Link::plain(def, &opts.server, opts.port, &ctx.tasks);
     Ok(Arc::new(ShadowsocksR {
         info: info_for(
             def,

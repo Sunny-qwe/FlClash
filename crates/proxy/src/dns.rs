@@ -8,7 +8,7 @@ use concord_common::dns_relay::{answer_datagram, serve_stream};
 use concord_common::sync::lock;
 use concord_common::{
     Address, BoxStream, DialCx, HostResolver, Outbound, OutboundInfo, OutboundKind, PacketBuf,
-    PacketSession,
+    PacketSession, Tasks,
 };
 use tokio::sync::mpsc;
 
@@ -26,12 +26,14 @@ const UNRESOLVED: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 2);
 /// its DNS server would answer them.
 pub(crate) struct Dns {
     info: OutboundInfo,
+    tasks: Tasks,
 }
 
 impl Dns {
-    pub(crate) fn new(name: &str) -> Self {
+    pub(crate) fn new(name: &str, tasks: Tasks) -> Self {
         Dns {
             info: crate::direct::info(name, OutboundKind::Dns),
+            tasks,
         }
     }
 }
@@ -55,7 +57,7 @@ impl Outbound for Dns {
             return Err(not_served());
         }
         let (near, far) = tokio::io::duplex(PIPE_CAPACITY);
-        tokio::spawn(async move {
+        self.tasks.spawn(async move {
             if let Some(server) = resolver.dns_server() {
                 serve_stream(far, server, None).await;
             }
@@ -76,6 +78,7 @@ impl Outbound for Dns {
             resolver: cx.env.resolver.clone(),
             answers,
             queue: Mutex::new(queue),
+            tasks: self.tasks.clone(),
         }))
     }
 
@@ -90,6 +93,7 @@ struct DnsSession {
     resolver: Arc<dyn HostResolver>,
     answers: mpsc::Sender<(Vec<u8>, Address)>,
     queue: Mutex<mpsc::Receiver<(Vec<u8>, Address)>>,
+    tasks: Tasks,
 }
 
 impl PacketSession for DnsSession {
@@ -107,7 +111,7 @@ impl PacketSession for DnsSession {
         }
         let query = pkt.as_slice().to_vec();
         let (resolver, answers, dst) = (self.resolver.clone(), self.answers.clone(), dst.clone());
-        tokio::spawn(async move {
+        self.tasks.spawn(async move {
             let Some(server) = resolver.dns_server() else {
                 return;
             };
@@ -192,7 +196,7 @@ mod tests {
     async fn a_connection_carries_length_prefixed_queries_to_the_resolver() {
         let env = served_env();
         let cx = DialCx::new(&env, Initiator::Other, None);
-        let dns = Dns::new("dns-out");
+        let dns = Dns::new("dns-out", Default::default());
         let mut stream = dns
             .connect(&cx, &Address::new("8.8.8.8", 53))
             .await
@@ -218,7 +222,7 @@ mod tests {
     async fn a_datagram_is_answered_from_the_address_it_was_sent_to() {
         let env = served_env();
         let cx = DialCx::new(&env, Initiator::Other, None);
-        let dns = Dns::new("dns-out");
+        let dns = Dns::new("dns-out", Default::default());
         let to = Address::new("1.1.1.1", 53);
         let session = dns.associate(&cx, &to).await.unwrap();
         let mut packet = PacketBuf::from_slice(b"\x00\x07query");
@@ -237,7 +241,7 @@ mod tests {
     async fn a_slow_datagram_does_not_hold_back_the_next() {
         let env = served_env();
         let cx = DialCx::new(&env, Initiator::Other, None);
-        let session = Dns::new("dns-out")
+        let session = Dns::new("dns-out", Default::default())
             .associate(&cx, &Address::new("1.1.1.1", 53))
             .await
             .unwrap();
@@ -260,7 +264,10 @@ mod tests {
         let env = served_env();
         let cx = DialCx::new(&env, Initiator::Other, None);
         let to = Address::new("1.1.1.1", 53);
-        let session = Dns::new("dns-out").associate(&cx, &to).await.unwrap();
+        let session = Dns::new("dns-out", Default::default())
+            .associate(&cx, &to)
+            .await
+            .unwrap();
         let mut big = PacketBuf::from_slice(&[1u8; SAFE_PACKET + 1]);
         send_packet(session.as_ref(), &mut big, &to).await.unwrap();
         let mut small = PacketBuf::from_slice(b"\x00\x03abcd");
@@ -276,7 +283,10 @@ mod tests {
         let env = served_env();
         let cx = DialCx::new(&env, Initiator::Other, None);
         let to = Address::new("1.1.1.1", 53);
-        let session = Dns::new("dns-out").associate(&cx, &to).await.unwrap();
+        let session = Dns::new("dns-out", Default::default())
+            .associate(&cx, &to)
+            .await
+            .unwrap();
         session.close();
         let mut packet = PacketBuf::from_slice(b"\x00\x01q");
         assert!(
@@ -291,7 +301,9 @@ mod tests {
     async fn an_unresolved_name_gets_the_placeholder_address() {
         let env = served_env();
         let cx = DialCx::new(&env, Initiator::Other, None);
-        let ip = Dns::new("dns-out").resolve_udp(&cx, "dns.test").await;
+        let ip = Dns::new("dns-out", Default::default())
+            .resolve_udp(&cx, "dns.test")
+            .await;
         assert_eq!(ip.unwrap().unwrap(), IpAddr::V4(UNRESOLVED));
     }
 
@@ -299,7 +311,7 @@ mod tests {
     async fn without_a_dns_server_dials_fail() {
         let env = test_env();
         let cx = DialCx::new(&env, Initiator::Other, None);
-        let dns = Dns::new("dns-out");
+        let dns = Dns::new("dns-out", Default::default());
         let to = Address::new("1.1.1.1", 53);
         assert!(dns.connect(&cx, &to).await.is_err());
         assert!(dns.associate(&cx, &to).await.is_err());

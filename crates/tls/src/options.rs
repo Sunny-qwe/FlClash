@@ -66,6 +66,8 @@ pub struct TlsOptions {
     pub ech_config_list: Option<Vec<u8>>,
     /// Asked at each handshake when `ech_config_list` is `None`.
     pub ech_lookup: Option<Arc<dyn EchLookup>>,
+    /// Where a failed REALITY handshake browses the cover site.
+    pub tasks: concord_common::Tasks,
 }
 
 #[cfg(test)]

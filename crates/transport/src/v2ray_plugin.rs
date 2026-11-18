@@ -2,8 +2,8 @@ use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 
-use concord_common::BoxStream;
 use concord_common::layered::{Layered, ReadLayer, WriteLayer, poll_drain};
+use concord_common::{BoxStream, Tasks};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::ws::{self, WsOptions};
@@ -27,8 +27,12 @@ pub struct V2rayPluginOptions {
     pub mux: bool,
 }
 
-pub(crate) async fn apply(io: BoxStream, opts: &V2rayPluginOptions) -> io::Result<BoxStream> {
-    let stream = ws::apply(io, &opts.ws, &opts.host).await?;
+pub(crate) async fn apply(
+    io: BoxStream,
+    opts: &V2rayPluginOptions,
+    tasks: &Tasks,
+) -> io::Result<BoxStream> {
+    let stream = ws::apply(io, &opts.ws, &opts.host, tasks).await?;
     if opts.mux {
         return Ok(mux(stream));
     }

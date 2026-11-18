@@ -5,7 +5,7 @@ use aws_lc_rs::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use aws_lc_rs::agreement::{self, UnparsedPublicKey, X25519};
 use aws_lc_rs::kem::{DecapsulationKey, ML_KEM_768};
 use aws_lc_rs::signature::{self, ED25519};
-use concord_common::BoxStream;
+use concord_common::{BoxStream, Tasks};
 use rustls_pki_types::ServerName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -63,7 +63,7 @@ pub(crate) struct RealityClient {
     /// A decoy hello offers X25519MLKEM768 only when its protocol survives the larger hello.
     decoy_hybrid: bool,
     spec: &'static FingerprintSpec,
-    user_agent: &'static str,
+    browser: spider::Browser,
     alpn: Vec<String>,
     policy: Arc<CertPolicy>,
 }
@@ -293,9 +293,10 @@ impl RealityClient {
         fingerprint: Option<ClientFingerprint>,
         alpn: Vec<String>,
         trust: Arc<TrustStore>,
+        tasks: &Tasks,
     ) -> Result<Self, TlsError> {
         let policy = Arc::new(CertPolicy::new(&TlsOptions::default(), trust)?);
-        Self::build(Some(options), fingerprint, alpn, policy)
+        Self::build(Some(options), fingerprint, alpn, policy, tasks)
     }
 
     pub(crate) fn jls(options: &TlsOptions, trust: Arc<TrustStore>) -> Result<Self, TlsError> {
@@ -320,7 +321,8 @@ impl RealityClient {
             ));
         }
         let policy = Arc::new(CertPolicy::new(&TlsOptions::default(), trust)?);
-        let mut client = Self::build(None, fingerprint, options.alpn.clone(), policy)?;
+        let alpn = options.alpn.clone();
+        let mut client = Self::build(None, fingerprint, alpn, policy, &options.tasks)?;
         if fingerprint.is_none_or(|fp| fp == ClientFingerprint::None) {
             client.spec = &crate::jls::NATIVE;
         }
@@ -340,6 +342,7 @@ impl RealityClient {
             options.client_fingerprint,
             options.alpn.clone(),
             policy,
+            &options.tasks,
         )?;
         client.decoy_hybrid = hybrid;
         Ok(client)
@@ -350,6 +353,7 @@ impl RealityClient {
         fingerprint: Option<ClientFingerprint>,
         alpn: Vec<String>,
         policy: Arc<CertPolicy>,
+        tasks: &Tasks,
     ) -> Result<Self, TlsError> {
         let requested = fingerprint.unwrap_or(ClientFingerprint::Chrome);
         let resolved = match requested {
@@ -380,7 +384,10 @@ impl RealityClient {
             jls: None,
             decoy_hybrid: false,
             spec,
-            user_agent,
+            browser: spider::Browser {
+                user_agent,
+                tasks: tasks.clone(),
+            },
             alpn,
             policy,
         })
@@ -591,11 +598,11 @@ impl RealityClient {
         }
         if self.jls.is_some() {
             if !std::ptr::eq(self.spec, &crate::jls::NATIVE) {
-                spider::jls_fallback(stream, spider::authority(name), self.user_agent).await;
+                self.browser.jls_fallback(stream, name).await;
             }
             Err(invalid_data("jls authentication failed"))
         } else {
-            spider::spawn(stream, sni.unwrap_or_default(), self.user_agent);
+            self.browser.spawn(stream, sni.unwrap_or_default());
             Err(invalid_data("REALITY authentication failed"))
         }
     }

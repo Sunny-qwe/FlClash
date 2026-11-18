@@ -3,8 +3,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use concord_common::BoxStream;
 use concord_common::layered::{Layered, ReadLayer, WriteLayer};
+use concord_common::{BoxStream, Tasks};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use super::{MuxSession, SmuxSession};
@@ -12,8 +12,8 @@ use super::{MuxSession, SmuxSession};
 const FIRST_STREAM_ID: u32 = 3;
 
 /// One smux v1 stream, with keepalive disabled and a session lasting until both halves close.
-pub(crate) async fn smux_stream(io: BoxStream) -> io::Result<BoxStream> {
-    let session = Arc::new(SmuxSession::with_first_id(io, FIRST_STREAM_ID));
+pub(crate) async fn smux_stream(io: BoxStream, tasks: &Tasks) -> io::Result<BoxStream> {
+    let session = Arc::new(SmuxSession::with_first_id(io, FIRST_STREAM_ID, tasks));
     let stream = session.open().await?;
     Ok(Box::new(Layered::new(
         stream,
@@ -74,7 +74,9 @@ mod tests {
     #[tokio::test]
     async fn single_smux_stream_matches_gost_frames_and_keeps_session_after_split() {
         let (near, mut far) = duplex(128);
-        let stream = smux_stream(Box::new(near)).await.unwrap();
+        let stream = smux_stream(Box::new(near), &Default::default())
+            .await
+            .unwrap();
         let (read, mut write) = stream.into_split();
         write.write_all(b"hi").await.unwrap();
         let mut wire = [0; 18];
@@ -98,7 +100,9 @@ mod tests {
     #[tokio::test]
     async fn single_smux_shutdown_drains_large_upload_and_fin_before_closing() {
         let (near, mut far) = duplex(128);
-        let stream = smux_stream(Box::new(near)).await.unwrap();
+        let stream = smux_stream(Box::new(near), &Default::default())
+            .await
+            .unwrap();
         let data: Vec<u8> = (0..2 * 1024 * 1024 + 19).map(|i| (i % 251) as u8).collect();
         let expected = data.clone();
         let task = tokio::spawn(async move {
@@ -136,7 +140,9 @@ mod tests {
     #[tokio::test]
     async fn single_smux_stream_reads_fragmented_payload_and_fin() {
         let (near, mut far) = duplex(128);
-        let stream = smux_stream(Box::new(near)).await.unwrap();
+        let stream = smux_stream(Box::new(near), &Default::default())
+            .await
+            .unwrap();
         let (mut read, write) = stream.into_split();
         let mut syn = [0; 8];
         far.read_exact(&mut syn).await.unwrap();
@@ -197,10 +203,13 @@ mod tests {
         use std::time::Duration;
         let (near, _far) = duplex(1);
         let dropped = Arc::new(tokio::sync::Notify::new());
-        let stream = smux_stream(Box::new(Tracked {
-            inner: near,
-            dropped: dropped.clone(),
-        }))
+        let stream = smux_stream(
+            Box::new(Tracked {
+                inner: near,
+                dropped: dropped.clone(),
+            }),
+            &Default::default(),
+        )
         .await
         .unwrap();
         drop(stream);

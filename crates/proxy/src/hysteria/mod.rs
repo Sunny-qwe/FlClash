@@ -210,6 +210,7 @@ impl Outbound for Hysteria {
             response.session,
             stream,
             conn,
+            &self.link.tasks,
         )))
     }
 
@@ -346,6 +347,7 @@ pub(crate) fn build(
         obfs,
         hop,
         datagram_frame: Some(DATAGRAM_FRAME),
+        tasks: ctx.tasks.clone(),
     };
     Ok(Arc::new(Hysteria {
         info: info_for(def, OutboundKind::Hysteria, &opts.server, opts.port, true),

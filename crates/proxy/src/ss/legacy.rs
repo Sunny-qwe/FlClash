@@ -36,7 +36,7 @@ impl Outbound for StreamShadowsocks {
     ) -> io::Result<Arc<dyn PacketSession>> {
         if let Some(version) = self.uot {
             let stream = self.open(cx, &uot::destination(version)).await?;
-            return uot::session(Box::new(stream), version, hint);
+            return uot::session(Box::new(stream), version, hint, self.link.tasks());
         }
         let server = self.link.server_socket(cx).await?;
         let codec = stream_udp(self.cipher.clone());

@@ -1,7 +1,7 @@
 use std::io;
 use std::sync::Arc;
 
-use concord_common::{BoxRead, BoxStream, BoxWrite, DialCx};
+use concord_common::{BoxRead, BoxStream, BoxWrite, DialCx, Tasks};
 use gotatun::packet::PacketBufPool;
 use gotatun::tun::{IpRecv, IpSend};
 use tokio::io::AsyncReadExt;
@@ -51,21 +51,26 @@ impl Tunnel {
             )
         };
         let mtu = config.mtu;
-        let wired = Stack::start(&StackConfig {
-            addrs: config.addrs.clone(),
-            mtu,
-        });
+        let tasks = &config.link.tasks;
+        let wired = Stack::start(
+            &StackConfig {
+                addrs: config.addrs.clone(),
+                mtu,
+            },
+            tasks,
+        );
         let stack = wired.stack;
         let (read, mut write) = body.into_split();
         if h3.is_some() {
             capsule::send(&mut write, 3, &capsule::routes()).await?;
         }
-        let stop = CancellationToken::new();
+        let stop = tasks.child_token();
         let (send, recv) = if let Some((client, id)) = h3 {
-            spawn_h3(wired.send, wired.recv, read, write, client, id, &stop)
+            h3_operations(wired.send, wired.recv, read, write, client, id)
         } else {
-            spawn_h2(wired.send, wired.recv, read, write, mtu, &stop)
+            h2_operations(wired.send, wired.recv, read, write, mtu)
         };
+        let (send, recv) = (spawn_io(send, &stop, tasks), spawn_io(recv, &stop, tasks));
         Ok(Arc::new(Self {
             stack,
             dns: RemoteDns::new(
@@ -181,73 +186,65 @@ async fn drive(task: Task) {
     }
 }
 
-fn spawn_io(operation: Operation, stop: &CancellationToken) -> JoinHandle<()> {
-    tokio::spawn(drive(Task::Io {
+fn spawn_io(operation: Operation, stop: &CancellationToken, tasks: &Tasks) -> JoinHandle<()> {
+    tasks.spawn(drive(Task::Io {
         operation,
         stop: stop.clone(),
     }))
 }
 
-pub(super) fn spawn_driver(driver: Driver, conn: quinn::Connection) -> JoinHandle<()> {
-    tokio::spawn(drive(Task::Connection {
+pub(super) fn spawn_driver(
+    driver: Driver,
+    conn: quinn::Connection,
+    tasks: &Tasks,
+) -> JoinHandle<()> {
+    tasks.spawn(drive(Task::Connection {
         driver: Box::new(driver),
         conn,
     }))
 }
 
 pub(super) fn finish_write(sending: ReusableBoxFuture<'static, Sent>, client: Arc<Client>) {
-    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-        let _finish = runtime.spawn(drive(Task::Finish { sending, client }));
-    }
+    let tasks = client.tasks.clone();
+    tasks.spawn_detached(drive(Task::Finish { sending, client }));
 }
 
-fn spawn_h3(
+fn h3_operations(
     incoming: StackSend,
     outgoing: StackRecv,
     read: BoxRead,
     write: BoxWrite,
     client: Arc<Client>,
     id: u64,
-    stop: &CancellationToken,
-) -> (JoinHandle<()>, JoinHandle<()>) {
-    let send = spawn_io(
-        Operation::SendH3 {
-            outgoing,
-            write,
-            client: client.clone(),
-            id,
-        },
-        stop,
-    );
-    let recv = spawn_io(
-        Operation::RecvH3 {
-            incoming,
-            read,
-            client,
-            id,
-        },
-        stop,
-    );
+) -> (Operation, Operation) {
+    let send = Operation::SendH3 {
+        outgoing,
+        write,
+        client: client.clone(),
+        id,
+    };
+    let recv = Operation::RecvH3 {
+        incoming,
+        read,
+        client,
+        id,
+    };
     (send, recv)
 }
 
-fn spawn_h2(
+fn h2_operations(
     incoming: StackSend,
     outgoing: StackRecv,
     read: BoxRead,
     write: BoxWrite,
     mtu: usize,
-    stop: &CancellationToken,
-) -> (JoinHandle<()>, JoinHandle<()>) {
-    let send = spawn_io(Operation::SendH2 { outgoing, write }, stop);
-    let recv = spawn_io(
-        Operation::RecvH2 {
-            incoming,
-            read,
-            mtu,
-        },
-        stop,
-    );
+) -> (Operation, Operation) {
+    let send = Operation::SendH2 { outgoing, write };
+    let recv = Operation::RecvH2 {
+        incoming,
+        read,
+        mtu,
+    };
     (send, recv)
 }
 

@@ -1,17 +1,35 @@
 use std::time::Duration;
 
+use concord_common::Tasks;
+use rustls_pki_types::ServerName;
+
 use super::stream::RealityStream;
 
-/// The peer was the cover site: browse it briefly rather than hang up at once.
-pub(crate) fn spawn(stream: RealityStream, host: String, user_agent: &'static str) {
-    tokio::spawn(async move {
-        let _ = browse(stream, host, user_agent).await;
-    });
+/// How a client whose peer turned out to be the cover site browses it.
+#[derive(Clone)]
+pub(crate) struct Browser {
+    pub(crate) user_agent: &'static str,
+    pub(crate) tasks: Tasks,
 }
 
-async fn browse(stream: RealityStream, host: String, user_agent: &'static str) -> Option<()> {
+impl Browser {
+    /// Browses briefly rather than hang up at once.
+    pub(crate) fn spawn(&self, stream: RealityStream, host: String) {
+        let browser = self.clone();
+        self.tasks.spawn_detached(async move {
+            let _ = browse(&browser, stream, host).await;
+        });
+    }
+
+    pub(crate) async fn jls_fallback(&self, stream: RealityStream, name: &ServerName<'_>) {
+        jls_fallback(stream, authority(name), self.user_agent, &self.tasks).await;
+    }
+}
+
+async fn browse(browser: &Browser, stream: RealityStream, host: String) -> Option<()> {
+    let user_agent = browser.user_agent;
     let (sender, connection) = h2::client::handshake(stream).await.ok()?;
-    let driver = h2_driver(connection);
+    let _driver = AbortOnDrop(h2_driver(&browser.tasks, connection));
     let padding = "0".repeat(rand::random_range(30..62usize));
     let request = http::Request::builder()
         .method("GET")
@@ -25,14 +43,14 @@ async fn browse(stream: RealityStream, host: String, user_agent: &'static str) -
     let (response, _) = ready.send_request(request, true).ok()?;
     let _ = response.await;
     tokio::time::sleep(Duration::from_secs(rand::random_range(5..15u64))).await;
-    driver.abort();
     Some(())
 }
 
-pub(crate) async fn jls_fallback(
+async fn jls_fallback(
     mut stream: RealityStream,
     host: String,
     user_agent: &'static str,
+    tasks: &Tasks,
 ) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let padding = "0".repeat(rand::random_range(30..62usize));
@@ -40,7 +58,7 @@ pub(crate) async fn jls_fallback(
         let Ok((sender, connection)) = h2::client::handshake(stream).await else {
             return;
         };
-        let _driver = AbortOnDrop(h2_driver(connection));
+        let _driver = AbortOnDrop(h2_driver(tasks, connection));
         if let Ok(request) = http::Request::builder()
             .uri(format!("https://{host}/"))
             .header("user-agent", user_agent)
@@ -71,9 +89,10 @@ pub(crate) async fn jls_fallback(
 }
 
 fn h2_driver(
+    tasks: &Tasks,
     connection: h2::client::Connection<RealityStream, bytes::Bytes>,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
+    tasks.spawn(async move {
         let _ = connection.await;
     })
 }
@@ -86,7 +105,7 @@ impl Drop for AbortOnDrop {
     }
 }
 
-pub(crate) fn authority(name: &rustls_pki_types::ServerName<'_>) -> String {
+fn authority(name: &ServerName<'_>) -> String {
     let host = name.to_str();
     if host.contains(':') {
         format!("[{host}]")

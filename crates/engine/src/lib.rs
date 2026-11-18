@@ -11,6 +11,7 @@ mod ntp;
 pub mod ops;
 pub mod probe;
 mod probe_env;
+mod proxy_tasks;
 mod resources;
 mod route;
 mod tun;

@@ -8,7 +8,7 @@ use std::task::{Context, Poll, Waker};
 use concord_common::sync::{lock, read, write};
 use concord_common::{
     Address, CoreError, Datagram, DialCx, HostResolver, Initiator, IpVersion, LookupIps, PacketBuf,
-    PacketSession, RecvBatch, SockOpts, SocketWatch, SocketWatcher,
+    PacketSession, RecvBatch, SockOpts, SocketWatch, SocketWatcher, Tasks,
 };
 use concord_platform::UdpBatch;
 use futures_util::task::AtomicWaker;
@@ -50,6 +50,7 @@ pub struct DirectPacketSession {
     sender: AtomicWaker,
     batch: UdpBatch,
     _ticket: Option<UdpTicket>,
+    tasks: Tasks,
 }
 
 /// Where the socket's read readiness comes from.
@@ -84,6 +85,7 @@ impl DirectPacketSession {
         initiator: Initiator,
         version: IpVersion,
         ipv6: bool,
+        tasks: Tasks,
     ) -> Self {
         let v6 = socket.local_addr().is_ok_and(|addr| addr.is_ipv6());
         DirectPacketSession {
@@ -99,6 +101,7 @@ impl DirectPacketSession {
             sender: AtomicWaker::new(),
             batch: UdpBatch::default(),
             _ticket: None,
+            tasks,
         }
     }
 
@@ -109,6 +112,7 @@ impl DirectPacketSession {
         version: IpVersion,
         opts: &SockOpts,
         loopback: Option<&Arc<LoopbackGuard>>,
+        tasks: &Tasks,
     ) -> io::Result<Self> {
         let resolving = resolve(cx, hint, version);
         let resolved = match cx.deadline {
@@ -132,6 +136,7 @@ impl DirectPacketSession {
             cx.initiator,
             version,
             cx.env.ipv6,
+            tasks.clone(),
         );
         session._ticket = ticket;
         if let Some(host) = hint.domain()
@@ -176,7 +181,7 @@ impl DirectPacketSession {
         }
         if names.resolving.is_none() {
             let key: concord_common::Host = host.into();
-            let task = tokio::spawn(resolve_name(
+            let task = self.tasks.spawn(resolve_name(
                 Arc::clone(&self.names),
                 Arc::clone(&self.resolver),
                 key,
@@ -484,6 +489,7 @@ mod tests {
             Initiator::Direct,
             IpVersion::Dual,
             true,
+            Default::default(),
         );
         (session, platform, loopback_udp().await)
     }
@@ -631,6 +637,7 @@ mod tests {
             IpVersion::Dual,
             &SockOpts::default(),
             Some(&guard),
+            &Default::default(),
         )
         .await
         .unwrap();

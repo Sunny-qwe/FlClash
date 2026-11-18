@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, ready};
 
 use concord_common::sync::lock;
-use concord_common::{BoxStream, Stream};
+use concord_common::{BoxStream, Stream, Tasks};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 
 use config::{SessionIds, Settings, effective_mode, session_id_generator};
@@ -85,6 +85,7 @@ pub struct XhttpClient {
     ids: SessionIds,
     up: Side,
     down: Option<Side>,
+    tasks: Tasks,
 }
 
 fn side(
@@ -93,11 +94,15 @@ fn side(
     browser: &browser::Browser,
     http1: bool,
     dial: XhttpDial,
+    tasks: &Tasks,
 ) -> io::Result<Side> {
     let period = opts.keep_alive_period;
+    let tasks = tasks.clone();
     let make: Maker = match dial {
-        XhttpDial::Tcp(dial) => Arc::new(move || Transport::new(http1, dial.clone(), period)),
-        XhttpDial::Quic(dial) => Arc::new(move || Transport::h3(dial.clone())),
+        XhttpDial::Tcp(dial) => {
+            Arc::new(move || Transport::new(http1, dial.clone(), period, tasks.clone()))
+        }
+        XhttpDial::Quic(dial) => Arc::new(move || Transport::h3(dial.clone(), tasks.clone())),
     };
     let manager = opts
         .reuse
@@ -116,6 +121,7 @@ impl XhttpClient {
         opts: XhttpOptions,
         dial: impl Into<XhttpDial>,
         download: Option<XhttpDownload>,
+        tasks: Tasks,
     ) -> io::Result<Arc<XhttpClient>> {
         let mode = match effective_mode(&opts, download.is_some()) {
             "stream-one" => Mode::StreamOne,
@@ -135,7 +141,14 @@ impl XhttpClient {
         let settings = Settings::resolve(&opts)?;
         let ids = session_id_generator(&opts)?;
         let browser = browser::Browser::new();
-        let up = side(&opts, settings.clone(), &browser, opts.http1, dial.into())?;
+        let up = side(
+            &opts,
+            settings.clone(),
+            &browser,
+            opts.http1,
+            dial.into(),
+            &tasks,
+        )?;
         let down = download
             .map(|download| {
                 let mut down_opts = opts.clone();
@@ -152,6 +165,7 @@ impl XhttpClient {
                     &browser,
                     download.http1,
                     download.dial,
+                    &tasks,
                 )
             })
             .transpose()?;
@@ -161,6 +175,7 @@ impl XhttpClient {
             ids,
             up,
             down,
+            tasks,
         }))
     }
 
@@ -214,7 +229,7 @@ impl XhttpClient {
         let (writer, response) = up_lease.stream(&req).await?;
         let failure: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let watch = failure.clone();
-        let task = tokio::spawn(async move {
+        let task = self.tasks.spawn(async move {
             let outcome = match response.await {
                 Ok((status, mut body)) => {
                     if (200..300).contains(&status) {
@@ -264,6 +279,7 @@ impl XhttpClient {
             session,
             self.settings.sc_max_each_post_bytes.rand(),
             self.settings.sc_min_posts_interval_ms,
+            &self.tasks,
         );
         Ok(Box::new(XhttpConn::new(
             Box::new(writer),

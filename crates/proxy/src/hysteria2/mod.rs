@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use concord_common::{
     Address, BoxStream, DialCx, DialEnv, Initiator, Outbound, OutboundInfo, OutboundKind,
-    PacketSession,
+    PacketSession, Tasks,
 };
 use concord_config::proxy::{Hysteria2Opts, ProxyDef};
 use quinn::congestion::ControllerFactory;
@@ -99,11 +99,16 @@ struct AuthReply {
     rx_auto: bool,
 }
 
-async fn authenticate(conn: &quinn::Connection, password: &str, rx: u64) -> io::Result<AuthReply> {
+async fn authenticate(
+    conn: &quinn::Connection,
+    password: &str,
+    rx: u64,
+    tasks: &Tasks,
+) -> io::Result<AuthReply> {
     let (mut driver, mut requests) = h3::client::new(h3_quinn::Connection::new(conn.clone()))
         .await
         .map_err(io_error)?;
-    tokio::spawn(async move {
+    tasks.spawn(async move {
         let _ = driver.wait_idle().await;
     });
     let request = http::Request::builder()
@@ -118,7 +123,7 @@ async fn authenticate(conn: &quinn::Connection, password: &str, rx: u64) -> io::
     exchange.finish().await.map_err(io_error)?;
     let response = exchange.recv_response().await.map_err(io_error)?;
     let held = conn.clone();
-    tokio::spawn(async move {
+    tasks.spawn(async move {
         let _requests = requests;
         held.closed().await;
     });
@@ -156,7 +161,7 @@ impl Hysteria2 {
             }
             None => self.link.connect_any(cx).await?,
         };
-        let reply = authenticate(&quic.conn, &self.password, self.down).await?;
+        let reply = authenticate(&quic.conn, &self.password, self.down, &quic.tasks).await?;
         let mut rate = reply.rx;
         if rate == 0 || rate > self.up {
             rate = self.up;
@@ -229,7 +234,7 @@ impl Hysteria2 {
         let (done, offer) = watch::channel(None);
         let me = self.me.clone();
         let mine = offer.clone();
-        tokio::spawn(async move {
+        self.link.tasks.spawn(async move {
             let Some(me) = me.upgrade() else {
                 return;
             };
@@ -426,6 +431,7 @@ fn build_hy2(
         obfs: obfs_spec(opts)?,
         hop,
         datagram_frame: Some(DATAGRAM_FRAME),
+        tasks: ctx.tasks.clone(),
     };
     Ok(Arc::new_cyclic(|me| Hysteria2 {
         me: me.clone(),
@@ -692,6 +698,60 @@ mod tests {
             );
             assert!(outcome.is_err(), "{extra}");
         }
+    }
+
+    fn tracked_hy2(port: u16, tracked: &crate::testing::Tracked) -> Arc<Hysteria2> {
+        use concord_config::{Capabilities, ProxyParse, parse_proxy};
+        let node = serde_json::json!({
+            "name": "n", "type": "hysteria2", "server": "localhost", "port": port,
+            "password": "pw", "sni": "localhost", "skip-cert-verify": true,
+        });
+        let Ok(ProxyParse::Ok(def)) = parse_proxy(node.as_object().unwrap(), &Capabilities::full())
+        else {
+            panic!("does not parse");
+        };
+        let concord_config::proxy::ProxyKind::Hysteria2(opts) = &def.kind else {
+            panic!("not hysteria2");
+        };
+        build_hy2(&def, opts, &tracked.ctx()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_stop_ends_a_connection_s_tasks_once_the_outbound_is_gone() {
+        let (authenticated, mut peers) = tokio::sync::mpsc::unbounded_channel();
+        let (port, _, _server) = accepting_server(move |peer| {
+            let _ = authenticated.send(peer);
+        });
+        let tracked = crate::testing::Tracked::new();
+        let built = tracked_hy2(port, &tracked);
+        let env = crate::testing::test_env();
+        built
+            .offer(&DialCx::new(&env, Initiator::Other, None))
+            .await
+            .unwrap();
+        let peer = peers.recv().await.unwrap();
+        assert!(tracked.running() > 0, "the connection is not tracked");
+        tracked.stop();
+        tokio::time::timeout(Duration::from_secs(5), peer.closed())
+            .await
+            .expect("the server never learned the connection closed");
+        drop(built);
+        assert!(tracked.ended_within(Duration::from_secs(5)).await);
+    }
+
+    #[tokio::test]
+    async fn a_connection_s_tasks_end_when_its_outbound_is_dropped() {
+        let (port, _, _server) = accepting_server(|_| {});
+        let tracked = crate::testing::Tracked::new();
+        let built = tracked_hy2(port, &tracked);
+        let env = crate::testing::test_env();
+        built
+            .offer(&DialCx::new(&env, Initiator::Other, None))
+            .await
+            .unwrap();
+        assert!(tracked.running() > 0, "the connection is not tracked");
+        drop(built);
+        assert!(tracked.ended_within(Duration::from_secs(5)).await);
     }
 
     #[tokio::test]

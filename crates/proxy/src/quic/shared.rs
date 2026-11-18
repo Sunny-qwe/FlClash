@@ -28,7 +28,7 @@ impl<H: DatagramHub> SharedConn<H> {
         let hub = Arc::new(hub);
         let reader = {
             let (conn, hub) = (quic.conn.clone(), hub.clone());
-            tokio::spawn(async move {
+            quic.tasks.spawn(async move {
                 while let Ok(datagram) = conn.read_datagram().await {
                     hub.dispatch(&datagram);
                 }

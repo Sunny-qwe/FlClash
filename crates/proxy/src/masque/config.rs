@@ -80,6 +80,7 @@ impl Config {
                 obfs: ObfsSpec::None,
                 hop: None,
                 datagram_frame: Some(16_383),
+                tasks: ctx.tasks.clone(),
             },
             tls,
             sni,

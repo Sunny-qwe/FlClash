@@ -104,7 +104,9 @@ like any inbound. Receive rings are owned mmaps that opt out of transparent huge
 the current runtime. An apply is serialized: load the profile, compile the route program, build the runtime, swap it,
 then reconcile listeners, TUN and DNS; providers load afterwards and report `loaded`. A rejected profile falls back to
 the built-in empty config and says so. Background tasks belong to the engine's `TaskTracker` and are awaited on
-shutdown.
+shutdown, up to a bound. The proxy layer registers its tasks there through `concord_common::Tasks`, which a build
+context carries; a node's tasks end when the node is dropped or the engine stops, and xtask's `task_owner` test
+keeps `tokio::spawn` out of `proxy`, `transport`, `net` and `tls`.
 
 The control plane is layered: `proto` (types, errors, the method registry with execution class `inline`, `serial` or
 `concurrent`, stream policies `latest`, `drop_oldest` or `resync`) → `api` (one async function per method) → `rpc`

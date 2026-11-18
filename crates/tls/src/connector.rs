@@ -152,8 +152,13 @@ impl TlsConnector {
             }
             // mihomo's REALITY hello carries the uTLS preset's ALPN whatever the node or
             // its network asks for.
-            let client =
-                RealityClient::new(reality, options.client_fingerprint, Vec::new(), trust)?;
+            let client = RealityClient::new(
+                reality,
+                options.client_fingerprint,
+                Vec::new(),
+                trust,
+                &options.tasks,
+            )?;
             return Ok(Self {
                 server_name,
                 engine: Engine::Reality(client),

@@ -2,7 +2,7 @@ use std::io;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use concord_common::DialCx;
+use concord_common::{DialCx, Tasks};
 use http::{Method, Request};
 use tokio::task::JoinHandle;
 
@@ -19,6 +19,7 @@ pub(super) struct Client {
     pub(super) quic: QuicConn,
     pub(super) requests: Requests,
     driver: JoinHandle<()>,
+    pub(super) tasks: Tasks,
 }
 
 impl Drop for Client {
@@ -54,11 +55,13 @@ impl Client {
             }
         }
         let conn = quic.conn.clone();
-        let driver = super::tunnel::spawn_driver(driver, conn);
+        let tasks = config.link.tasks.clone();
+        let driver = super::tunnel::spawn_driver(driver, conn, &tasks);
         Ok(Arc::new(Self {
             quic,
             requests,
             driver,
+            tasks,
         }))
     }
 

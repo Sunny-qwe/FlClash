@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use concord_common::{
-    Address, BoxStream, DialCx, Outbound, OutboundInfo, OutboundKind, PacketSession,
+    Address, BoxStream, DialCx, Outbound, OutboundInfo, OutboundKind, PacketSession, Tasks,
 };
 use concord_config::proxy::{ProxyDef, WireGuardOpts};
 use concord_net::dial_found;
@@ -34,6 +34,7 @@ pub(crate) struct Shared {
     config: WgConfig,
     slot: SessionSlot<Tunnel>,
     init: tokio::sync::Mutex<()>,
+    tasks: Tasks,
 }
 
 struct WireGuard {
@@ -60,7 +61,7 @@ impl Shared {
         let mut built = false;
         let build = || {
             built = true;
-            Tunnel::build(cx, &self.egress, &self.config)
+            Tunnel::build(cx, &self.egress, &self.config, &self.tasks)
         };
         let tunnel = self
             .slot
@@ -177,12 +178,12 @@ impl Outbound for WireGuard {
 pub(crate) fn build(
     def: &ProxyDef,
     opts: &WireGuardOpts,
-    _ctx: &BuildCtx,
+    ctx: &BuildCtx,
 ) -> Result<Arc<dyn Outbound>, BuildError> {
-    Ok(Arc::new(construct(def, opts)?))
+    Ok(Arc::new(construct(def, opts, ctx.tasks.clone())?))
 }
 
-fn construct(def: &ProxyDef, opts: &WireGuardOpts) -> Result<WireGuard, BuildError> {
+fn construct(def: &ProxyDef, opts: &WireGuardOpts, tasks: Tasks) -> Result<WireGuard, BuildError> {
     let config = config::parse(opts)?;
     let first = config
         .peers
@@ -202,6 +203,7 @@ fn construct(def: &ProxyDef, opts: &WireGuardOpts) -> Result<WireGuard, BuildErr
             config,
             slot: SessionSlot::default(),
             init: tokio::sync::Mutex::new(()),
+            tasks,
         }),
     })
 }

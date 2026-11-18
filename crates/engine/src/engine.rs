@@ -38,6 +38,7 @@ use crate::ntp::{self, NtpSettings};
 use crate::ops::{self, RuleSetSource};
 use crate::probe::{Prober, RouteHit};
 use crate::probe_env::TunnelProbes;
+use crate::proxy_tasks::ProxyTasks;
 use crate::resources::{self, GeoUpdater, TunnelFetcher};
 use crate::route::RouteCounters;
 use crate::views::*;
@@ -138,6 +139,9 @@ pub struct Engine {
 
 const NOT_INITIALIZED: &str = "not initialized";
 
+/// Past this, shutdown reports the tasks still running and returns rather than hang on one.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+
 impl Engine {
     /// Call inside the runtime that should carry the flows.
     pub fn new(config: EngineConfig) -> Arc<Self> {
@@ -162,6 +166,8 @@ impl Engine {
             fetcher: fetcher.clone(),
         }));
         let clock = Arc::new(ClockOffset::default());
+        let tasks = TaskTracker::new();
+        let handle = Handle::current();
         let shared = Shared {
             platform: config.platform,
             sockets,
@@ -183,6 +189,7 @@ impl Engine {
             rule_providers: ArcSwapOption::empty(),
             fake_ip_store: Arc::default(),
             android: config.android,
+            proxy_tasks: ProxyTasks::new(tasks.clone(), handle.clone()),
         };
         Arc::new(Engine {
             home: ArcSwapOption::empty(),
@@ -203,9 +210,9 @@ impl Engine {
             system_dns: StdMutex::new(None),
             dns_update_seq: AtomicU64::new(0),
             mitm: MitmService::new(table.clone()),
-            handle: Handle::current(),
+            handle,
             prober,
-            tasks: TaskTracker::new(),
+            tasks,
             intent: Arc::new(AsyncMutex::new(0)),
             profile_controller: AtomicBool::new(false),
             answered: StdMutex::new(released()),
@@ -674,12 +681,21 @@ impl Engine {
         if let Some(applied) = state.take() {
             applied.stop.cancel();
         }
-        self.tasks.close();
-        self.tasks.wait().await;
-        self.tasks.reopen();
+        self.shared.proxy_tasks.stop();
+        self.table.close_all();
         self.shared.tunnel.set_status(TunnelStatus::Suspended);
         self.shared.tunnel.clear();
-        self.table.close_all();
+        self.tasks.close();
+        if tokio::time::timeout(SHUTDOWN_GRACE, self.tasks.wait())
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                "[Engine] {} background tasks still running {SHUTDOWN_GRACE:?} into shutdown",
+                self.tasks.len()
+            );
+        }
+        self.tasks.reopen();
         self.initialized.store(false, Ordering::SeqCst);
     }
 }

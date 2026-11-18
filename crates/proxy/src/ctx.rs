@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use concord_common::Tasks;
 use concord_net::LoopbackGuard;
 use concord_platform::HomeDir;
 use concord_tls::{TlsError, TrustStore};
@@ -15,6 +16,8 @@ pub struct BuildCtx {
     pub loopback: Option<Arc<LoopbackGuard>>,
     pub clock: Clock,
     pub home: Option<Arc<HomeDir>>,
+    /// Every task a built node or its sessions start; the engine stops them on shutdown.
+    pub tasks: Tasks,
 }
 
 impl BuildCtx {
@@ -24,6 +27,7 @@ impl BuildCtx {
             loopback: None,
             clock: Arc::new(SystemTime::now),
             home: None,
+            tasks: Tasks::default(),
         }
     }
 

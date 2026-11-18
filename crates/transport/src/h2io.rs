@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use bytes::{Buf, Bytes};
 use concord_common::stream_buffer::{self, StreamBuffer};
-use concord_common::{BoxRead, BoxStream, BoxWrite, Stream};
+use concord_common::{BoxRead, BoxStream, BoxWrite, Stream, Tasks};
 use h2::client::ResponseFuture;
 use h2::{RecvStream, SendStream};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -73,11 +73,12 @@ impl Activity {
 }
 
 pub fn spawn_connection(
+    tasks: &Tasks,
     conn: h2::client::Connection<BoxStream, Bytes>,
     ping_interval: Option<Duration>,
     activity: Arc<Activity>,
 ) {
-    tokio::spawn(async move {
+    tasks.spawn(async move {
         drive(conn, ping_interval, &activity).await;
         activity.ended.store(true, Ordering::Relaxed);
     });

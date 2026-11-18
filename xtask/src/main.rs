@@ -17,6 +17,8 @@ mod size;
 #[cfg(test)]
 mod stream_policy;
 #[cfg(test)]
+mod task_owner;
+#[cfg(test)]
 mod tunables;
 #[cfg(test)]
 mod unsafe_policy;

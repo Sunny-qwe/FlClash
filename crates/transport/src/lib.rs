@@ -18,7 +18,7 @@ mod xhttp;
 use std::io;
 use std::sync::Arc;
 
-use concord_common::BoxStream;
+use concord_common::{BoxStream, Tasks};
 use concord_tls::TlsConnector;
 use futures_util::future::BoxFuture;
 
@@ -94,18 +94,23 @@ pub enum Layer {
     ShadowTls(Arc<ShadowTlsClient>),
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct TransportStack {
     layers: Vec<Layer>,
+    tasks: Tasks,
 }
 
 impl TransportStack {
-    pub fn new(layers: Vec<Layer>) -> Self {
-        TransportStack { layers }
+    pub fn new(layers: Vec<Layer>, tasks: Tasks) -> Self {
+        TransportStack { layers, tasks }
     }
 
     pub fn layers(&self) -> &[Layer] {
         &self.layers
+    }
+
+    pub fn tasks(&self) -> &Tasks {
+        &self.tasks
     }
 
     /// The stack with `layer` first, under the others.
@@ -113,7 +118,10 @@ impl TransportStack {
         let mut layers = Vec::with_capacity(self.layers.len() + 1);
         layers.push(layer);
         layers.extend(self.layers);
-        TransportStack { layers }
+        TransportStack {
+            layers,
+            tasks: self.tasks,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -143,15 +151,21 @@ impl TransportStack {
                         "the stack has no stream to build on",
                     ));
                 }
-                (Layer::Ws(opts), Some(stream)) => ws::apply(stream, opts, target_host).await?,
-                (Layer::H2(opts), Some(stream)) => h2_transport::connect(stream, opts).await?,
+                (Layer::Ws(opts), Some(stream)) => {
+                    ws::apply(stream, opts, target_host, &self.tasks).await?
+                }
+                (Layer::H2(opts), Some(stream)) => {
+                    h2_transport::connect(stream, opts, &self.tasks).await?
+                }
                 (Layer::Http(opts), Some(stream)) => http_obfs::wrap(stream, opts, target_host),
                 (Layer::SimpleObfs(opts), Some(stream)) => simple_obfs::wrap(stream, opts),
                 (Layer::V2rayPlugin(opts), Some(stream)) => {
-                    v2ray_plugin::apply(stream, opts).await?
+                    v2ray_plugin::apply(stream, opts, &self.tasks).await?
                 }
-                (Layer::GostPlugin(opts), Some(stream)) => gost_plugin::apply(stream, opts).await?,
-                (Layer::Smux, Some(stream)) => singmux::smux_stream(stream).await?,
+                (Layer::GostPlugin(opts), Some(stream)) => {
+                    gost_plugin::apply(stream, opts, &self.tasks).await?
+                }
+                (Layer::Smux, Some(stream)) => singmux::smux_stream(stream, &self.tasks).await?,
                 (Layer::Tls(connector), Some(stream)) => {
                     Box::new(connector.connect_unaligned(stream, target_host).await?)
                 }

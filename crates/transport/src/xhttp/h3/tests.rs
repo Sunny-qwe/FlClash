@@ -43,7 +43,7 @@ async fn xhttp_h3_fixed_body_cancellation_resets_a_blocked_send() {
             Ok((conn, Arc::new(client) as Arc<dyn Send + Sync>))
         })
     });
-    let transport = H3Transport::new(dial);
+    let transport = H3Transport::new(dial, Default::default());
     let request = Built::test_new(
         "POST",
         "localhost",

@@ -208,9 +208,9 @@ pub(crate) fn build(
         }
     };
     let link = Link {
-        stack: TransportStack::new(layers),
+        stack: TransportStack::new(layers, ctx.tasks.clone()),
         transport_host,
-        ..Link::plain(def, &opts.server, opts.port)
+        ..Link::plain(def, &opts.server, opts.port, &ctx.tasks)
     };
     if version == 6 {
         let mode = v6_frame::Mode::parse(&opts.mode)

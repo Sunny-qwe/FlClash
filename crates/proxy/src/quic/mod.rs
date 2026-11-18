@@ -13,7 +13,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use arc_swap::ArcSwapOption;
-use concord_common::{Address, BoxRead, BoxWrite, DialCx, Initiator, SockOpts, Stream};
+use concord_common::{Address, BoxRead, BoxWrite, DialCx, Initiator, SockOpts, Stream, Tasks};
 use quinn::congestion::{CubicConfig, NewRenoConfig};
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::{
@@ -102,12 +102,43 @@ pub(crate) struct QuicLink {
     pub(crate) hop: Option<Hop>,
     /// The `max_datagram_frame_size` to advertise instead of the one quinn derives.
     pub(crate) datagram_frame: Option<u64>,
+    pub(crate) tasks: Tasks,
 }
 
 /// A QUIC connection and the endpoint that carries it.
 pub(crate) struct QuicConn {
     pub(crate) conn: quinn::Connection,
     endpoint: Endpoint,
+    pub(crate) tasks: Tasks,
+}
+
+/// quinn spawns an endpoint's driver and each connection's through its runtime. They run until
+/// the connection has drained after its close (3 PTO, RFC 9000 section 10.2), which is what
+/// sends the CONNECTION_CLOSE, so they run to their end.
+struct TrackedRuntime(Tasks);
+
+impl std::fmt::Debug for TrackedRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TrackedRuntime")
+    }
+}
+
+impl Runtime for TrackedRuntime {
+    fn new_timer(&self, at: std::time::Instant) -> Pin<Box<dyn quinn::AsyncTimer>> {
+        TokioRuntime.new_timer(at)
+    }
+
+    fn spawn(&self, future: Pin<Box<dyn std::future::Future<Output = ()> + Send>>) {
+        self.0.spawn_to_end(future);
+    }
+
+    fn wrap_udp_socket(&self, socket: std::net::UdpSocket) -> io::Result<Arc<dyn AsyncUdpSocket>> {
+        TokioRuntime.wrap_udp_socket(socket)
+    }
+
+    fn now(&self) -> std::time::Instant {
+        TokioRuntime.now()
+    }
 }
 
 impl Drop for QuicConn {
@@ -203,7 +234,7 @@ impl QuicLink {
                 .nodes
                 .associate_via(via, &inner, &Address::Socket(remote))
                 .await?;
-            return Ok(SessionSocket::new(session, remote));
+            return Ok(SessionSocket::new(session, remote, &self.tasks));
         }
         let opts = SockOpts {
             tunnel_udp_buffers: true,
@@ -296,13 +327,14 @@ impl QuicLink {
                 raw,
                 obfs.build(),
                 hop.as_ref().map(|hop| (remote.port(), hop.clone())),
+                &self.tasks,
             ),
         };
         let endpoint = Endpoint::new_with_abstract_socket(
             endpoint_config,
             None,
             socket,
-            Arc::new(TokioRuntime),
+            Arc::new(TrackedRuntime(self.tasks.clone())),
         )?;
         let name = self
             .server_name
@@ -327,8 +359,25 @@ impl QuicLink {
         let conn = tokio::time::timeout(left, handshake)
             .await
             .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
-        Ok(QuicConn { conn, endpoint })
+        close_on_stop(&self.tasks, conn.clone());
+        Ok(QuicConn {
+            conn,
+            endpoint,
+            tasks: self.tasks.clone(),
+        })
     }
+}
+
+/// The peer hears the connection close when the engine stops, as sing-box's outbounds send
+/// CONNECTION_CLOSE from their `Close`.
+fn close_on_stop(tasks: &Tasks, conn: quinn::Connection) {
+    let stop = tasks.clone();
+    tasks.spawn_to_end(async move {
+        tokio::select! {
+            () = stop.stopped() => conn.close(quinn::VarInt::from_u32(0), b""),
+            _ = conn.closed() => {}
+        }
+    });
 }
 
 /// What a link keeps of its obfuscation; each connection builds its own state.
@@ -372,7 +421,7 @@ pub(crate) fn obfuscated_socket(
     inner: Arc<dyn AsyncUdpSocket>,
     obfs: &ObfsSpec,
 ) -> Arc<dyn AsyncUdpSocket> {
-    WrappedSocket::new(inner, obfs.build(), None)
+    WrappedSocket::new(inner, obfs.build(), None, &Default::default())
 }
 
 /// A bidirectional QUIC stream as a byte stream.
@@ -555,5 +604,53 @@ mod tests {
         assert_eq!(Arc::strong_count(&witness), 1);
         conn.close(0u32.into(), b"");
         assert_eq!(echo.await.unwrap(), b"up");
+    }
+
+    #[tokio::test]
+    async fn a_stop_sends_connection_close_and_the_drivers_end_with_the_connection() {
+        let (server, port) = quic_server(b"h3", |socket| socket);
+        let peer = tokio::spawn(async move {
+            let conn = server.accept().await.unwrap().await.unwrap();
+            conn.closed().await
+        });
+        let tracked = crate::testing::Tracked::new();
+        let options = TlsOptions {
+            server_name: Some("localhost".to_string()),
+            alpn: vec!["h3".to_string()],
+            skip_cert_verify: true,
+            ..TlsOptions::default()
+        };
+        let link = QuicLink {
+            egress: crate::node::Egress::new("q", &Default::default()),
+            server: Address::new("127.0.0.1", port),
+            server_name: Some("localhost".to_string()),
+            crypto: Crypto::Rustls(
+                concord_tls::quic_client_config(
+                    &options,
+                    TrustStore::new(b"", Vec::new()),
+                    &["h3"],
+                )
+                .unwrap(),
+            ),
+            transport: Arc::new(transport_config()),
+            obfs: ObfsSpec::None,
+            hop: None,
+            datagram_frame: None,
+            tasks: tracked.tasks.clone(),
+        };
+        let env = crate::testing::test_env();
+        let conn = link
+            .connect(&DialCx::new(&env, Initiator::Other, None))
+            .await
+            .unwrap();
+        assert!(tracked.running() > 0, "the drivers are not tracked");
+        tracked.stop();
+        let closed = crate::testing::settled(peer).await;
+        assert!(
+            matches!(closed, quinn::ConnectionError::ApplicationClosed(_)),
+            "{closed}"
+        );
+        drop(conn);
+        assert!(tracked.ended_within(Duration::from_secs(5)).await);
     }
 }

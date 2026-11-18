@@ -67,7 +67,7 @@ impl Outbound for Shadowsocks {
     ) -> io::Result<Arc<dyn PacketSession>> {
         if let Some(version) = self.uot {
             let stream = self.open(cx, &uot::destination(version)).await?;
-            return uot::session(Box::new(stream), version, hint);
+            return uot::session(Box::new(stream), version, hint, self.link.tasks());
         }
         let server = self.link.server_socket(cx).await?;
         let codec = SsUdp::new(self.key.kind, self.key.key(), self.clock.clone())
@@ -174,10 +174,10 @@ fn plugin_link(def: &ProxyDef, opts: &SsOpts, ctx: &BuildCtx) -> Result<Link, Bu
     Ok(Link {
         tls,
         sni_fallback: sni,
-        stack: TransportStack::new(layers),
+        stack: TransportStack::new(layers, ctx.tasks.clone()),
         transport_host,
         env_slot,
-        ..Link::plain(def, &opts.server, opts.port)
+        ..Link::plain(def, &opts.server, opts.port, &ctx.tasks)
     })
 }
 

@@ -43,7 +43,7 @@ fn client(dial: QuicDialFn, mode: &str) -> Arc<XhttpClient> {
         max_connections: "1".into(),
         ..Default::default()
     });
-    XhttpClient::new(opts, XhttpDial::Quic(dial), None).unwrap()
+    XhttpClient::new(opts, XhttpDial::Quic(dial), None, Default::default()).unwrap()
 }
 
 #[tokio::test]

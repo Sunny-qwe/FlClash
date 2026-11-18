@@ -38,13 +38,15 @@ impl Drop for Session {
 
 pub(crate) struct H3Transport {
     dial: QuicDialFn,
+    tasks: concord_common::Tasks,
     session: Arc<tokio::sync::Mutex<Option<Arc<Session>>>>,
 }
 
 impl H3Transport {
-    pub(super) fn new(dial: QuicDialFn) -> Self {
+    pub(super) fn new(dial: QuicDialFn, tasks: concord_common::Tasks) -> Self {
         Self {
             dial,
+            tasks,
             session: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
@@ -62,7 +64,7 @@ impl H3Transport {
             .map_err(error)?;
         let weak = Arc::downgrade(&self.session);
         let id = conn.stable_id();
-        let task = tokio::spawn(async move {
+        let task = self.tasks.spawn(async move {
             let _ = driver.wait_idle().await;
             if let Some(slot) = weak.upgrade() {
                 let mut slot = slot.lock().await;

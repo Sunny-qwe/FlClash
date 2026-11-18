@@ -1,15 +1,19 @@
 use std::io;
 
-use concord_common::BoxStream;
+use concord_common::{BoxStream, Tasks};
 
 use crate::singmux::smux_stream;
 use crate::v2ray_plugin::V2rayPluginOptions;
 use crate::ws;
 
-pub(crate) async fn apply(io: BoxStream, opts: &V2rayPluginOptions) -> io::Result<BoxStream> {
-    let stream = ws::apply(io, &opts.ws, &opts.host).await?;
+pub(crate) async fn apply(
+    io: BoxStream,
+    opts: &V2rayPluginOptions,
+    tasks: &Tasks,
+) -> io::Result<BoxStream> {
+    let stream = ws::apply(io, &opts.ws, &opts.host, tasks).await?;
     if opts.mux {
-        smux_stream(stream).await
+        smux_stream(stream, tasks).await
     } else {
         Ok(stream)
     }
@@ -39,7 +43,9 @@ mod tests {
                 mux,
             };
             let task = tokio::spawn(async move {
-                let mut io = apply(Box::new(near), &options).await.unwrap();
+                let mut io = apply(Box::new(near), &options, &Default::default())
+                    .await
+                    .unwrap();
                 io.write_all(b"hello").await.unwrap();
                 let mut got = [0; 2];
                 io.read_exact(&mut got).await.unwrap();

@@ -367,18 +367,18 @@ pub(crate) fn build_link(spec: LinkSpec<'_>, ctx: &BuildCtx) -> Result<Link, Bui
     };
 
     let mut slot = None;
-    let stack = match transport {
-        Transport::Tcp => TransportStack::default(),
-        Transport::Ws(ws) => TransportStack::new(vec![Layer::Ws(WsOptions {
+    let layer = match transport {
+        Transport::Tcp => None,
+        Transport::Ws(ws) => Some(Layer::Ws(WsOptions {
             random_host: flavor == Flavor::Vless && !tls_on,
             ..ws_options(ws)
-        })]),
-        Transport::Http(http) => TransportStack::new(vec![Layer::Http(http_obfs_options(http))]),
+        })),
+        Transport::Http(http) => Some(Layer::Http(http_obfs_options(http))),
         Transport::H2(h2) => {
             if !tls_on {
                 return Err(BuildError::invalid("the h2 network requires tls"));
             }
-            TransportStack::new(vec![Layer::H2(h2_options(h2))])
+            Some(Layer::H2(h2_options(h2)))
         }
         Transport::Grpc(grpc) => {
             let authority = if tls.server_name.is_empty() && !trojan {
@@ -395,17 +395,16 @@ pub(crate) fn build_link(spec: LinkSpec<'_>, ctx: &BuildCtx) -> Result<Link, Bui
                 (!reality).then_some("h2"),
             );
             slot = Some(env_slot.clone());
-            TransportStack::new(vec![Layer::Grpc(GunClient::new(
-                grpc_options(grpc, authority),
-                dial,
-            ))])
+            let client = GunClient::new(grpc_options(grpc, authority), dial, ctx.tasks.clone());
+            Some(Layer::Grpc(client))
         }
         Transport::Xhttp(xhttp) => {
             let layer = xhttp_layer(xhttp, tls, &egress, (server, port), &env_slot, ctx)?;
             slot = Some(env_slot.clone());
-            TransportStack::new(vec![layer])
+            Some(layer)
         }
     };
+    let stack = TransportStack::new(layer.into_iter().collect(), ctx.tasks.clone());
 
     let ech_lookup = tls_on && tls.shadow_tls.is_none() && looks_up_ech(tls);
     let secure = if matches!(transport, Transport::Grpc(_) | Transport::Xhttp(_)) {
@@ -456,14 +455,15 @@ pub(crate) fn simple_link(
     } else {
         None
     };
-    let (secured, stack) = Secure::place(secured, TransportStack::default());
+    let stack = TransportStack::new(Vec::new(), ctx.tasks.clone());
+    let (secured, stack) = Secure::place(secured, stack);
     Ok(Link {
         tls: secured,
         sni_fallback: sni,
         stack,
         env_slot: (tls.enabled && tls.shadow_tls.is_none() && looks_up_ech(tls))
             .then_some(env_slot),
-        ..Link::plain(def, server, port)
+        ..Link::plain(def, server, port, &ctx.tasks)
     })
 }
 
@@ -721,7 +721,7 @@ fn xhttp_layer(
         http1,
         has_reality,
     };
-    let client = XhttpClient::new(options, dial, download)
+    let client = XhttpClient::new(options, dial, download, ctx.tasks.clone())
         .map_err(|err| BuildError::invalid(err.to_string()))?;
     Ok(Layer::Xhttp(client))
 }

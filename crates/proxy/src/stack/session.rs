@@ -169,10 +169,13 @@ mod tests {
 
     /// A stack whose outgoing packets come straight back in, with a UDP echo on its own address.
     fn looped() -> Arc<Stack> {
-        let wired = Stack::start(&StackConfig {
-            addrs: vec![ADDR.into()],
-            mtu: 1400,
-        });
+        let wired = Stack::start(
+            &StackConfig {
+                addrs: vec![ADDR.into()],
+                mtu: 1400,
+            },
+            &Default::default(),
+        );
         wired.stack.serve_udp(ECHO, |data| Some(data.to_vec()));
         let (mut send, mut recv) = (wired.send, wired.recv);
         tokio::spawn(async move {
@@ -306,10 +309,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_stopped_stack_wakes_a_parked_receive() {
-        let wired = Stack::start(&StackConfig {
-            addrs: vec![ADDR.into()],
-            mtu: 1400,
-        });
+        let wired = Stack::start(
+            &StackConfig {
+                addrs: vec![ADDR.into()],
+                mtu: 1400,
+            },
+            &Default::default(),
+        );
         let probe = Arc::new(Probe::default());
         let session = Arc::new(session(&wired.stack, &probe));
         let parked = tokio::spawn({

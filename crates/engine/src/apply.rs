@@ -410,6 +410,7 @@ pub(crate) struct Shared {
     pub rule_providers: ArcSwapOption<RuleProviders>,
     pub fake_ip_store: Arc<FakeIpStore>,
     pub android: bool,
+    pub proxy_tasks: crate::proxy_tasks::ProxyTasks,
 }
 
 /// Why a config could not be applied. Only the text reaches the host, as the failure message.
@@ -713,7 +714,7 @@ async fn build_outbounds(
     let mut ctx = BuildCtx::new(trust.clone())
         .with_home(home.clone())
         .with_clock(Arc::new(move || clock.now()));
-    ctx.loopback = shared.loopback.clone();
+    (ctx.loopback, ctx.tasks) = (shared.loopback.clone(), shared.proxy_tasks.tasks());
     let deps = GroupDeps {
         selections,
         env: env_factory,

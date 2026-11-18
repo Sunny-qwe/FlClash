@@ -14,10 +14,14 @@ pub(super) async fn connect(config: &Config, cx: &DialCx<'_>) -> io::Result<BoxS
     if tls.negotiated_alpn() != Some(b"h2") {
         return Err(io::Error::other("MASQUE server did not negotiate h2"));
     }
-    connect_io(Box::new(tls), &config.uri).await
+    connect_io(Box::new(tls), &config.uri, &config.link.tasks).await
 }
 
-pub(super) async fn connect_io(io: BoxStream, uri: &Uri) -> io::Result<BoxStream> {
+pub(super) async fn connect_io(
+    io: BoxStream,
+    uri: &Uri,
+    tasks: &concord_common::Tasks,
+) -> io::Result<BoxStream> {
     let authority = uri
         .authority()
         .ok_or_else(|| io::Error::other("MASQUE URI has no authority"))?;
@@ -44,7 +48,12 @@ pub(super) async fn connect_io(io: BoxStream, uri: &Uri) -> io::Result<BoxStream
         .await
         .map_err(io_error)?;
     let activity = Activity::new();
-    spawn_connection(connection, Some(Duration::from_secs(30)), activity.clone());
+    spawn_connection(
+        tasks,
+        connection,
+        Some(Duration::from_secs(30)),
+        activity.clone(),
+    );
     let mut sender = sender.ready().await.map_err(io_error)?;
     let (response, send) = sender.send_request(request, false).map_err(io_error)?;
     let response = response.await.map_err(io_error)?;

@@ -140,10 +140,11 @@ impl ShadowQuic {
         let mut tasks = Vec::new();
         {
             let (conn, hub) = (shared.quic.conn.clone(), shared.hub.clone());
-            tasks.push(tokio::spawn(async move {
+            let spawner = shared.quic.tasks.clone();
+            tasks.push(shared.quic.tasks.spawn(async move {
                 while let Ok(mut stream) = conn.accept_uni().await {
                     let hub = hub.clone();
-                    tokio::spawn(async move {
+                    spawner.spawn(async move {
                         let _ = read_uni(&mut stream, &hub).await;
                     });
                 }
@@ -152,7 +153,7 @@ impl ShadowQuic {
         let Settings { up, down, .. } = self.settings;
         if up > 0 || down > 0 {
             let settings = Arc::new(self.settings);
-            tasks.push(tokio::spawn(negotiate(
+            tasks.push(shared.quic.tasks.spawn(negotiate(
                 shared.quic.conn.clone(),
                 self.controllers.clone(),
                 settings,
@@ -230,6 +231,7 @@ impl Outbound for ShadowQuic {
             stream,
             over_stream,
             conn,
+            &self.link.tasks,
         )))
     }
 
@@ -324,7 +326,7 @@ fn offers_version_one(versions: &[String]) -> Result<bool, BuildError> {
 pub(crate) fn build(
     def: &ProxyDef,
     opts: &ShadowQuicOpts,
-    _ctx: &BuildCtx,
+    ctx: &BuildCtx,
 ) -> Result<Arc<dyn Outbound>, BuildError> {
     if !offers_version_one(&opts.quic_versions)? {
         return Err(BuildError::unsupported(
@@ -365,6 +367,7 @@ pub(crate) fn build(
         obfs: ObfsSpec::None,
         hop: None,
         datagram_frame: Some(datagram_frame(opts)),
+        tasks: ctx.tasks.clone(),
     };
     Ok(Arc::new(ShadowQuic {
         info: info_for(def, OutboundKind::ShadowQuic, &opts.server, opts.port, true),

@@ -60,6 +60,7 @@ pub(super) fn dial(
         obfs: ObfsSpec::None,
         hop: None,
         datagram_frame: None,
+        tasks: ctx.tasks.clone(),
     });
     let slot = slot.clone();
     Ok(Arc::new(move || {

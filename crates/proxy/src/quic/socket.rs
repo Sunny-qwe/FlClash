@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
+use concord_common::Tasks;
 use concord_common::sync::lock;
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};
@@ -43,9 +44,9 @@ impl Drop for HopState {
 }
 
 impl HopState {
-    fn start(base_port: u16, hop: Hop) -> Self {
+    fn start(base_port: u16, hop: Hop, tasks: &Tasks) -> Self {
         let current = Arc::new(AtomicU16::new(base_port));
-        let task = tokio::spawn(hop_loop(Arc::downgrade(&current), hop));
+        let task = tasks.spawn(hop_loop(Arc::downgrade(&current), hop));
         HopState {
             base_port,
             current,
@@ -93,10 +94,11 @@ impl WrappedSocket {
         inner: Arc<dyn AsyncUdpSocket>,
         obfs: Obfs,
         hop: Option<(u16, Hop)>,
+        tasks: &Tasks,
     ) -> Arc<Self> {
         let hop = hop
             .filter(|(_, hop)| !hop.ports.is_empty())
-            .map(|(base, hop)| HopState::start(base, hop));
+            .map(|(base, hop)| HopState::start(base, hop, tasks));
         Arc::new(WrappedSocket {
             inner,
             obfs,
@@ -365,7 +367,7 @@ mod tests {
         let inner = TokioRuntime
             .wrap_udp_socket(socket.into_std().unwrap())
             .unwrap();
-        WrappedSocket::new(inner, obfs, hop)
+        WrappedSocket::new(inner, obfs, hop, &Default::default())
     }
 
     async fn send(socket: &Arc<WrappedSocket>, to: SocketAddr, data: &[u8]) {

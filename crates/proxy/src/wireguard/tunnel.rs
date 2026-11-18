@@ -9,12 +9,14 @@ use arc_swap::ArcSwap;
 use concord_common::sync::lock;
 use concord_common::{
     Address, CoreError, DialCx, DialEnv, HostResolver, Initiator, IpVersion, LookupIps, SockOpts,
+    Tasks,
 };
 use gotatun::device::{Device, DeviceBuilder, Peer};
 use gotatun::x25519::{PublicKey, StaticSecret};
 use ipnetwork::IpNetwork;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep};
+use tokio_util::sync::CancellationToken;
 
 use super::amnezia::Amnezia;
 use super::config::{PeerConfig, WgConfig};
@@ -29,8 +31,10 @@ type WgDevice = Device<(WireFactory, StackSend, StackRecv)>;
 
 pub(super) struct Tunnel {
     pub(super) stack: Arc<Stack>,
-    device: WgDevice,
+    device: Option<WgDevice>,
     driver: JoinHandle<()>,
+    tasks: Tasks,
+    dropped: CancellationToken,
     reserved: Arc<Reserved>,
     amnezia: Option<Arc<Amnezia>>,
     broken: Arc<Breaker>,
@@ -44,9 +48,15 @@ struct Endpoints {
     checked: Instant,
 }
 
+/// gotatun's own `Drop` stops the device on a task nothing waits for; `stop` lets the engine
+/// wait for it.
 impl Drop for Tunnel {
     fn drop(&mut self) {
         self.driver.abort();
+        self.dropped.cancel();
+        if let Some(device) = self.device.take() {
+            self.tasks.spawn_to_end(device.stop());
+        }
     }
 }
 
@@ -92,6 +102,7 @@ impl Tunnel {
         cx: &DialCx<'_>,
         egress: &Egress,
         config: &WgConfig,
+        tasks: &Tasks,
     ) -> io::Result<Arc<Tunnel>> {
         let mut resolved = Vec::with_capacity(config.peers.len());
         for peer in &config.peers {
@@ -119,10 +130,13 @@ impl Tunnel {
             }
             amnezia
         });
-        let stack = Stack::start(&StackConfig {
-            addrs: config.addrs.iter().map(|net| net.ip()).collect(),
-            mtu: config.mtu,
-        });
+        let stack = Stack::start(
+            &StackConfig {
+                addrs: config.addrs.iter().map(|net| net.ip()).collect(),
+                mtu: config.mtu,
+            },
+            tasks,
+        );
         let broken = Arc::new(Breaker::new(stack.driver.abort_handle()));
         let factory = WireFactory::new(carrier, reserved.clone(), amnezia.clone(), broken.clone());
         let peers = config
@@ -140,8 +154,10 @@ impl Tunnel {
             .map_err(|err| io::Error::other(format!("wireguard device: {err}")))?;
         let tunnel = Arc::new(Tunnel {
             stack: stack.stack,
-            device,
+            device: Some(device),
             driver: stack.driver,
+            tasks: tasks.clone(),
+            dropped: tasks.child_token(),
             reserved,
             amnezia,
             broken,
@@ -237,8 +253,8 @@ impl Tunnel {
                 continue;
             }
             let key = PublicKey::from(peer.public_key);
-            let updated = self
-                .device
+            let Some(device) = &self.device else { return };
+            let updated = device
                 .write(async |device| {
                     device
                         .modify_peer(&key, |peer| peer.set_endpoint(Some(fresh)))
@@ -265,7 +281,8 @@ where
     F: Fn(&Arc<Tunnel>) + Send + 'static,
 {
     let weak: Weak<Tunnel> = Arc::downgrade(tunnel);
-    tokio::spawn(async move {
+    let dropped = tunnel.dropped.clone();
+    let watch = async move {
         let mut seen = 0;
         let mut quiet = false;
         loop {
@@ -284,5 +301,8 @@ where
             quiet = idle;
             seen = epoch;
         }
+    };
+    tunnel.tasks.spawn(async move {
+        let _ = dropped.run_until_cancelled_owned(watch).await;
     });
 }

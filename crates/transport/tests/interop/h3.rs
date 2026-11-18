@@ -155,8 +155,13 @@ async fn xhttp_h3_preserves_headers_padding_modes_and_independent_halves() {
                 http1: false,
                 dial: XhttpDial::Tcp(xhttp_dial(server)),
             });
-            let client =
-                XhttpClient::new(xhttp_opts(mode), XhttpDial::Quic(dial), download).unwrap();
+            let client = XhttpClient::new(
+                xhttp_opts(mode),
+                XhttpDial::Quic(dial),
+                download,
+                Default::default(),
+            )
+            .unwrap();
             let mut stream = client.dial().await.unwrap();
             let payload = pattern(120_000);
             stream.write_all(&payload).await.unwrap();
@@ -192,7 +197,8 @@ async fn xhttp_h3_xmux_reuses_connections_and_reset_dials_again() {
         max_connections: "1".into(),
         ..XhttpReuse::default()
     });
-    let client = XhttpClient::new(options, XhttpDial::Quic(dial), None).unwrap();
+    let client =
+        XhttpClient::new(options, XhttpDial::Quic(dial), None, Default::default()).unwrap();
     for i in 0..3 {
         if i == 2 {
             client.close();

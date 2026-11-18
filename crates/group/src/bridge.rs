@@ -22,10 +22,14 @@ impl ProxyFactory {
 impl NodeFactory for ProxyFactory {
     fn builtin(&self, which: Builtin) -> Arc<dyn Outbound> {
         match which {
-            Builtin::Direct => builtin::direct_with("DIRECT", self.ctx.loopback.clone()),
+            Builtin::Direct => {
+                builtin::direct_with("DIRECT", self.ctx.loopback.clone(), self.ctx.tasks.clone())
+            }
             Builtin::Reject => builtin::reject(),
             Builtin::RejectDrop => builtin::reject_drop(),
-            Builtin::Compatible => builtin::compatible_with(self.ctx.loopback.clone()),
+            Builtin::Compatible => {
+                builtin::compatible_with(self.ctx.loopback.clone(), self.ctx.tasks.clone())
+            }
             Builtin::Pass => builtin::pass(),
             Builtin::PassRule => builtin::pass_rule(),
         }

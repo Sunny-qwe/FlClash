@@ -11,7 +11,7 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 pub(crate) use stream::IpStream;
 
-use concord_common::Stream;
+use concord_common::{Stream, Tasks};
 use concord_netstack::frag::Reassembler;
 use concord_netstack::wire::{
     BuildError, IpView, L4Checksum, L4Kind, Parsed, build_udp, parse_packet, parse_udp,
@@ -263,7 +263,7 @@ impl IpRecv for StackRecv {
 }
 
 impl Stack {
-    pub(crate) fn start(config: &StackConfig) -> Wired {
+    pub(crate) fn start(config: &StackConfig, tasks: &Tasks) -> Wired {
         let (to_wg, from_stack) = mpsc::channel(OUTBOUND_QUEUE);
         let (to_stack, from_wg) = mpsc::channel(OUTBOUND_QUEUE);
         let tcp = TcpStack::new(concord_netstack::StackConfig {
@@ -291,7 +291,7 @@ impl Stack {
             wake: Arc::new(Notify::new()),
             active: AtomicUsize::new(0),
         });
-        let driver = tokio::spawn(drive(stack.clone(), to_wg, from_wg));
+        let driver = tasks.spawn(drive(stack.clone(), to_wg, from_wg));
         Wired {
             stack,
             send: StackSend { tx: to_stack },

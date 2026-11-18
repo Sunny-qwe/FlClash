@@ -78,10 +78,13 @@ async fn server(client_public: PublicKey) -> Server {
     let secret = secret(1);
     let public = PublicKey::from(&secret);
     let port = free_udp_port();
-    let wired = Stack::start(&StackConfig {
-        addrs: vec![SERVER_TUNNEL_IP.into()],
-        mtu: 1408,
-    });
+    let wired = Stack::start(
+        &StackConfig {
+            addrs: vec![SERVER_TUNNEL_IP.into()],
+            mtu: 1408,
+        },
+        &Default::default(),
+    );
     wired.stack.serve_tcp_echo(7);
     wired.stack.serve_udp(7001, |data| Some(data.to_vec()));
     wired.stack.serve_udp(53, dns_answer);
@@ -109,6 +112,16 @@ fn client(port: u16, public: &PublicKey, extra: Value) -> Arc<WireGuard> {
 }
 
 fn client_at(host: &str, port: u16, public: &PublicKey, extra: Value) -> Arc<WireGuard> {
+    client_with(host, port, public, extra, Default::default())
+}
+
+fn client_with(
+    host: &str,
+    port: u16,
+    public: &PublicKey,
+    extra: Value,
+    tasks: concord_common::Tasks,
+) -> Arc<WireGuard> {
     let mut proxy = json!({
         "name": "wg", "type": "wireguard", "udp": true,
         "private-key": b64(&[2; 32]),
@@ -129,7 +142,7 @@ fn client_at(host: &str, port: u16, public: &PublicKey, extra: Value) -> Arc<Wir
     let ProxyKind::WireGuard(opts) = &def.kind else {
         unreachable!()
     };
-    Arc::new(super::construct(&def, opts).unwrap())
+    Arc::new(super::construct(&def, opts, tasks).unwrap())
 }
 
 async fn setup(extra: Value) -> (Server, Arc<WireGuard>) {
@@ -695,4 +708,48 @@ async fn talks_to_amneziawg_go() {
             "a plain client got through an obfuscated server"
         );
     }
+}
+
+#[tokio::test]
+async fn a_tunnel_s_tasks_end_when_its_outbound_is_dropped() {
+    let server = server(PublicKey::from(&secret(2))).await;
+    let tracked = crate::testing::Tracked::new();
+    let outbound = client_with(
+        "127.0.0.1",
+        server.port,
+        &server.public,
+        json!({}),
+        tracked.tasks.clone(),
+    );
+    echo(
+        &*outbound,
+        Address::new(&SERVER_TUNNEL_IP.to_string(), 7),
+        16,
+    )
+    .await;
+    assert!(tracked.running() > 0, "the tunnel is not tracked");
+    drop(outbound);
+    assert!(tracked.ended_within(Duration::from_secs(5)).await);
+}
+
+#[tokio::test]
+async fn a_stop_ends_a_tunnel_s_tasks_once_the_outbound_is_gone() {
+    let server = server(PublicKey::from(&secret(2))).await;
+    let tracked = crate::testing::Tracked::new();
+    let outbound = client_with(
+        "127.0.0.1",
+        server.port,
+        &server.public,
+        json!({}),
+        tracked.tasks.clone(),
+    );
+    echo(
+        &*outbound,
+        Address::new(&SERVER_TUNNEL_IP.to_string(), 7),
+        16,
+    )
+    .await;
+    tracked.stop();
+    drop(outbound);
+    assert!(tracked.ended_within(Duration::from_secs(5)).await);
 }

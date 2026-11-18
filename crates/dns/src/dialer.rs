@@ -229,7 +229,8 @@ impl Connector {
         let peer = SocketAddr::new(first_ip(&ips)?, port);
         if let Some((dialer, name)) = self.tunnel()? {
             let session = passing(&name, dialer.bind_udp(&name, &Address::Socket(peer))).await?;
-            let socket: Arc<dyn AsyncUdpSocket> = SessionSocket::new(session, peer);
+            let socket: Arc<dyn AsyncUdpSocket> =
+                SessionSocket::new(session, peer, &Default::default());
             return Ok((socket, peer));
         }
         let sock = self.shared.sockets.bind_udp(peer.ip(), &self.opts())?;
