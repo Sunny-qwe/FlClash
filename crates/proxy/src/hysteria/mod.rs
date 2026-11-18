@@ -125,7 +125,7 @@ impl Hysteria {
                 &self.connecting,
                 Hy1Conn::alive,
                 || self.establish(cx),
-                Hy1Conn::close,
+                |conn| conn.close(),
             )
             .await
     }

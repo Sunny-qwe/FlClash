@@ -17,8 +17,6 @@ pub(super) struct MasqueUdp {
 }
 
 impl SessionTunnel for MasqueUdp {
-    const RELEASE_ON_CLOSE: bool = true;
-
     fn resolve(&self, host: String) -> impl Future<Output = io::Result<IpAddr>> + Send + 'static {
         let tunnel = self.tunnel.clone();
         let shared = self.shared.clone();

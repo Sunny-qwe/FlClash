@@ -181,7 +181,7 @@ impl Hysteria2 {
                         &self.connecting,
                         Hy2Conn::alive,
                         || self.establish(cx),
-                        Hy2Conn::close,
+                        |conn| conn.close(),
                     )
                     .await
             }
@@ -238,7 +238,7 @@ impl Hysteria2 {
                 .await
                 .unwrap_or_else(|_| Err(io::Error::from(io::ErrorKind::TimedOut)));
             let outcome = result
-                .and_then(|conn| me.current.adopt(ticket, conn, Hy2Conn::close))
+                .and_then(|conn| me.current.adopt(ticket, conn, |conn| conn.close()))
                 .map_err(Arc::new);
             {
                 let mut pending = lock(&me.pending);

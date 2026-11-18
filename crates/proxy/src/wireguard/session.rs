@@ -17,8 +17,6 @@ pub(super) struct WgUdp {
 }
 
 impl SessionTunnel for WgUdp {
-    const RELEASE_ON_CLOSE: bool = false;
-
     fn resolve(&self, host: String) -> impl Future<Output = io::Result<IpAddr>> + Send + 'static {
         let tunnel = self.tunnel.clone();
         let shared = self.shared.clone();
@@ -35,6 +33,10 @@ impl SessionTunnel for WgUdp {
                 )
                 .await
         }
+    }
+
+    fn usable(&self) -> bool {
+        self.tunnel.usable()
     }
 }
 

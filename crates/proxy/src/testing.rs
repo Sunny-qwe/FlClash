@@ -18,6 +18,7 @@ use concord_common::{
 };
 use concord_net::Sockets;
 use concord_platform::NativePlatform;
+use futures_util::task::AtomicWaker;
 
 pub(crate) struct IpOnly;
 
@@ -163,6 +164,28 @@ impl NodeDialer for Nodes {
 #[derive(Default)]
 pub(crate) struct LoopbackHop {
     pub(crate) datagrams: Arc<AtomicUsize>,
+    pub(crate) cut: Arc<Cut>,
+}
+
+/// Once set, the hop's UDP sessions fail both ways, waking a receive parked on one.
+#[derive(Default)]
+pub(crate) struct Cut {
+    set: AtomicBool,
+    parked: AtomicWaker,
+}
+
+impl Cut {
+    pub(crate) fn set(&self) {
+        self.set.store(true, Ordering::SeqCst);
+        self.parked.wake();
+    }
+
+    fn check(&self) -> io::Result<()> {
+        if self.set.load(Ordering::SeqCst) {
+            return Err(io::ErrorKind::BrokenPipe.into());
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -188,6 +211,7 @@ impl NodeDialer for LoopbackHop {
         Ok(Arc::new(HopSession {
             socket: tokio::net::UdpSocket::bind("127.0.0.1:0").await?,
             sent: self.datagrams.clone(),
+            cut: self.cut.clone(),
         }))
     }
 }
@@ -201,6 +225,7 @@ fn socket_of(dst: &Address) -> io::Result<SocketAddr> {
 struct HopSession {
     socket: tokio::net::UdpSocket,
     sent: Arc<AtomicUsize>,
+    cut: Arc<Cut>,
 }
 
 impl PacketSession for HopSession {
@@ -210,6 +235,9 @@ impl PacketSession for HopSession {
         pkt: &mut PacketBuf,
         dst: &Address,
     ) -> Poll<io::Result<()>> {
+        if let Err(err) = self.cut.check() {
+            return Poll::Ready(Err(err));
+        }
         let to = match socket_of(dst) {
             Ok(to) => to,
             Err(err) => return Poll::Ready(Err(err)),
@@ -223,6 +251,10 @@ impl PacketSession for HopSession {
     }
 
     fn poll_recv(&self, cx: &mut Context<'_>, buf: &mut PacketBuf) -> Poll<io::Result<Address>> {
+        self.cut.parked.register(cx.waker());
+        if let Err(err) = self.cut.check() {
+            return Poll::Ready(Err(err));
+        }
         let mut bytes = vec![0u8; 65535];
         let mut read = tokio::io::ReadBuf::new(&mut bytes);
         match self.socket.poll_recv_from(cx, &mut read) {

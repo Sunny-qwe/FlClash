@@ -357,7 +357,24 @@ impl Stack {
     }
 }
 
+/// Fails every connection and wakes every parked receive when the driver ends, whether its
+/// loop returned or its task was aborted.
+struct Stopped<'a>(&'a Stack);
+
+impl Drop for Stopped<'_> {
+    fn drop(&mut self) {
+        let mut inner = lock(&self.0.inner);
+        inner.tcp.shutdown();
+        for slot in inner.udp.values_mut() {
+            if let Some(waker) = slot.waker.take() {
+                waker.wake();
+            }
+        }
+    }
+}
+
 async fn drive(stack: Arc<Stack>, out: mpsc::Sender<Packet>, mut from_wg: mpsc::Receiver<Packet>) {
+    let _stopped = Stopped(&stack);
     let waker = Waker::from(Arc::new(NotifyWake(stack.wake.clone())));
     loop {
         let (deadline, backlog) = {
@@ -389,13 +406,6 @@ async fn drive(stack: Arc<Stack>, out: mpsc::Sender<Packet>, mut from_wg: mpsc::
             }
             () = stack.wake.notified() => {}
             () = sleep_until(deadline) => {}
-        }
-    }
-    let mut inner = lock(&stack.inner);
-    inner.tcp.shutdown();
-    for slot in inner.udp.values_mut() {
-        if let Some(waker) = slot.waker.take() {
-            waker.wake();
         }
     }
 }

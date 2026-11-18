@@ -25,7 +25,7 @@ use self::config::WgConfig;
 use self::tunnel::{Tunnel, watch_idle};
 use crate::ctx::{BuildCtx, BuildError};
 use crate::node::{Egress, info};
-use crate::session_slot::{SessionSlot, overtaken};
+use crate::session_slot::SessionSlot;
 use crate::stack::IpStream;
 
 pub(crate) struct Shared {
@@ -42,7 +42,7 @@ struct WireGuard {
 
 impl Shared {
     fn current(&self) -> Option<Arc<Tunnel>> {
-        self.slot.get(|tunnel| !tunnel.is_broken()).0
+        self.slot.get(Tunnel::usable).0
     }
 
     fn retire(&self, tunnel: &Arc<Tunnel>) {
@@ -57,15 +57,18 @@ impl Shared {
                 .await;
             return Ok(tunnel);
         }
-        let _building = self.init.lock().await;
-        let (held, ticket) = self.slot.get(|tunnel| !tunnel.is_broken());
-        if let Some(tunnel) = held {
+        let mut built = false;
+        let build = || {
+            built = true;
+            Tunnel::build(cx, &self.egress, &self.config)
+        };
+        let tunnel = self
+            .slot
+            .offer(&self.init, Tunnel::usable, build, |_| {})
+            .await?;
+        if !built {
             tunnel.touch();
             return Ok(tunnel);
-        }
-        let tunnel = Tunnel::build(cx, &self.egress, &self.config).await?;
-        if !self.slot.keep(ticket, &tunnel) {
-            return Err(overtaken());
         }
         let owner = Arc::downgrade(self);
         watch_idle(&tunnel, move |tunnel| {

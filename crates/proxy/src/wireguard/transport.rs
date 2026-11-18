@@ -13,6 +13,7 @@ use gotatun::packet::{Packet, PacketBufPool};
 use gotatun::udp::{UdpRecv, UdpSend, UdpTransportFactory, UdpTransportFactoryParams};
 use tokio::io::ReadBuf;
 use tokio::net::UdpSocket;
+use tokio::task::AbortHandle;
 
 use super::amnezia::Amnezia;
 
@@ -20,6 +21,35 @@ use super::amnezia::Amnezia;
 pub(super) type Reserved = ArcSwap<HashMap<SocketAddr, [u8; 3]>>;
 
 const HEADER_LEN: usize = 4;
+
+/// Set once the wire fails: gotatun's receive task ends on its first error and is not
+/// restarted, so the tunnel cannot recover. Tripping it also ends the stack over the tunnel,
+/// which fails the flows parked there.
+#[derive(Default)]
+pub(super) struct Breaker {
+    tripped: AtomicBool,
+    stack: Option<AbortHandle>,
+}
+
+impl Breaker {
+    pub(super) fn new(stack: AbortHandle) -> Self {
+        Breaker {
+            tripped: AtomicBool::new(false),
+            stack: Some(stack),
+        }
+    }
+
+    fn trip(&self) {
+        self.tripped.store(true, Ordering::Relaxed);
+        if let Some(stack) = &self.stack {
+            stack.abort();
+        }
+    }
+
+    pub(super) fn tripped(&self) -> bool {
+        self.tripped.load(Ordering::Relaxed)
+    }
+}
 
 pub(super) enum Carrier {
     Sockets(Vec<Arc<UdpSocket>>),
@@ -30,7 +60,7 @@ pub(super) struct Wire {
     carrier: Carrier,
     reserved: Arc<Reserved>,
     amnezia: Option<Arc<Amnezia>>,
-    broken: Arc<AtomicBool>,
+    broken: Arc<Breaker>,
 }
 
 pub(super) struct WireFactory(Option<Wire>);
@@ -40,7 +70,7 @@ impl WireFactory {
         carrier: Carrier,
         reserved: Arc<Reserved>,
         amnezia: Option<Arc<Amnezia>>,
-        broken: Arc<AtomicBool>,
+        broken: Arc<Breaker>,
     ) -> Self {
         WireFactory(Some(Wire {
             carrier,
@@ -56,7 +86,7 @@ pub(super) struct WireSend {
     carrier: Arc<SendHalf>,
     reserved: Arc<Reserved>,
     amnezia: Option<Arc<Amnezia>>,
-    broken: Arc<AtomicBool>,
+    broken: Arc<Breaker>,
 }
 
 const SEND_BATCH: usize = if UdpBatch::SENDS { UDP_BATCH } else { 1 };
@@ -75,7 +105,7 @@ enum SendHalf {
 pub(super) struct WireRecv {
     carrier: Carrier,
     amnezia: Option<Arc<Amnezia>>,
-    broken: Arc<AtomicBool>,
+    broken: Arc<Breaker>,
 }
 
 impl UdpTransportFactory for WireFactory {
@@ -127,7 +157,7 @@ impl Wire {
 
 impl WireSend {
     fn fail(&self, err: io::Error) -> io::Error {
-        self.broken.store(true, Ordering::Relaxed);
+        self.broken.trip();
         err
     }
 
@@ -297,20 +327,21 @@ impl UdpRecv for WireRecv {
                     break result;
                 },
                 Carrier::Session(session) => {
-                    let (data, from) = recv_packet(&**session).await?;
-                    match from {
-                        Address::Socket(from) if data.len() <= packet.len() => {
-                            if let Some(slot) = packet.get_mut(..data.len()) {
-                                slot.copy_from_slice(data.as_slice());
+                    recv_packet(&**session)
+                        .await
+                        .and_then(|(data, from)| match from {
+                            Address::Socket(from) if data.len() <= packet.len() => {
+                                if let Some(slot) = packet.get_mut(..data.len()) {
+                                    slot.copy_from_slice(data.as_slice());
+                                }
+                                Ok((data.len(), from))
                             }
-                            Ok((data.len(), from))
-                        }
-                        _ => Err(io::Error::from(io::ErrorKind::InvalidData)),
-                    }
+                            _ => Err(io::Error::from(io::ErrorKind::InvalidData)),
+                        })
                 }
             };
             let (len, from) = received.inspect_err(|_| {
-                self.broken.store(true, Ordering::Relaxed);
+                self.broken.trip();
             })?;
             packet.truncate(len);
             if let Some(amnezia) = &self.amnezia {
@@ -353,7 +384,7 @@ mod tests {
             carrier: Carrier::Sockets(vec![ours.clone()]),
             reserved,
             amnezia: None,
-            broken: Arc::new(AtomicBool::new(false)),
+            broken: Arc::default(),
         };
         let (send, mut recv) = wire.split();
 
@@ -442,7 +473,7 @@ mod tests {
             carrier: Carrier::Sockets(vec![ours]),
             reserved: Arc::new(ArcSwap::from_pointee(HashMap::new())),
             amnezia: None,
-            broken: Arc::new(AtomicBool::new(false)),
+            broken: Arc::default(),
         };
         let (send, _recv) = wire.split();
         assert_eq!(send.max_number_of_packets_to_send(), SEND_BATCH);

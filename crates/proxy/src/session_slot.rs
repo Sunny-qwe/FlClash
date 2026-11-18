@@ -82,10 +82,10 @@ impl<T> SessionSlot<T> {
         &self,
         ticket: Ticket,
         conn: Arc<T>,
-        discard: impl FnOnce(&T),
+        discard: impl FnOnce(Arc<T>),
     ) -> io::Result<Arc<T>> {
         if !self.keep(ticket, &conn) {
-            discard(&conn);
+            discard(conn);
             return Err(overtaken());
         }
         Ok(conn)
@@ -98,7 +98,7 @@ impl<T> SessionSlot<T> {
         dialing: &tokio::sync::Mutex<()>,
         usable: impl Fn(&T) -> bool,
         establish: impl FnOnce() -> F,
-        discard: impl FnOnce(&T),
+        discard: impl FnOnce(Arc<T>),
     ) -> io::Result<Arc<T>>
     where
         F: Future<Output = io::Result<Arc<T>>>,
@@ -187,7 +187,7 @@ mod tests {
             slot.reset();
             Ok(Arc::new(1u8))
         };
-        let discard = |_: &u8| discarded.store(true, Ordering::SeqCst);
+        let discard = |_| discarded.store(true, Ordering::SeqCst);
         let err = slot
             .offer(&dialing, |_| true, dial, discard)
             .await

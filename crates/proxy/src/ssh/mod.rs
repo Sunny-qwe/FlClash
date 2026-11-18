@@ -3,8 +3,10 @@ mod rsa_key;
 mod tests;
 
 use std::borrow::Cow;
+use std::future::Future;
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -26,7 +28,7 @@ use tokio::sync::Mutex;
 use self::rsa_key::{RsaSigner, Sign};
 use crate::ctx::{BuildCtx, BuildError};
 use crate::node::{Link, info_for};
-use crate::session_slot::{SessionSlot, overtaken};
+use crate::session_slot::SessionSlot;
 
 enum Key {
     Plain(Arc<PrivateKey>),
@@ -77,17 +79,37 @@ fn auth_error(err: russh::Error) -> io::Error {
     io::Error::other(format!("ssh: {err}"))
 }
 
+/// mihomo dials a node, SSH's session included, under the tunnel's DefaultTCPTimeout; a
+/// DISCONNECT that cannot be queued in that time is dropped with the session.
+const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The tasks it spawns are not the engine's: like smux's close on reset, each one ends by
+/// itself within `DISCONNECT_TIMEOUT`.
+fn disconnect_later(handle: Arc<Handle<HostKeys>>) {
+    tokio::spawn(bounded(async move {
+        let _ = handle
+            .disconnect(russh::Disconnect::ByApplication, "", "")
+            .await;
+    }));
+}
+
+async fn bounded(teardown: impl Future<Output = ()>) {
+    let _ = tokio::time::timeout(DISCONNECT_TIMEOUT, teardown).await;
+}
+
 impl Ssh {
     async fn handle(&self, cx: &DialCx<'_>) -> io::Result<Arc<Handle<HostKeys>>> {
-        let open = |handle: &Handle<HostKeys>| !handle.is_closed();
-        if let (Some(handle), _) = self.session.get(open) {
-            return Ok(handle);
-        }
-        let _turn = self.connecting.lock().await;
-        let (held, ticket) = self.session.get(open);
-        if let Some(handle) = held {
-            return Ok(handle);
-        }
+        self.session
+            .offer(
+                &self.connecting,
+                |handle| !handle.is_closed(),
+                || self.establish(cx),
+                disconnect_later,
+            )
+            .await
+    }
+
+    async fn establish(&self, cx: &DialCx<'_>) -> io::Result<Arc<Handle<HostKeys>>> {
         let raw = self.link.open(cx).await?;
         let mut handle =
             client::connect_stream(self.config.clone(), raw, HostKeys(self.host_keys.clone()))
@@ -147,14 +169,7 @@ impl Ssh {
                 "ssh: unable to authenticate",
             ));
         }
-        let handle = Arc::new(handle);
-        if !self.session.keep(ticket, &handle) {
-            let _ = handle
-                .disconnect(russh::Disconnect::ByApplication, "", "")
-                .await;
-            return Err(overtaken());
-        }
-        Ok(handle)
+        Ok(Arc::new(handle))
     }
 }
 

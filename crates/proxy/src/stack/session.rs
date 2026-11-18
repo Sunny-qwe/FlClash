@@ -21,14 +21,9 @@ struct Resolving {
 
 /// What a tunnel over the userspace stack lends each UDP session it carries.
 pub(crate) trait SessionTunnel: Send + Sync + 'static {
-    /// Whether closing the session releases its port at once, waking a receive parked on it.
-    const RELEASE_ON_CLOSE: bool;
-
     fn resolve(&self, host: String) -> impl Future<Output = io::Result<IpAddr>> + Send + 'static;
 
-    fn usable(&self) -> bool {
-        true
-    }
+    fn usable(&self) -> bool;
 }
 
 /// UDP through the tunnel. A destination given by name is resolved once per name,
@@ -113,9 +108,7 @@ impl<T: SessionTunnel> PacketSession for StackSession<T> {
 
     fn close(&self) {
         self.closed.store(true, Ordering::Relaxed);
-        if T::RELEASE_ON_CLOSE {
-            self.port.close();
-        }
+        self.port.close();
     }
 }
 
@@ -152,11 +145,9 @@ mod tests {
         gate: Option<Notify>,
     }
 
-    struct Fake<const RELEASE: bool>(Arc<Probe>);
+    struct Fake(Arc<Probe>);
 
-    impl<const RELEASE: bool> SessionTunnel for Fake<RELEASE> {
-        const RELEASE_ON_CLOSE: bool = RELEASE;
-
+    impl SessionTunnel for Fake {
         fn resolve(
             &self,
             _host: String,
@@ -198,10 +189,7 @@ mod tests {
         wired.stack
     }
 
-    fn session<const RELEASE: bool>(
-        stack: &Arc<Stack>,
-        probe: &Arc<Probe>,
-    ) -> StackSession<Fake<RELEASE>> {
+    fn session(stack: &Arc<Stack>, probe: &Arc<Probe>) -> StackSession<Fake> {
         StackSession::new(stack.bind_udp().unwrap(), Fake(probe.clone()))
     }
 
@@ -233,7 +221,7 @@ mod tests {
     async fn a_socket_address_goes_out_without_a_lookup() {
         let stack = looped();
         let probe = Arc::new(Probe::default());
-        let session = session::<true>(&stack, &probe);
+        let session = session(&stack, &probe);
         send(&session, b"ping", &Address::Socket(echo()))
             .await
             .unwrap();
@@ -247,7 +235,7 @@ mod tests {
     async fn a_name_is_resolved_once_and_kept() {
         let stack = looped();
         let probe = Arc::new(Probe::default());
-        let session = session::<true>(&stack, &probe);
+        let session = session(&stack, &probe);
         session.seed(NAME).await.unwrap();
         let dst = Address::Domain(NAME.into(), ECHO);
         for round in 0..3u8 {
@@ -266,7 +254,7 @@ mod tests {
             gate: Some(Notify::new()),
             ..Probe::default()
         });
-        let session = session::<true>(&stack, &probe);
+        let session = session(&stack, &probe);
         let dst = Address::Domain(NAME.into(), ECHO);
         let mut cx = Context::from_waker(Waker::noop());
         let mut pkt = PacketBuf::from_slice(b"held");
@@ -283,7 +271,7 @@ mod tests {
     async fn a_closed_session_refuses_both_ways() {
         let stack = looped();
         let probe = Arc::new(Probe::default());
-        let session = session::<false>(&stack, &probe);
+        let session = session(&stack, &probe);
         session.close();
         let err = send(&session, b"x", &Address::Socket(echo()))
             .await
@@ -294,10 +282,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn closing_a_releasing_session_wakes_a_parked_receive() {
+    async fn closing_a_session_wakes_a_parked_receive() {
         let stack = looped();
         let probe = Arc::new(Probe::default());
-        let session = Arc::new(session::<true>(&stack, &probe));
+        let session = Arc::new(session(&stack, &probe));
         let parked = tokio::spawn({
             let session = session.clone();
             async move {
@@ -317,10 +305,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_stopped_stack_wakes_a_parked_receive() {
+        let wired = Stack::start(&StackConfig {
+            addrs: vec![ADDR.into()],
+            mtu: 1400,
+        });
+        let probe = Arc::new(Probe::default());
+        let session = Arc::new(session(&wired.stack, &probe));
+        let parked = tokio::spawn({
+            let session = session.clone();
+            async move {
+                let mut buf = PacketBuf::take();
+                poll_fn(|cx| session.poll_recv(cx, &mut buf)).await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!parked.is_finished());
+        probe.unusable.store(true, Ordering::Relaxed);
+        wired.driver.abort();
+        let err = timeout(Duration::from_secs(5), parked)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[tokio::test]
     async fn an_unusable_tunnel_breaks_the_session() {
         let stack = looped();
         let probe = Arc::new(Probe::default());
-        let session = session::<true>(&stack, &probe);
+        let session = session(&stack, &probe);
         probe.unusable.store(true, Ordering::Relaxed);
         let err = send(&session, b"x", &Address::Socket(echo()))
             .await

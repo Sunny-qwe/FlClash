@@ -18,6 +18,7 @@ use concord_tls::TrustStore;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 
 use crate::ctx::{BuildCtx, BuildError};
 use crate::testing::{HeldLookup, test_env};
@@ -438,6 +439,71 @@ async fn a_session_made_across_a_reset_is_not_kept() {
         "the next request went over the session made before the reset"
     );
     assert!(outcome.is_err());
+}
+
+/// Serves password sessions and reports how each ended: `Ok` when the client sent
+/// SSH_MSG_DISCONNECT, an error when its connection just closed.
+async fn serve_reporting() -> (u16, mpsc::UnboundedReceiver<Result<(), russh::Error>>) {
+    let key = russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[9; 32]);
+    let config = Arc::new(russh::server::Config {
+        keys: vec![key.into()],
+        ..russh::server::Config::default()
+    });
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (ended, report) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            let (config, ended) = (config.clone(), ended.clone());
+            tokio::spawn(async move {
+                let outcome = match russh::server::run_stream(config, socket, PasswordSession).await
+                {
+                    Ok(session) => session.await,
+                    Err(err) => Err(err),
+                };
+                let _ = ended.send(outcome);
+            });
+        }
+    });
+    (port, report)
+}
+
+#[tokio::test]
+async fn a_session_a_reset_overtook_is_disconnected() {
+    let (port, mut ended) = serve_reporting().await;
+    let target = echo_server().await;
+    let outbound = client(port, json!({"server": "localhost", "password": "hunter2"})).unwrap();
+    let held = HeldLookup::new();
+    let straddling = {
+        let (outbound, env) = (outbound.clone(), held.env());
+        tokio::spawn(async move {
+            let cx = DialCx::new(&env, Initiator::Direct, None);
+            outbound
+                .connect(&cx, &Address::new("127.0.0.1", target))
+                .await
+                .map(drop)
+        })
+    };
+    held.entered().await;
+    outbound.reset_sessions();
+    held.release();
+    assert!(crate::testing::settled(straddling).await.is_err());
+    let overtaken = tokio::time::timeout(Duration::from_secs(5), ended.recv()).await;
+    assert!(overtaken.unwrap().unwrap().is_ok(), "no DISCONNECT arrived");
+    echo_through(&*outbound, target, 5).await.unwrap();
+    drop(outbound);
+    let dropped = tokio::time::timeout(Duration::from_secs(5), ended.recv()).await;
+    assert!(
+        dropped.unwrap().unwrap().is_err(),
+        "a session ended without DISCONNECT reads as one that sent it"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_disconnect_the_session_never_takes_ends_at_its_bound() {
+    let started = tokio::time::Instant::now();
+    super::bounded(std::future::pending()).await;
+    assert_eq!(started.elapsed(), super::DISCONNECT_TIMEOUT);
 }
 
 #[test]

@@ -66,7 +66,7 @@ impl Shared {
     async fn tunnel(&self, cx: &DialCx<'_>) -> io::Result<Arc<Tunnel>> {
         let connect = || bounded(self.timeout(cx), Tunnel::connect(&self.config, cx));
         self.ip
-            .offer(&self.init, Tunnel::usable, connect, Tunnel::close)
+            .offer(&self.init, Tunnel::usable, connect, |tunnel| tunnel.close())
             .await
     }
 

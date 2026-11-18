@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -19,7 +19,7 @@ use tokio::time::{Instant, sleep};
 use super::amnezia::Amnezia;
 use super::config::{PeerConfig, WgConfig};
 use super::dns::RemoteDns;
-use super::transport::{Carrier, Reserved, WireFactory};
+use super::transport::{Breaker, Carrier, Reserved, WireFactory};
 use crate::node::{Egress, resolve_server};
 use crate::stack::{Stack, StackConfig, StackRecv, StackSend, TcpConn, UdpPort};
 
@@ -33,7 +33,7 @@ pub(super) struct Tunnel {
     driver: JoinHandle<()>,
     reserved: Arc<Reserved>,
     amnezia: Option<Arc<Amnezia>>,
-    broken: Arc<AtomicBool>,
+    broken: Arc<Breaker>,
     dns: Option<RemoteDns>,
     endpoints: Mutex<Endpoints>,
     epoch: AtomicU64,
@@ -110,7 +110,6 @@ impl Tunnel {
             None => Carrier::Sockets(bind_families(cx.env, egress, &resolved)?),
         };
         let reserved = Arc::new(ArcSwap::from_pointee(reserved_map(config, &resolved)));
-        let broken = Arc::new(AtomicBool::new(false));
         let amnezia = config.amnezia.as_ref().map(|settings| {
             let own = PublicKey::from(&StaticSecret::from(config.private_key));
             let publics: Vec<[u8; 32]> = config.peers.iter().map(|peer| peer.public_key).collect();
@@ -120,12 +119,12 @@ impl Tunnel {
             }
             amnezia
         });
-        let factory = WireFactory::new(carrier, reserved.clone(), amnezia.clone(), broken.clone());
-
         let stack = Stack::start(&StackConfig {
             addrs: config.addrs.iter().map(|net| net.ip()).collect(),
             mtu: config.mtu,
         });
+        let broken = Arc::new(Breaker::new(stack.driver.abort_handle()));
+        let factory = WireFactory::new(carrier, reserved.clone(), amnezia.clone(), broken.clone());
         let peers = config
             .peers
             .iter()
@@ -161,8 +160,8 @@ impl Tunnel {
         Ok(tunnel)
     }
 
-    pub(super) fn is_broken(&self) -> bool {
-        self.broken.load(Ordering::Relaxed) || self.driver.is_finished()
+    pub(super) fn usable(&self) -> bool {
+        !self.broken.tripped() && !self.driver.is_finished()
     }
 
     pub(super) fn touch(&self) -> u64 {
@@ -273,7 +272,7 @@ where
             sleep(IDLE_TICK).await;
             let Some(tunnel) = weak.upgrade() else { return };
             let epoch = tunnel.epoch.load(Ordering::Relaxed);
-            if tunnel.is_broken() {
+            if !tunnel.usable() {
                 retire(&tunnel);
                 return;
             }
