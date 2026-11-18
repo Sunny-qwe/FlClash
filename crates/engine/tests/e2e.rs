@@ -12,7 +12,7 @@ use std::time::Duration;
 use concord_common::sync::lock;
 use concord_common::{CoreEvent, CoreOptions, EventSink, ResourcePhase, ResourceUpdate};
 use concord_engine::{Engine, EngineConfig, ProxyView, RouteHit, SetupRequest, UpdateRequest};
-use concord_platform::NativePlatform;
+use concord_platform::{NativePlatform, Platform};
 use concord_test_support::{tcp_echo, udp_echo};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
@@ -24,6 +24,9 @@ mod mitm;
 
 #[path = "e2e/rematch.rs"]
 mod rematch;
+
+#[path = "e2e/find_process.rs"]
+mod find_process;
 
 const PATIENCE: Duration = Duration::from_secs(10);
 
@@ -315,11 +318,15 @@ impl Rig {
     }
 
     fn at(home: tempfile::TempDir) -> Rig {
+        Rig::on(home, Arc::new(NativePlatform::new()))
+    }
+
+    fn on(home: tempfile::TempDir, platform: Arc<dyn Platform>) -> Rig {
         let events = Arc::new(Events::default());
         let engine = Engine::new(EngineConfig {
             sink: events.clone(),
             android: false,
-            platform: Arc::new(NativePlatform::new()),
+            platform,
         });
         engine.init(home.path().to_str().unwrap(), 0).unwrap();
         Rig {
