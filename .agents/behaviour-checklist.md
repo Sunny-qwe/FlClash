@@ -105,6 +105,12 @@ These are host tests. Android was exercised by hand in an embedding app on an em
 | 49 | The controller opens only where `config.patch` (embedded) or the profile (`concord run`) says, moves with it and closes on an empty address | verified | `concord-controller::routes::a_new_address_moves_the_controller_and_an_empty_one_closes_it`, `a_core_on_its_own_takes_the_controller_from_its_profile_and_reloads_a_payload` |
 | 50 | The controller answers a browser only from the origins `externalControllerCors` (embedded) or `external-controller-cors` (`concord run`) allows, mihomo's `*` by default | verified | `concord-controller::routes::a_host_that_lists_origins_lets_only_those_call_from_a_browser`, `a_core_on_its_own_takes_the_allowed_origins_from_its_profile`, `an_embedded_core_ignores_the_profiles_allowed_origins_with_a_warning`, `http::tests::only_the_listed_origins_are_allowed` |
 
+## The host's own requests
+
+| # | Behaviour | Status | Tests and notes |
+|---|---|---|---|
+| 51 | A request that presents `config.patch`'s `hostCredential` to a proxy listener over loopback passes `authentication`, names no `in-user`, and MITM never takes it; the credential never reaches the origin, a config apply keeps it, and a wrong credential or a non-loopback source is handled as before | verified | `concord-engine::e2e::mitm::mitm_leaves_the_hosts_own_requests_alone`, `concord-inbound::http::{the_host_credential_passes_authentication_and_never_reaches_the_origin, a_wrong_host_credential_is_an_ordinary_credential}`, `concord-inbound::spec::tests::the_host_credential_is_offered_to_loopback_clients_only`, `concord-mitm::engine_tests::leaves_the_hosts_own_connections_alone` |
+
 ## Go tests ported
 
 Each test file of the Go core's control layer, and where its semantics live in Rust.

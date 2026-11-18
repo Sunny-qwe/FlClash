@@ -211,6 +211,7 @@ impl Control {
             tcp_concurrent: params.tcp_concurrent,
             unified_delay: params.unified_delay,
             authentication: params.authentication,
+            host_credential: params.host_credential,
             geo_auto_update: params.geo_auto_update,
             geo_update_interval: params.geo_update_interval,
             geox_url: params.geox_url,

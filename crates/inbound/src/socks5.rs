@@ -1,13 +1,12 @@
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::Arc;
 
 use concord_common::Address;
 use concord_common::addr::unmap;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::ctx::{dst_address, user_of};
-use crate::spec::Authenticator;
+use crate::ctx::{Client, dst_address};
+use crate::spec::{Authenticator, HostCredential};
 
 const ATYP_IPV4: u8 = 1;
 const ATYP_DOMAIN: u8 = 3;
@@ -27,7 +26,7 @@ pub(crate) enum Command {
 pub(crate) struct Request {
     pub(crate) command: Command,
     pub(crate) target: Address,
-    pub(crate) user: Option<Arc<str>>,
+    pub(crate) client: Client,
 }
 
 fn refused(message: &'static str) -> io::Error {
@@ -131,6 +130,7 @@ enum Method<'a> {
 pub(crate) async fn server_handshake<S>(
     io: &mut S,
     auth: Option<&Authenticator>,
+    host: Option<&HostCredential>,
 ) -> io::Result<Request>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -150,7 +150,7 @@ where
         None => Method::None,
     };
 
-    let mut user = String::new();
+    let mut client = Client::default();
     match method {
         Method::None => io.write_all(&[5, 0]).await?,
         Method::Password(auth) => {
@@ -167,7 +167,7 @@ where
                 .get_mut(..user_len)
                 .ok_or_else(|| refused("invalid user length"))?;
             io.read_exact(name).await?;
-            user = String::from_utf8_lossy(name).into_owned();
+            let user = String::from_utf8_lossy(name).into_owned();
 
             let pass_len = usize::from(io.read_u8().await?);
             if pass_len == 0 {
@@ -180,10 +180,14 @@ where
             io.read_exact(pass).await?;
             let pass = String::from_utf8_lossy(pass);
 
-            if auth.is_some_and(|auth| !auth.verify(&user, &pass)) {
+            client = if host.is_some_and(|host| host.matches(&user, &pass)) {
+                Client::host()
+            } else if auth.is_some_and(|auth| !auth.verify(&user, &pass)) {
                 io.write_all(&[1, 1]).await?;
                 return Err(refused("auth failed"));
-            }
+            } else {
+                Client::named(&user)
+            };
             io.write_all(&[1, 0]).await?;
         }
     }
@@ -203,7 +207,7 @@ where
     Ok(Request {
         command,
         target,
-        user: user_of(&user),
+        client,
     })
 }
 
@@ -285,11 +289,19 @@ mod tests {
     }
 
     async fn run(client: &[u8], auth: Option<&Authenticator>) -> (io::Result<Request>, Vec<u8>) {
+        run_as(client, auth, None).await
+    }
+
+    async fn run_as(
+        client: &[u8],
+        auth: Option<&Authenticator>,
+        host: Option<&HostCredential>,
+    ) -> (io::Result<Request>, Vec<u8>) {
         let (mut near, far) = tokio::io::duplex(1024);
         let mut far = far;
         near.write_all(client).await.unwrap();
         near.shutdown().await.unwrap();
-        let result = match server_handshake(&mut far, auth).await {
+        let result = match server_handshake(&mut far, auth, host).await {
             Ok(request) => reply_success(&mut far, local()).await.map(|()| request),
             Err(err) => Err(err),
         };
@@ -309,7 +321,7 @@ mod tests {
         let request = result.unwrap();
         assert_eq!(request.command, Command::Connect);
         assert_eq!(request.target, Address::new("a.b", 443));
-        assert_eq!(request.user, None);
+        assert_eq!(request.client, Client::default());
         assert_eq!(reply, [5, 0, 5, 0, 0, 1, 127, 0, 0, 1, 0x1e, 0xd2]);
     }
 
@@ -318,7 +330,7 @@ mod tests {
         let wire = [5, 1, 2, 1, 1, b'u', 1, b'p', 5, 1, 0, 1, 1, 2, 3, 4, 0, 80];
         let (result, reply) = run(&wire, None).await;
         let request = result.unwrap();
-        assert_eq!(request.user.as_deref(), Some("u"));
+        assert_eq!(request.client, Client::named("u"));
         assert_eq!(request.target, Address::new("1.2.3.4", 80));
         assert_eq!(reply.get(..4), Some(&[5, 2, 1, 0][..]));
     }
@@ -335,8 +347,26 @@ mod tests {
             auth,
         )
         .await;
-        assert_eq!(result.unwrap().user.as_deref(), Some("u"));
+        assert_eq!(result.unwrap().client, Client::named("u"));
         assert_eq!(reply.get(..4), Some(&[5, 2, 1, 0][..]));
+    }
+
+    #[tokio::test]
+    async fn the_host_credential_passes_configured_auth_and_names_no_user() {
+        let policy = Policy::from_spec(&ListenSpec {
+            authentication: vec![("u".into(), "p".into())],
+            host_credential: Some(("h".into(), "s".into())),
+            ..Default::default()
+        });
+        let loopback = std::net::Ipv4Addr::LOCALHOST.into();
+        let (auth, host) = (policy.authenticator(loopback), policy.host(loopback));
+        let wire = [5, 1, 2, 1, 1, b'h', 1, b's', 5, 1, 0, 1, 9, 9, 9, 9, 0, 1];
+        let (result, reply) = run_as(&wire, auth, host).await;
+        assert_eq!(result.unwrap().client, Client::host());
+        assert_eq!(reply.get(..4), Some(&[5, 2, 1, 0][..]));
+        let (result, reply) = run_as(&[5, 1, 2, 1, 1, b'h', 1, b'x'], auth, host).await;
+        assert!(result.is_err());
+        assert_eq!(reply, [5, 2, 1, 1]);
     }
 
     #[tokio::test]
@@ -376,7 +406,7 @@ mod tests {
             .await
             .unwrap();
         let v6: SocketAddr = "[::1]:7890".parse().unwrap();
-        let request = server_handshake(&mut far, None).await.unwrap();
+        let request = server_handshake(&mut far, None, None).await.unwrap();
         assert_eq!(request.command, Command::UdpAssociate);
         reply_success(&mut far, v6).await.unwrap();
         drop(far);

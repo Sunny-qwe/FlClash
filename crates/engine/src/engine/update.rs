@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use concord_common::sync::lock;
 use concord_common::{Change, FindProcessMode, GeneralChange, LogLevel, Origin, TunnelMode};
+use concord_config::general::General;
 
 use super::views::users_of;
 use super::{Engine, UpdateRequest};
@@ -87,17 +89,11 @@ impl Engine {
                 applied.tun.stack_name = stack;
             }
         }
-        let general = &mut applied.general;
-        if let Some(lines) = request.authentication {
-            general.authentication = lines
-                .iter()
-                .filter_map(|line| line.split_once(':'))
-                .map(|(user, pass)| concord_config::general::Credential {
-                    user: user.to_string(),
-                    pass: pass.to_string(),
-                })
-                .collect();
-        }
+        self.patch_credentials(
+            &mut applied.general,
+            request.authentication,
+            request.host_credential,
+        );
         if let Some(options) = &request.options {
             self.apply_options(options);
         }
@@ -136,6 +132,27 @@ impl Engine {
             self.publish_change(&mut seq, origin, Change::General(change));
         }
         Ok(*seq)
+    }
+
+    fn patch_credentials(
+        &self,
+        general: &mut General,
+        authentication: Option<Vec<String>>,
+        host_credential: Option<String>,
+    ) {
+        if let Some(lines) = authentication {
+            general.authentication = lines
+                .iter()
+                .filter_map(|line| line.split_once(':'))
+                .map(|(user, pass)| concord_config::general::Credential {
+                    user: user.to_string(),
+                    pass: pass.to_string(),
+                })
+                .collect();
+        }
+        if let Some(line) = host_credential {
+            *lock(&self.host_credential) = concord_inbound::parse_credential(&line);
+        }
     }
 }
 

@@ -189,6 +189,12 @@ dto! {
         /// `user:password` lines.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub authentication: Option<Vec<String>>,
+        /// The `user:password` the host's own requests carry to the mixed, HTTP and SOCKS
+        /// listeners over loopback. It passes `authentication`, names no `in-user`, and MITM
+        /// never takes those connections. Empty, or without a user or a password, clears it; a
+        /// config apply keeps it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub host_credential: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub geo_auto_update: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

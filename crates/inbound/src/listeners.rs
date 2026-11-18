@@ -291,18 +291,19 @@ async fn serve_conn(
     }
     configure(&stream, policy.keepalive);
     let auth = policy.authenticator(peer.src.ip());
+    let host = policy.host(peer.src.ip());
 
     match kind {
         ListenerKind::Mixed => match first_byte(&stream).await {
             Some(4) => socks::handle_socks4(&ctx, stream, peer, auth).await,
-            Some(5) => socks::handle_socks5(&ctx, stream, peer, auth).await,
-            Some(_) => http::serve(ctx.clone(), stream, peer, auth).await,
+            Some(5) => socks::handle_socks5(&ctx, stream, peer, auth, host).await,
+            Some(_) => http::serve(ctx.clone(), stream, peer, auth, host).await,
             None => {}
         },
-        ListenerKind::Http => http::serve(ctx.clone(), stream, peer, auth).await,
+        ListenerKind::Http => http::serve(ctx.clone(), stream, peer, auth, host).await,
         ListenerKind::Socks => match first_byte(&stream).await {
             Some(4) => socks::handle_socks4(&ctx, stream, peer, auth).await,
-            Some(5) => socks::handle_socks5(&ctx, stream, peer, auth).await,
+            Some(5) => socks::handle_socks5(&ctx, stream, peer, auth, host).await,
             _ => {}
         },
         ListenerKind::Redir => {

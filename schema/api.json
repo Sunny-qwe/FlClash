@@ -1483,6 +1483,13 @@
           },
           "description": "`user:password` lines."
         },
+        "hostCredential": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The `user:password` the host's own requests carry to the mixed, HTTP and SOCKS\nlisteners over loopback. It passes `authentication`, names no `in-user`, and MITM\nnever takes those connections. Empty, or without a user or a password, clears it; a\nconfig apply keeps it."
+        },
         "geoAutoUpdate": {
           "type": [
             "boolean",

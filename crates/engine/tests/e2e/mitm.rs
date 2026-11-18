@@ -73,6 +73,67 @@ async fn mitm_rewrites_plain_http_on_the_way_through() {
     rig.engine.shutdown().await;
 }
 
+/// A request through the mixed port's HTTP proxy, with `auth` as its extra header lines.
+async fn http_proxy(mixed: u16, target: SocketAddr, path: &str, auth: &str) -> String {
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, mixed))
+        .await
+        .unwrap();
+    let port = target.port();
+    stream
+        .write_all(
+            format!(
+                "GET http://mitm.test:{port}{path} HTTP/1.1\r\nHost: mitm.test:{port}\r\n{auth}Connection: close\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut response = Vec::new();
+    let _ = timeout(PATIENCE, stream.read_to_end(&mut response))
+        .await
+        .expect("no HTTP answer");
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mitm_leaves_the_hosts_own_requests_alone() {
+    let (server, _) = http_server(HashMap::from([("/kept", "from the server".to_string())])).await;
+    let rig = Rig::new();
+    let config = format!(
+        "hosts:\n  mitm.test: 127.0.0.1\n{}rules:\n  - MATCH,DIRECT\n",
+        mitm_section(
+            server.port(),
+            "  url-rewrite:\n    - ^http://mitm\\.test:\\d+/kept$ - reject\n"
+        )
+    );
+    rig.apply(&config).await.unwrap();
+    rig.engine.start_listeners().await;
+    rig.engine
+        .update(UpdateRequest {
+            host_credential: Some("flclash:s3cret".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let own = "Proxy-Authorization: Basic ZmxjbGFzaDpzM2NyZXQ=\r\n";
+    let other = "Proxy-Authorization: Basic ZmxjbGFzaDpndWVzcw==\r\n";
+
+    let body = http_proxy(rig.mixed, server, "/kept", own).await;
+    assert!(body.ends_with("from the server"), "{body}");
+    for auth in ["", other] {
+        let body = http_proxy(rig.mixed, server, "/kept", auth).await;
+        assert!(!body.contains("from the server"), "{auth:?}: {body}");
+    }
+
+    rig.apply(&config).await.unwrap();
+    let body = http_proxy(rig.mixed, server, "/kept", own).await;
+    assert!(
+        body.ends_with("from the server"),
+        "an apply keeps it: {body}"
+    );
+    rig.engine.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_intercepted_request_still_dialing_when_every_connection_closes_gets_no_answer() {
     let (server, _) = http_server(HashMap::from([("/kept", "from the server".to_string())])).await;

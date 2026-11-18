@@ -16,15 +16,15 @@ use tokio::time::timeout;
 use self::forward::Upstreams;
 use self::head::{Headers, RequestHead, read_request_head};
 use self::target::parse_authority;
-use crate::ctx::{HANDSHAKE_TIMEOUT, ListenCtx, Peer, dst_address, user_of};
-use crate::spec::Authenticator;
+use crate::ctx::{Client, HANDSHAKE_TIMEOUT, ListenCtx, Peer, dst_address};
+use crate::spec::{Authenticator, HostCredential};
 
 pub(crate) struct Session<S> {
     rd: ReadHalf<S>,
     wr: WriteHalf<S>,
     rbuf: BytesMut,
     upstreams: Upstreams,
-    user: Option<Arc<str>>,
+    client: Client,
 }
 
 pub(crate) enum Next {
@@ -69,7 +69,11 @@ enum Verdict {
 
 /// The user is the decoded Basic username even when no authenticator is
 /// configured, so `in-user` is set whenever a client offers credentials.
-fn authenticate(headers: &Headers, auth: Option<&Authenticator>) -> (Verdict, String) {
+fn authenticate(
+    headers: &Headers,
+    auth: Option<&Authenticator>,
+    host: Option<&HostCredential>,
+) -> (Verdict, Client) {
     let credential = headers
         .get("Proxy-Authorization")
         .and_then(|value| {
@@ -78,7 +82,7 @@ fn authenticate(headers: &Headers, auth: Option<&Authenticator>) -> (Verdict, St
         })
         .unwrap_or_default();
     if credential.is_empty() && auth.is_some() {
-        return (Verdict::Refused(407), String::new());
+        return (Verdict::Refused(407), Client::default());
     }
     let decoded = STANDARD
         .decode(credential)
@@ -90,14 +94,17 @@ fn authenticate(headers: &Headers, auth: Option<&Authenticator>) -> (Verdict, St
                 .map(|(user, pass)| (user.to_owned(), pass.to_owned()))
         });
     let (user, pass) = decoded.clone().unwrap_or_default();
+    if decoded.is_some() && host.is_some_and(|host| host.matches(&user, &pass)) {
+        return (Verdict::Granted, Client::host());
+    }
     let granted = match auth {
         None => true,
         Some(auth) => decoded.is_some() && auth.verify(&user, &pass),
     };
     if granted {
-        (Verdict::Granted, user)
+        (Verdict::Granted, Client::named(&user))
     } else {
-        (Verdict::Refused(403), user)
+        (Verdict::Refused(403), Client::named(&user))
     }
 }
 
@@ -106,6 +113,7 @@ pub(crate) async fn serve<S: Stream>(
     stream: S,
     peer: Peer,
     auth: Option<&Authenticator>,
+    host: Option<&HostCredential>,
 ) {
     let (rd, wr) = tokio::io::split(stream);
     let mut session = Session {
@@ -113,11 +121,11 @@ pub(crate) async fn serve<S: Stream>(
         wr,
         rbuf: BytesMut::new(),
         upstreams: Upstreams::new(ctx.clone(), peer),
-        user: None,
+        client: Client::default(),
     };
     let mut trusted = auth.is_none();
     let mut served = false;
-    let mut last_user = String::new();
+    let mut last_client = Client::default();
 
     loop {
         let read = read_request_head(&mut session.rd, &mut session.rbuf);
@@ -137,7 +145,7 @@ pub(crate) async fn serve<S: Stream>(
             .get("Proxy-Connection")
             .is_some_and(|value| value.trim_ascii().eq_ignore_ascii_case(b"keep-alive"));
 
-        let (verdict, user) = authenticate(&head.headers, auth);
+        let (verdict, client) = authenticate(&head.headers, auth, host);
         let refusal = match verdict {
             Verdict::Granted => {
                 trusted = true;
@@ -145,7 +153,7 @@ pub(crate) async fn serve<S: Stream>(
             }
             Verdict::Refused(status) => Some(status),
         };
-        session.user = user_of(&user);
+        session.client = client.clone();
 
         if !trusted {
             let status = refusal.unwrap_or(403);
@@ -164,9 +172,9 @@ pub(crate) async fn serve<S: Stream>(
             let _ = session.upgrade(head).await;
             return;
         }
-        if user != last_user {
+        if client != last_client {
             session.upstreams.clear();
-            last_user = user;
+            last_client = client;
         }
         served = true;
         match session.forward(head, keep_alive).await {
@@ -190,14 +198,18 @@ async fn connect<S: Stream>(
         return;
     }
     let Session {
-        rd, wr, rbuf, user, ..
+        rd,
+        wr,
+        rbuf,
+        client,
+        ..
     } = session;
     let stream = rd.unsplit(wr);
     let meta = ctx.tcp_meta(
         InboundKind::Https,
         &peer,
         dst_address(&host, port.unwrap_or(80)),
-        user,
+        client,
     );
     if rbuf.is_empty() {
         ctx.hand_off(meta, Box::new(stream));
@@ -225,12 +237,12 @@ mod tests {
     #[test]
     fn credentials_are_decoded_even_without_an_authenticator() {
         let h = headers(&[("Proxy-Authorization", &basic("alice", "pw"))]);
-        let (verdict, user) = authenticate(&h, None);
+        let (verdict, client) = authenticate(&h, None, None);
         assert!(matches!(verdict, Verdict::Granted));
-        assert_eq!(user, "alice");
-        let (verdict, user) = authenticate(&headers(&[]), None);
+        assert_eq!(client, Client::named("alice"));
+        let (verdict, client) = authenticate(&headers(&[]), None, None);
         assert!(matches!(verdict, Verdict::Granted));
-        assert_eq!(user, "");
+        assert_eq!(client, Client::default());
     }
 
     #[test]
@@ -241,18 +253,77 @@ mod tests {
         };
         let policy = crate::spec::Policy::from_spec(&spec);
         let auth = policy.authenticator(std::net::Ipv4Addr::LOCALHOST.into());
-        let (verdict, _) = authenticate(&headers(&[]), auth);
+        let (verdict, _) = authenticate(&headers(&[]), auth, None);
         assert!(matches!(verdict, Verdict::Refused(407)));
         let h = headers(&[("Proxy-Authorization", &basic("alice", "bad"))]);
-        assert!(matches!(authenticate(&h, auth).0, Verdict::Refused(403)));
+        assert!(matches!(
+            authenticate(&h, auth, None).0,
+            Verdict::Refused(403)
+        ));
         let h = headers(&[("Proxy-Authorization", "Basic !!!")]);
-        assert!(matches!(authenticate(&h, auth).0, Verdict::Refused(403)));
+        assert!(matches!(
+            authenticate(&h, auth, None).0,
+            Verdict::Refused(403)
+        ));
         let h = headers(&[("proxy-authorization", &basic("alice", "pw").to_lowercase())]);
-        assert!(matches!(authenticate(&h, auth).0, Verdict::Refused(403)));
+        assert!(matches!(
+            authenticate(&h, auth, None).0,
+            Verdict::Refused(403)
+        ));
         let h = headers(&[(
             "Proxy-Authorization",
             &basic("alice", "pw").replace("Basic", "bAsIc"),
         )]);
-        assert!(matches!(authenticate(&h, auth).0, Verdict::Granted));
+        assert!(matches!(authenticate(&h, auth, None).0, Verdict::Granted));
+    }
+
+    fn host_policy(users: &[(&str, &str)]) -> crate::spec::Policy {
+        crate::spec::Policy::from_spec(&crate::ListenSpec {
+            authentication: users
+                .iter()
+                .map(|(user, pass)| ((*user).into(), (*pass).into()))
+                .collect(),
+            host_credential: Some(("host".into(), "secret".into())),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn the_host_credential_passes_with_or_without_authentication_and_names_no_user() {
+        let loopback = std::net::Ipv4Addr::LOCALHOST.into();
+        let h = headers(&[("Proxy-Authorization", &basic("host", "secret"))]);
+        for policy in [host_policy(&[]), host_policy(&[("alice", "pw")])] {
+            let (auth, host) = (policy.authenticator(loopback), policy.host(loopback));
+            let (verdict, client) = authenticate(&h, auth, host);
+            assert!(matches!(verdict, Verdict::Granted));
+            assert_eq!(client, Client::host());
+        }
+    }
+
+    #[test]
+    fn a_wrong_or_remote_host_credential_is_an_ordinary_credential() {
+        let loopback = std::net::Ipv4Addr::LOCALHOST.into();
+        let lan = std::net::Ipv4Addr::new(192, 168, 1, 2).into();
+        let wrong = headers(&[("Proxy-Authorization", &basic("host", "guess"))]);
+        let right = headers(&[("Proxy-Authorization", &basic("host", "secret"))]);
+
+        let open = host_policy(&[]);
+        let (verdict, client) = authenticate(&wrong, None, open.host(loopback));
+        assert!(matches!(verdict, Verdict::Granted));
+        assert_eq!(client, Client::named("host"));
+        let (verdict, client) = authenticate(&right, None, open.host(lan));
+        assert!(matches!(verdict, Verdict::Granted));
+        assert_eq!(client, Client::named("host"));
+
+        let closed = host_policy(&[("alice", "pw")]);
+        let auth = closed.authenticator(loopback);
+        let (verdict, client) = authenticate(&wrong, auth, closed.host(loopback));
+        assert!(matches!(verdict, Verdict::Refused(403)));
+        assert!(!client.host);
+        let (verdict, client) = authenticate(&right, closed.authenticator(lan), closed.host(lan));
+        assert!(matches!(verdict, Verdict::Refused(403)));
+        assert!(!client.host);
+        let (verdict, _) = authenticate(&headers(&[]), auth, closed.host(loopback));
+        assert!(matches!(verdict, Verdict::Refused(407)));
     }
 }

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use concord_common::sync::lock;
 use concord_dns::Resolver;
 use concord_inbound::ListenSpec;
 
@@ -46,7 +47,10 @@ impl Engine {
         if !self.running.load(Ordering::SeqCst) {
             return;
         }
-        let spec: ListenSpec = listen_spec(&applied.general);
+        let spec = ListenSpec {
+            host_credential: lock(&self.host_credential).clone(),
+            ..listen_spec(&applied.general)
+        };
         let handler = Arc::new(self.shared.tunnel.clone());
         let errors = self
             .listeners

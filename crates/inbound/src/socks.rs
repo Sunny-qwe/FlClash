@@ -3,10 +3,10 @@ use tokio::io::{AsyncReadExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
-use crate::ctx::{HANDSHAKE_TIMEOUT, ListenCtx, Peer};
+use crate::ctx::{Client, HANDSHAKE_TIMEOUT, ListenCtx, Peer};
 use crate::socks4;
 use crate::socks5::{self, Command};
-use crate::spec::Authenticator;
+use crate::spec::{Authenticator, HostCredential};
 
 pub(crate) async fn handle_socks4(
     ctx: &ListenCtx,
@@ -22,7 +22,11 @@ pub(crate) async fn handle_socks4(
     else {
         return;
     };
-    let meta = ctx.tcp_meta(InboundKind::Socks4, &peer, request.target, request.user);
+    let client = Client {
+        user: request.user,
+        host: false,
+    };
+    let meta = ctx.tcp_meta(InboundKind::Socks4, &peer, request.target, client);
     ctx.hand_off(meta, Box::new(stream));
 }
 
@@ -33,13 +37,14 @@ pub(crate) async fn handle_socks5(
     stream: TcpStream,
     peer: Peer,
     auth: Option<&Authenticator>,
+    host: Option<&HostCredential>,
 ) {
     // The greeting and request arrive in one or two segments; reading them through a buffer takes one `recv`
     // per segment instead of one per field, as mihomo's bufio reader does.
     let mut buffered = BufReader::with_capacity(512, stream);
     let Ok(Ok(request)) = timeout(
         HANDSHAKE_TIMEOUT,
-        socks5::server_handshake(&mut buffered, auth),
+        socks5::server_handshake(&mut buffered, auth, host),
     )
     .await
     else {
@@ -55,7 +60,7 @@ pub(crate) async fn handle_socks5(
             {
                 return;
             }
-            let meta = ctx.tcp_meta(InboundKind::Socks5, &peer, request.target, request.user);
+            let meta = ctx.tcp_meta(InboundKind::Socks5, &peer, request.target, request.client);
             if ahead.is_empty() {
                 ctx.hand_off(meta, Box::new(stream));
             } else {
@@ -63,7 +68,7 @@ pub(crate) async fn handle_socks5(
             }
         }
         Command::UdpAssociate => {
-            let _association = ctx.assoc.register(peer.src.ip(), request.user);
+            let _association = ctx.assoc.register(peer.src.ip(), request.client.user);
             if socks5::reply_success(&mut stream, peer.local)
                 .await
                 .is_err()

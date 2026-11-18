@@ -19,6 +19,11 @@ impl InterceptFlow {
         self.meta.inbound.kind == InboundKind::Inner
     }
 
+    /// The core's own requests and the host's, which are never intercepted.
+    pub fn is_own(&self) -> bool {
+        self.is_inner() || self.meta.inbound.host
+    }
+
     pub fn retarget(&self, host: &str, port: u16) -> Self {
         let target = Address::new(host, port);
         let (host, dst_ip) = match &target {

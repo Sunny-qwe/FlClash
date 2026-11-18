@@ -707,6 +707,30 @@ async fn leaves_the_cores_own_connections_alone() {
 }
 
 #[tokio::test]
+async fn leaves_the_hosts_own_connections_alone() {
+    let server = start_server(false, &[], echo()).await;
+    let rig = rig_for(&server, None);
+    rig.config(json!({
+        "enable": true,
+        "hostname": ["listed.test"],
+        "url-rewrite": [r"^http://other\.test/never _ reject"],
+        "skip-server-cert-verify": true,
+    }));
+    let engine = rig.mitm.engine().unwrap();
+    for (host, port) in [
+        ("listed.test", 443),
+        ("listed.test", 80),
+        ("other.test", 80),
+    ] {
+        let ordinary = flow_of(InboundKind::Http, Address::new(host, port));
+        assert!(engine.match_tcp(&ordinary), "{host}:{port}");
+        let mut own = ordinary.clone();
+        own.meta.inbound.host = true;
+        assert!(!engine.match_tcp(&own), "{host}:{port}");
+    }
+}
+
+#[tokio::test]
 async fn drops_quic_to_listed_hosts() {
     let (_server, rig) = rig(echo(), true, &["http/1.1"]).await;
     rig.config(json!({"enable": true, "hostname": ["example.test"]}));

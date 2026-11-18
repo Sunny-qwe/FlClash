@@ -194,7 +194,7 @@ impl Core {
     /// Runs for every TCP connection, so it has to be cheap. Without TLS
     /// decryption only plain HTTP is offered, which never runs on 443.
     pub fn match_tcp(&self, flow: &InterceptFlow) -> bool {
-        if flow.is_inner()
+        if flow.is_own()
             || self.shared.pressure.level() >= PRESSURE_RELAY
             || !self.config.sources.allows(flow.meta.src.ip())
         {

@@ -6,7 +6,7 @@ pub use concord_platform::TproxyDatagram;
 use socket2::Socket;
 use tokio::net::{TcpStream, UdpSocket};
 
-use crate::ctx::{ListenCtx, Peer};
+use crate::ctx::{Client, ListenCtx, Peer};
 
 pub trait Transparent: Send + Sync + 'static {
     /// `SO_ORIGINAL_DST` / `IP6T_SO_ORIGINAL_DST` on Linux, `DIOCNATLOOK` on macOS.
@@ -38,7 +38,12 @@ pub(crate) async fn handle_redir(
     let Ok(original) = transparent.original_dst(&stream) else {
         return;
     };
-    let meta = ctx.tcp_meta(InboundKind::Redir, &peer, Address::from(original), None);
+    let meta = ctx.tcp_meta(
+        InboundKind::Redir,
+        &peer,
+        Address::from(original),
+        Client::default(),
+    );
     ctx.hand_off(meta, Box::new(stream));
 }
 
@@ -50,7 +55,7 @@ pub(crate) fn handle_tproxy(
 ) {
     let dst = Address::from(peer.local);
     peer.local = listener;
-    let meta = ctx.tcp_meta(InboundKind::TProxy, &peer, dst, None);
+    let meta = ctx.tcp_meta(InboundKind::TProxy, &peer, dst, Client::default());
     ctx.hand_off(meta, Box::new(stream));
 }
 

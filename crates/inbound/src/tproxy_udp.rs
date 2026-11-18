@@ -87,6 +87,7 @@ impl Table {
             name: self.ctx.name.clone(),
             addr: local,
             user: None,
+            host: false,
         };
         let flow = UdpFlow {
             inbound: &inbound,

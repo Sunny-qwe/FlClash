@@ -61,6 +61,29 @@ pub(crate) struct ListenCtx {
     pub(crate) assoc: Arc<Associations>,
 }
 
+/// Who a proxy client proved to be: the user it named, or the host itself, which names none.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Client {
+    pub(crate) user: Option<Arc<str>>,
+    pub(crate) host: bool,
+}
+
+impl Client {
+    pub(crate) fn named(user: &str) -> Self {
+        Client {
+            user: user_of(user),
+            host: false,
+        }
+    }
+
+    pub(crate) fn host() -> Self {
+        Client {
+            user: None,
+            host: true,
+        }
+    }
+}
+
 /// Both ends of an accepted connection with IPv4-mapped addresses unmapped.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Peer {
@@ -78,7 +101,7 @@ impl ListenCtx {
         kind: InboundKind,
         peer: &Peer,
         dst: Address,
-        user: Option<Arc<str>>,
+        client: Client,
     ) -> FlowMeta {
         FlowMeta {
             dscp: 0,
@@ -87,7 +110,8 @@ impl ListenCtx {
                 kind,
                 name: self.name.clone(),
                 addr: Some(peer.local),
-                user,
+                user: client.user,
+                host: client.host,
             },
             src: peer.src,
             dst,

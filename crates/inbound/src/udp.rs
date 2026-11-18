@@ -233,6 +233,7 @@ fn dispatch(
         name: ctx.name.clone(),
         addr: local,
         user,
+        host: false,
     };
     let flow = UdpFlow {
         inbound: &inbound,

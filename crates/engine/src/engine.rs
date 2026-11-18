@@ -92,6 +92,8 @@ pub struct UpdateRequest {
     pub tcp_concurrent: Option<bool>,
     pub unified_delay: Option<bool>,
     pub authentication: Option<Vec<String>>,
+    /// `user:pass`; empty clears it.
+    pub host_credential: Option<String>,
     pub geo_auto_update: Option<bool>,
     pub geo_update_interval: Option<i64>,
     pub geox_url: BTreeMap<String, String>,
@@ -131,6 +133,9 @@ pub struct Engine {
     /// Whether the profile's `external-controller` and `secret` count, as they do
     /// when the core runs on its own; a host sets them through `config.patch`.
     profile_controller: AtomicBool,
+    /// The credential the host's own requests carry through the proxy listeners. A host
+    /// sets it through `config.patch` and an apply keeps it, as with the controller.
+    host_credential: StdMutex<Option<(String, String)>>,
     /// Released once the apply in progress has answered; until then each
     /// provider's first load keeps its outcome to itself. Released when no
     /// apply holds it.
@@ -217,6 +222,7 @@ impl Engine {
             tasks,
             intent: Arc::new(AsyncMutex::new(0)),
             profile_controller: AtomicBool::new(false),
+            host_credential: StdMutex::new(None),
             answered: StdMutex::new(released()),
         })
     }

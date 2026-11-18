@@ -317,6 +317,78 @@ async fn a_connection_stays_trusted_after_one_good_credential() {
     assert_eq!(body, b"ok");
 }
 
+fn with_host(spec: ListenSpec) -> ListenSpec {
+    ListenSpec {
+        host_credential: Some(("flclash".into(), "s3cret".into())),
+        ..spec
+    }
+}
+
+const HOST_AUTH: &str = "Proxy-Authorization: Basic ZmxjbGFzaDpzM2NyZXQ=\r\n";
+const WRONG_HOST_AUTH: &str = "Proxy-Authorization: Basic ZmxjbGFzaDpndWVzcw==\r\n";
+
+#[tokio::test]
+async fn the_host_credential_passes_authentication_and_never_reaches_the_origin() {
+    for spec in [with_host(http_only()), with_host(with_auth(http_only()))] {
+        let (fake, seen) = origin(|_, _| ok("fine"));
+        let run = start(spec, fake).await;
+        let addr = run.addr(ListenerKind::Http).await;
+        let mut stream = connect(addr).await;
+        let extra = format!("{KEEP}{HOST_AUTH}");
+        stream
+            .write_all(request("http://a.test/", "a.test", &extra).as_bytes())
+            .await
+            .unwrap();
+        assert_eq!(read_response(&mut stream).await.1, b"fine");
+        let upstream = lock(&seen)[0].clone();
+        for gone in ["Proxy-", "ZmxjbGFzaDpzM2NyZXQ="] {
+            assert!(!upstream.contains(gone), "{gone} leaked: {upstream}");
+        }
+        let meta = run.fake.flow(0);
+        assert!(meta.inbound.host);
+        assert_eq!(meta.inbound.user, None);
+
+        let mut tunnel = connect(addr).await;
+        tunnel
+            .write_all(format!("CONNECT b.test:443 HTTP/1.1\r\n{HOST_AUTH}\r\n").as_bytes())
+            .await
+            .unwrap();
+        let head = read_until(&mut tunnel, b"\r\n\r\n").await;
+        assert!(head.starts_with(b"HTTP/1.1 200"));
+        wait_for(|| run.fake.flow_count() == 2).await;
+        let meta = run.fake.flow(1);
+        assert!(meta.inbound.host);
+        assert_eq!(meta.inbound.user, None);
+    }
+}
+
+#[tokio::test]
+async fn a_wrong_host_credential_is_an_ordinary_credential() {
+    let (fake, _) = origin(|_, _| ok("fine"));
+    let run = start(with_host(http_only()), fake).await;
+    let mut stream = connect(run.addr(ListenerKind::Http).await).await;
+    let extra = format!("{KEEP}{WRONG_HOST_AUTH}");
+    stream
+        .write_all(request("http://a.test/", "a.test", &extra).as_bytes())
+        .await
+        .unwrap();
+    assert_eq!(read_response(&mut stream).await.1, b"fine");
+    let meta = run.fake.flow(0);
+    assert!(!meta.inbound.host);
+    assert_eq!(meta.inbound.user.as_deref(), Some("flclash"));
+
+    let (fake, _) = origin(|_, _| ok("fine"));
+    let run = start(with_host(with_auth(http_only())), fake).await;
+    let mut stream = connect(run.addr(ListenerKind::Http).await).await;
+    stream
+        .write_all(request("http://a.test/", "a.test", &extra).as_bytes())
+        .await
+        .unwrap();
+    let (head, _) = read_response(&mut stream).await;
+    assert!(head.starts_with("HTTP/1.1 403 Forbidden\r\n"), "{head}");
+    assert_eq!(run.fake.flow_count(), 0);
+}
+
 #[tokio::test]
 async fn request_bodies_pass_with_length_and_with_chunked_framing() {
     let (fake, seen) = origin(|_, body| ok(&String::from_utf8_lossy(body)));

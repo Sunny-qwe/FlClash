@@ -50,6 +50,8 @@ pub struct InboundInfo {
     pub name: Arc<str>,
     pub addr: Option<SocketAddr>,
     pub user: Option<Arc<str>>,
+    /// The host's own request, as its credential on a proxy listener proved.
+    pub host: bool,
 }
 
 impl InboundInfo {
@@ -59,6 +61,7 @@ impl InboundInfo {
             name: Arc::from(""),
             addr: None,
             user: None,
+            host: false,
         }
     }
 }

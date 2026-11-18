@@ -20,7 +20,7 @@ use super::head::{
 };
 use super::target::{Target, host_header, parse_absolute, parse_authority};
 use super::{Next, Session, connection_headers, status_text};
-use crate::ctx::{ListenCtx, Peer, dst_address};
+use crate::ctx::{Client, ListenCtx, Peer, dst_address};
 
 const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 const MAX_IDLE: usize = 100;
@@ -88,11 +88,11 @@ impl Upstreams {
         self.idle.insert(dst, upstream);
     }
 
-    fn dial(&self, dst: &Address, user: &Option<Arc<str>>) -> Upstream {
+    fn dial(&self, dst: &Address, client: &Client) -> Upstream {
         let (left, right) = tokio::io::duplex(concord_common::stream_buffer::COPY_BUFFER_SIZE);
         let meta = self
             .ctx
-            .tcp_meta(InboundKind::Http, &self.peer, dst.clone(), user.clone());
+            .tcp_meta(InboundKind::Http, &self.peer, dst.clone(), client.clone());
         self.ctx.hand_off(meta, Box::new(right));
         let (rd, wr) = tokio::io::split(left);
         Upstream {
@@ -319,7 +319,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
         loop {
             let (mut upstream, reused) = match self.upstreams.take(&dst) {
                 Some(upstream) => (upstream, true),
-                None => (self.upstreams.dial(&dst, &self.user), false),
+                None => (self.upstreams.dial(&dst, &self.client), false),
             };
             let result = exchange(
                 (&mut self.rd, &mut self.rbuf, &mut self.wr),
@@ -362,7 +362,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
             mut wr,
             mut rbuf,
             upstreams,
-            user,
+            client,
         } = self;
         let (host, port, path) = match parse_absolute(&head.target) {
             Some(Target {
@@ -384,7 +384,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
             framing,
         );
         let dst = dst_address(&host, port.unwrap_or(80));
-        let mut upstream = upstreams.dial(&dst, &user);
+        let mut upstream = upstreams.dial(&dst, &client);
         upstream.wr.write_all(&request).await?;
         copy_body(framing, &mut rd, &mut rbuf, &mut upstream.wr).await?;
 

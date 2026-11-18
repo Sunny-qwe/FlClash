@@ -81,6 +81,8 @@ pub struct ListenSpec {
     pub authentication: Vec<(String, String)>,
     /// Sources that connect without credentials, as mihomo's `skip-auth-prefixes`.
     pub skip_auth: Vec<Cidr>,
+    /// The `user:pass` the host's own requests carry; see [`Policy::host`].
+    pub host_credential: Option<(String, String)>,
     pub lan_allowed_ips: Vec<Cidr>,
     pub lan_disallowed_ips: Vec<Cidr>,
     pub tcp_keepalive: bool,
@@ -101,6 +103,7 @@ impl Default for ListenSpec {
             allow_lan: false,
             authentication: Vec::new(),
             skip_auth: Vec::new(),
+            host_credential: None,
             lan_allowed_ips: vec![Cidr::any_v4(), Cidr::any_v6()],
             lan_disallowed_ips: Vec::new(),
             tcp_keepalive: true,
@@ -137,12 +140,25 @@ impl Authenticator {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct HostCredential {
+    user: String,
+    pass: String,
+}
+
+impl HostCredential {
+    pub(crate) fn matches(&self, user: &str, pass: &str) -> bool {
+        self.user == user && self.pass == pass
+    }
+}
+
 /// What a connection checks at accept and at handshake. Swapped as a whole on
 /// every reconcile, so an unchanged listener still sees the new lists.
 #[derive(Debug)]
 pub(crate) struct Policy {
     auth: Option<Authenticator>,
     skip_auth: Vec<Cidr>,
+    host: Option<HostCredential>,
     allowed: Vec<Cidr>,
     disallowed: Vec<Cidr>,
     pub(crate) keepalive: Option<Keepalive>,
@@ -169,6 +185,11 @@ impl Policy {
         Policy {
             auth: Authenticator::new(&spec.authentication),
             skip_auth: spec.skip_auth.clone(),
+            host: spec
+                .host_credential
+                .clone()
+                .filter(|(user, pass)| !user.is_empty() && !pass.is_empty())
+                .map(|(user, pass)| HostCredential { user, pass }),
             allowed: spec.lan_allowed_ips.clone(),
             disallowed: spec.lan_disallowed_ips.clone(),
             keepalive: spec.tcp_keepalive.then(|| Keepalive {
@@ -188,6 +209,13 @@ impl Policy {
             return None;
         }
         self.auth.as_ref()
+    }
+
+    /// Offered to loopback clients only: the host connects over loopback, and a LAN client
+    /// that learned the credential still cannot use it. A request that presents it passes
+    /// whatever `authentication` and `skip-auth-prefixes` say and is the host's.
+    pub(crate) fn host(&self, ip: IpAddr) -> Option<&HostCredential> {
+        self.host.as_ref().filter(|_| ip.is_loopback())
     }
 }
 
@@ -279,5 +307,42 @@ mod tests {
             Some(("a".to_owned(), "b:c".to_owned()))
         );
         assert_eq!(parse_credential("nocolon"), None);
+    }
+
+    #[test]
+    fn the_host_credential_is_offered_to_loopback_clients_only() {
+        let policy = Policy::from_spec(&ListenSpec {
+            host_credential: Some(("h".into(), "s".into())),
+            ..Default::default()
+        });
+        for loopback in ["127.0.0.1", "127.8.9.1", "::1"] {
+            let host = policy.host(loopback.parse().unwrap());
+            assert!(
+                host.is_some_and(|host| host.matches("h", "s")),
+                "{loopback}"
+            );
+        }
+        for remote in ["192.168.1.2", "10.0.0.1", "fe80::1"] {
+            assert!(policy.host(remote.parse().unwrap()).is_none(), "{remote}");
+        }
+        assert!(
+            Policy::from_spec(&ListenSpec::default())
+                .host(std::net::Ipv4Addr::LOCALHOST.into())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_host_credential_missing_its_user_or_password_is_none() {
+        for (user, pass) in [("", ""), ("", "s"), ("h", "")] {
+            let policy = Policy::from_spec(&ListenSpec {
+                host_credential: Some((user.into(), pass.into())),
+                ..Default::default()
+            });
+            assert!(
+                policy.host(std::net::Ipv4Addr::LOCALHOST.into()).is_none(),
+                "{user:?}:{pass:?}"
+            );
+        }
     }
 }
