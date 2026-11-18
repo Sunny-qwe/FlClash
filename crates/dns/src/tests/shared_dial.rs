@@ -121,11 +121,61 @@ async fn a_dead_session_is_dropped_and_dialled_again() {
     assert_eq!(slot.take(), Some(2));
 }
 
+#[tokio::test]
+async fn a_reset_cancels_the_dial_in_progress_and_its_waiters_dial_again() {
+    let slot = SharedDial::new();
+    let (send, recv) = tokio::sync::oneshot::channel::<()>();
+    let mut first = slot
+        .get(live, async {
+            recv.await.unwrap();
+            Ok(1)
+        })
+        .boxed();
+    assert!(poll!(&mut first).is_pending());
+    let mut waiter = slot.get(live, async { Ok(2) }).boxed();
+    assert!(poll!(&mut waiter).is_pending());
+    assert_eq!(slot.reset(), None);
+    assert_eq!(
+        first.await.err().unwrap().kind(),
+        io::ErrorKind::ConnectionAborted
+    );
+    assert!(send.is_closed(), "the overtaken dial is still running");
+    assert_eq!(pair(waiter.await), (2, false));
+    assert_eq!(
+        pair(slot.get(live, async { panic!("cached") }).await),
+        (2, true)
+    );
+}
+
+#[tokio::test]
+async fn a_dial_that_completes_after_a_reset_is_not_cached() {
+    let slot = SharedDial::new();
+    let (send, recv) = tokio::sync::oneshot::channel();
+    let mut first = slot
+        .get(live, async {
+            recv.await.unwrap();
+            slot.reset();
+            Ok(1)
+        })
+        .boxed();
+    assert!(poll!(&mut first).is_pending());
+    let mut waiter = slot.get(live, async { Ok(2) }).boxed();
+    assert!(poll!(&mut waiter).is_pending());
+    send.send(()).unwrap();
+    assert_eq!(
+        first.await.err().unwrap().kind(),
+        io::ErrorKind::ConnectionAborted
+    );
+    assert_eq!(pair(waiter.await), (2, false));
+    assert_eq!(slot.take(), Some(2));
+}
+
 struct CountingDialer {
     server: SocketAddr,
     udp: Arc<UdpDialer>,
     attempts: AtomicUsize,
     fail: AtomicBool,
+    stall: AtomicBool,
     barrier: Option<Arc<tokio::sync::Barrier>>,
 }
 
@@ -141,6 +191,12 @@ impl CountingDialer {
             Ok(())
         }
     }
+
+    async fn stall(&self) {
+        if self.stall.swap(false, Ordering::SeqCst) {
+            std::future::pending::<()>().await;
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -154,16 +210,18 @@ impl crate::UpstreamDialer for CountingDialer {
         if let Some(barrier) = &self.barrier {
             barrier.wait().await;
         }
+        self.stall().await;
         Ok(Box::new(TcpStream::connect(self.server).await?))
     }
 
     async fn bind_udp(&self, via: &str, target: &Address) -> io::Result<Arc<dyn PacketSession>> {
         self.attempt()?;
+        self.stall().await;
         crate::UpstreamDialer::bind_udp(&*self.udp, via, target).await
     }
 }
 
-async fn serve_https(h2: bool) -> SocketAddr {
+async fn serve_https(h2: bool, handler: Handler) -> SocketAddr {
     use base64::Engine;
     let key = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
@@ -186,22 +244,26 @@ async fn serve_https(h2: bool) -> SocketAddr {
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
-            let acceptor = acceptor.clone();
+            let (acceptor, handler) = (acceptor.clone(), Arc::clone(&handler));
             tokio::spawn(async move {
                 let stream = acceptor.accept(stream).await.unwrap();
-                let service = hyper::service::service_fn(
-                    |req: http::Request<hyper::body::Incoming>| async move {
-                        let query = req.uri().query().unwrap().strip_prefix("dns=").unwrap();
-                        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-                            .decode(query)
-                            .unwrap();
-                        let req = Message::from_vec(&bytes).unwrap();
-                        let reply = answer_with(Ipv4Addr::new(10, 0, 2, 1))(&req).unwrap();
-                        Ok::<_, std::convert::Infallible>(http::Response::new(
-                            http_body_util::Full::new(bytes::Bytes::from(reply.to_vec().unwrap())),
-                        ))
-                    },
-                );
+                let service =
+                    hyper::service::service_fn(|req: http::Request<hyper::body::Incoming>| {
+                        let handler = Arc::clone(&handler);
+                        async move {
+                            let query = req.uri().query().unwrap().strip_prefix("dns=").unwrap();
+                            let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                                .decode(query)
+                                .unwrap();
+                            let req = Message::from_vec(&bytes).unwrap();
+                            let reply = handler(&req).unwrap();
+                            Ok::<_, std::convert::Infallible>(http::Response::new(
+                                http_body_util::Full::new(bytes::Bytes::from(
+                                    reply.to_vec().unwrap(),
+                                )),
+                            ))
+                        }
+                    });
                 if h2 {
                     let _ = hyper::server::conn::http2::Builder::new(
                         hyper_util::rt::TokioExecutor::new(),
@@ -225,16 +287,27 @@ async fn upstream(
     barrier: Option<Arc<tokio::sync::Barrier>>,
 ) -> (Arc<crate::Resolver>, Arc<CountingDialer>) {
     let handler = answer_with(Ipv4Addr::new(10, 0, 2, 1));
+    upstream_answering(protocol, fail, barrier, handler).await
+}
+
+async fn upstream_answering(
+    protocol: &str,
+    fail: bool,
+    barrier: Option<Arc<tokio::sync::Barrier>>,
+    handler: Handler,
+) -> (Arc<crate::Resolver>, Arc<CountingDialer>) {
     let addr = match protocol {
         "doq" => serve_quic(handler).await.addr,
         "h3" => serve_h3(handler).await.addr,
-        "h2" => serve_https(true).await,
-        "tls-h1" => serve_https(false).await,
+        "h2" => serve_https(true, handler).await,
+        "tls-h1" => serve_https(false, handler).await,
+        "dot" => serve_tls(handler).await.addr,
         "h1" => serve_doh(handler).await.addr,
         _ => panic!("unknown protocol"),
     };
     let url = match protocol {
         "doq" => format!("quic://{addr}#node&skip-cert-verify=true"),
+        "dot" => format!("tls://{addr}#node&skip-cert-verify=true"),
         "h1" => format!("http://{addr}/dns-query#node"),
         "h3" => format!("https://{addr}/dns-query#node&skip-cert-verify=true&h3=true"),
         _ => format!("https://{addr}/dns-query#node&skip-cert-verify=true"),
@@ -244,6 +317,7 @@ async fn upstream(
         udp: UdpDialer::new(&["node"]),
         attempts: AtomicUsize::new(0),
         fail: AtomicBool::new(fail),
+        stall: AtomicBool::new(false),
         barrier,
     });
     let sink = Arc::new(Sink::default());
@@ -293,6 +367,110 @@ async fn each_encrypted_transport_dials_again_after_a_failed_query() {
         let reply = client.exchange(&next, cx).await.unwrap();
         assert_eq!(crate::msg::answer_ips(&reply), vec![ip("10.0.2.1")]);
         assert_eq!(dialer.attempts.load(Ordering::SeqCst), 2, "{protocol}");
+    }
+}
+
+#[tokio::test]
+async fn a_network_reset_overtakes_the_quic_dial_in_progress() {
+    for protocol in ["h3", "doq"] {
+        let (resolver, dialer) = upstream(protocol, false, None).await;
+        dialer.stall.store(true, Ordering::SeqCst);
+        let client = resolver
+            .clients
+            .iter()
+            .find(|client| {
+                client.address().starts_with("https://") || client.address().starts_with("quic://")
+            })
+            .unwrap();
+        let cx = crate::dialer::Cx {
+            initiator: Initiator::App,
+        };
+        let first = crate::msg::build_query("first.test", RecordType::A).unwrap();
+        let mut first = client.exchange(&first, cx);
+        while dialer.attempts.load(Ordering::SeqCst) == 0 {
+            assert!(poll!(&mut first).is_pending(), "{protocol}");
+            tokio::task::yield_now().await;
+        }
+        let waiting = crate::msg::build_query("waiting.test", RecordType::A).unwrap();
+        let mut waiting = client.exchange(&waiting, cx);
+        assert!(poll!(&mut waiting).is_pending(), "{protocol}");
+        resolver.reset_connections();
+        let err = first.await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted, "{protocol}");
+        let reply = waiting.await.unwrap();
+        assert_eq!(crate::msg::answer_ips(&reply), vec![ip("10.0.2.1")]);
+        assert_eq!(dialer.attempts.load(Ordering::SeqCst), 2, "{protocol}");
+        let next = crate::msg::build_query("next.test", RecordType::A).unwrap();
+        client.exchange(&next, cx).await.unwrap();
+        assert_eq!(dialer.attempts.load(Ordering::SeqCst), 2, "{protocol}");
+    }
+}
+
+#[tokio::test]
+async fn a_network_reset_overtakes_the_tcp_dial_in_progress() {
+    for protocol in ["h2", "tls-h1", "dot"] {
+        let (resolver, dialer) = upstream(protocol, false, None).await;
+        dialer.stall.store(true, Ordering::SeqCst);
+        let client = resolver
+            .clients
+            .iter()
+            .find(|client| {
+                client.address().starts_with("https://") || client.address().starts_with("tls://")
+            })
+            .unwrap();
+        let cx = crate::dialer::Cx {
+            initiator: Initiator::App,
+        };
+        let first = crate::msg::build_query("first.test", RecordType::A).unwrap();
+        let mut first = client.exchange(&first, cx);
+        while dialer.attempts.load(Ordering::SeqCst) == 0 {
+            assert!(poll!(&mut first).is_pending(), "{protocol}");
+            tokio::task::yield_now().await;
+        }
+        resolver.reset_connections();
+        let err = first.await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted, "{protocol}");
+        for name in ["next.test", "again.test"] {
+            let query = crate::msg::build_query(name, RecordType::A).unwrap();
+            client.exchange(&query, cx).await.unwrap();
+        }
+        assert_eq!(dialer.attempts.load(Ordering::SeqCst), 2, "{protocol}");
+    }
+}
+
+#[tokio::test]
+async fn a_connection_in_use_across_a_network_reset_is_not_kept() {
+    for protocol in ["tls-h1", "dot"] {
+        let resolver = Arc::new(std::sync::OnceLock::<Weak<crate::Resolver>>::new());
+        let answer = answer_with(Ipv4Addr::new(10, 0, 2, 1));
+        let first = AtomicBool::new(true);
+        let handler: Handler = Arc::new({
+            let resolver = Arc::clone(&resolver);
+            move |req| {
+                if first.swap(false, Ordering::SeqCst) {
+                    resolver
+                        .get()
+                        .and_then(Weak::upgrade)
+                        .unwrap()
+                        .reset_connections();
+                }
+                answer(req)
+            }
+        });
+        let (upstream, dialer) = upstream_answering(protocol, false, None, handler).await;
+        resolver.set(Arc::downgrade(&upstream)).unwrap();
+        for (name, attempts) in [("one.test", 1), ("two.test", 2), ("three.test", 2)] {
+            assert_eq!(
+                lookup_v4(&upstream, name).await.unwrap(),
+                vec![ip("10.0.2.1")],
+                "{protocol}"
+            );
+            assert_eq!(
+                dialer.attempts.load(Ordering::SeqCst),
+                attempts,
+                "{protocol} {name}"
+            );
+        }
     }
 }
 

@@ -117,6 +117,7 @@ async fn immediate_http1_reuse_waits_for_the_same_connection() {
         tls: None,
         h2: Mutex::new(None),
         h1: Mutex::new(vec![spare, sender]),
+        resets: crate::resets::Resets::new(),
     };
 
     let cx = Cx {

@@ -17,6 +17,7 @@ mod msg;
 mod plain;
 mod query;
 mod record;
+mod resets;
 mod resolver;
 mod shared_dial;
 mod system;

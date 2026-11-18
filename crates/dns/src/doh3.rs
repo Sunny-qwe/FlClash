@@ -145,7 +145,7 @@ impl Client for Doh3Client {
                         return Ok(resp);
                     }
                     Err(err) => {
-                        self.reset();
+                        close(self.session.take());
                         if !reused {
                             return Err(err);
                         }
@@ -162,10 +162,13 @@ impl Client for Doh3Client {
     }
 
     fn reset(&self) {
-        let taken = self.session.take();
-        if let Some(session) = taken {
-            session.conn.close(0u32.into(), b"");
-        }
+        close(self.session.reset());
+    }
+}
+
+fn close(session: Option<Session>) {
+    if let Some(session) = session {
+        session.conn.close(0u32.into(), b"");
     }
 }
 

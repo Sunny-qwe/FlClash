@@ -117,7 +117,7 @@ impl Client for DoqClient {
                         return Ok(resp);
                     }
                     Err(err) => {
-                        self.reset();
+                        close(self.session.take());
                         if !reused {
                             return Err(err);
                         }
@@ -134,9 +134,12 @@ impl Client for DoqClient {
     }
 
     fn reset(&self) {
-        let taken = self.session.take();
-        if let Some((_, conn)) = taken {
-            conn.close(0u32.into(), b"");
-        }
+        close(self.session.reset());
+    }
+}
+
+fn close(session: Option<Session>) {
+    if let Some((_, conn)) = session {
+        conn.close(0u32.into(), b"");
     }
 }

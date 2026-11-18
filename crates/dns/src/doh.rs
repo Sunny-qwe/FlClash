@@ -17,6 +17,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use crate::client::{BoxIo, Client, Params, checked, decode, encode, with_random_id, with_timeout};
 use crate::dialer::{Connector, Cx};
 use crate::dot::{server_name, tls_connector};
+use crate::resets::{Resets, Ticket, overtaken};
 use crate::shared_dial::Got;
 
 const MAX_BODY: usize = 65_535;
@@ -86,6 +87,7 @@ pub(crate) struct DohClient {
     tls: Option<tokio_rustls::TlsConnector>,
     h2: Mutex<Option<http2::SendRequest<Body>>>,
     h1: Mutex<Vec<http1::SendRequest<Body>>>,
+    resets: Resets,
 }
 
 enum Sender {
@@ -110,10 +112,11 @@ impl DohClient {
             tls,
             h2: Mutex::new(None),
             h1: Mutex::new(Vec::new()),
+            resets: Resets::new(),
         })
     }
 
-    async fn sender(&self, cx: Cx) -> io::Result<Got<Sender>> {
+    async fn sender(&self, cx: Cx, ticket: Ticket) -> io::Result<Got<Sender>> {
         if let Some(idle) = self.idle_h1().await {
             return Ok(idle);
         }
@@ -127,9 +130,12 @@ impl DohClient {
                 });
             }
         }
-        let mut sender = self.dial(cx).await?;
+        let mut sender = self.resets.dial(ticket, self.dial(cx)).await?;
         if let Sender::H2(connected) = &mut sender {
             let mut cached = lock(&self.h2);
+            if !self.resets.none_since(ticket) {
+                return Err(overtaken());
+            }
             match cached.as_ref().filter(|sender| !sender.is_closed()) {
                 Some(current) => *connected = current.clone(),
                 None => *cached = Some(connected.clone()),
@@ -192,11 +198,24 @@ impl DohClient {
         }
     }
 
+    fn drop_connections(&self) {
+        lock(&self.h2).take();
+        {
+            let mut idle = lock(&self.h1);
+            idle.clear();
+        }
+    }
+
     fn request(&self, query: &[u8], h2: bool) -> io::Result<Request<Body>> {
         self.target.request(query, h2)
     }
 
-    async fn round_trip(&self, sender: Sender, query: &[u8]) -> io::Result<Message> {
+    async fn round_trip(
+        &self,
+        sender: Sender,
+        query: &[u8],
+        ticket: Ticket,
+    ) -> io::Result<Message> {
         let (response, keep) = match sender {
             Sender::H2(mut sender) => {
                 let response = sender
@@ -216,7 +235,7 @@ impl DohClient {
         let message = self.read(response).await?;
         if let Some(sender) = keep {
             let mut idle = lock(&self.h1);
-            if !sender.is_closed() && idle.len() < MAX_IDLE {
+            if !sender.is_closed() && idle.len() < MAX_IDLE && self.resets.none_since(ticket) {
                 idle.push(sender);
             }
         }
@@ -253,10 +272,11 @@ impl Client for DohClient {
         with_timeout(async {
             let mut reused = true;
             loop {
-                let sender = self.sender(cx).await?;
+                let ticket = self.resets.ticket();
+                let sender = self.sender(cx, ticket).await?;
                 reused &= sender.reused;
                 let answer = self
-                    .round_trip(sender.value, &bytes)
+                    .round_trip(sender.value, &bytes, ticket)
                     .await
                     .and_then(|resp| checked(&query, resp));
                 match answer {
@@ -265,7 +285,7 @@ impl Client for DohClient {
                         return Ok(resp);
                     }
                     Err(err) => {
-                        self.reset();
+                        self.drop_connections();
                         if !reused {
                             return Err(err);
                         }
@@ -288,11 +308,8 @@ impl Client for DohClient {
     }
 
     fn reset(&self) {
-        lock(&self.h2).take();
-        {
-            let mut idle = lock(&self.h1);
-            idle.clear();
-        }
+        self.resets.bump();
+        self.drop_connections();
     }
 }
 

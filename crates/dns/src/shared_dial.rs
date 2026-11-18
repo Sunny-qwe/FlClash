@@ -5,7 +5,17 @@ use std::sync::{Arc, Mutex};
 use concord_common::sync::lock;
 use tokio::sync::watch;
 
-type Outcome = Option<Result<(), Arc<io::Error>>>;
+use crate::resets::overtaken;
+
+#[derive(Clone)]
+enum Outcome {
+    Pending,
+    Done(Result<(), Arc<io::Error>>),
+    /// A reset ran while the dial was under way: what it makes went out on
+    /// the network the reset left, so the waiters join a dial on the new one.
+    Overtaken,
+}
+
 type Flight = watch::Sender<Outcome>;
 
 /// One upstream session shared by concurrent queries: a live cached session is
@@ -52,6 +62,16 @@ impl<T> SharedDial<T> {
     pub(crate) fn take(&self) -> Option<T> {
         lock(&self.state).cached.take()
     }
+
+    /// `take` after a network change, which also overtakes the dial in
+    /// progress, as sing-box's DNS `ConnPool.Reset` cancels it.
+    pub(crate) fn reset(&self) -> Option<T> {
+        let mut state = lock(&self.state);
+        if let Some(flight) = state.connecting.take() {
+            flight.send_replace(Outcome::Overtaken);
+        }
+        state.cached.take()
+    }
 }
 
 impl<T: Clone> SharedDial<T> {
@@ -60,15 +80,24 @@ impl<T: Clone> SharedDial<T> {
         live: impl Fn(&T) -> bool,
         dial: impl Future<Output = io::Result<T>>,
     ) -> io::Result<Got<T>> {
-        match self.join(live).await? {
-            Join::Ready(got) => Ok(got),
-            Join::Dial(turn) => match dial.await {
+        let turn = match self.join(live).await? {
+            Join::Ready(got) => return Ok(got),
+            Join::Dial(turn) => turn,
+        };
+        let mut reset = turn.flight.subscribe();
+        tokio::select! {
+            biased;
+            _ = reset.wait_for(|outcome| matches!(outcome, Outcome::Overtaken)) => Err(overtaken()),
+            dialled = dial => match dialled {
                 Ok(value) => {
-                    turn.publish(value.clone());
-                    Ok(Got {
-                        value,
-                        reused: false,
-                    })
+                    if turn.publish(value.clone()) {
+                        Ok(Got {
+                            value,
+                            reused: false,
+                        })
+                    } else {
+                        Err(overtaken())
+                    }
                 }
                 Err(err) => Err(turn.fail(err)),
             },
@@ -91,18 +120,18 @@ impl<T: Clone> SharedDial<T> {
                 match &state.connecting {
                     Some(flight) => flight.subscribe(),
                     None => {
-                        let flight = Arc::new(watch::Sender::new(None));
+                        let flight = Arc::new(watch::Sender::new(Outcome::Pending));
                         state.connecting = Some(Arc::clone(&flight));
                         return Ok(Join::Dial(Turn { slot: self, flight }));
                     }
                 }
             };
             let result = outcome
-                .wait_for(Option::is_some)
+                .wait_for(|outcome| !matches!(outcome, Outcome::Pending))
                 .await
                 .map_err(io::Error::other)?
                 .clone();
-            if let Some(Err(err)) = result {
+            if let Outcome::Done(Err(err)) = result {
                 return Err(shared(err));
             }
         }
@@ -110,8 +139,9 @@ impl<T: Clone> SharedDial<T> {
 }
 
 impl<T> Turn<'_, T> {
-    fn publish(self, session: T) {
-        self.finish(Some(session), Ok(()));
+    /// Caches `session`, or returns false when a reset overtook this dial.
+    fn publish(self, session: T) -> bool {
+        self.finish(Some(session), Ok(()))
     }
 
     fn fail(self, err: io::Error) -> io::Error {
@@ -120,29 +150,37 @@ impl<T> Turn<'_, T> {
         shared(err)
     }
 
-    fn finish(&self, session: Option<T>, result: Result<(), Arc<io::Error>>) {
+    fn finish(&self, session: Option<T>, result: Result<(), Arc<io::Error>>) -> bool {
         let mut state = lock(&self.slot.state);
+        if !self.current(&state) {
+            return false;
+        }
         if let Some(session) = session {
             state.cached = Some(session);
         }
         state.connecting = None;
-        self.flight.send_replace(Some(result));
+        self.flight.send_replace(Outcome::Done(result));
+        true
+    }
+
+    fn current(&self, state: &State<T>) -> bool {
+        state
+            .connecting
+            .as_ref()
+            .is_some_and(|flight| Arc::ptr_eq(flight, &self.flight))
     }
 }
 
 impl<T> Drop for Turn<'_, T> {
     fn drop(&mut self) {
         let mut state = lock(&self.slot.state);
-        if state
-            .connecting
-            .as_ref()
-            .is_some_and(|flight| Arc::ptr_eq(flight, &self.flight))
-        {
+        if self.current(&state) {
             state.connecting = None;
-            self.flight.send_replace(Some(Err(Arc::new(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "DNS session dial cancelled",
-            )))));
+            self.flight
+                .send_replace(Outcome::Done(Err(Arc::new(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "DNS session dial cancelled",
+                )))));
         }
     }
 }
