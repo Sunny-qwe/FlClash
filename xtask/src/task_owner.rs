@@ -20,6 +20,11 @@ const OWNED: &[&str] = &[
     "crates/dns/src",
     "crates/group/src",
     "crates/tunnel/src",
+    "crates/inbound/src",
+    "crates/tun/src",
+    "crates/mitm/src",
+    "crates/api/src",
+    "crates/engine/src",
 ];
 
 pub(crate) fn check(root: &Path) -> Result<(), String> {

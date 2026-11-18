@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use concord_common::Network;
+use concord_common::{Network, Tasks};
 use concord_netstack::frag::Reassembler;
 use concord_netstack::wire::{
     DropReason, IpView, L4Checksum, L4Kind, Parsed, UdpView, build_echo_reply, parse_packet,
@@ -16,6 +16,7 @@ use concord_netstack::wire::{
 };
 use concord_netstack::{Admit, Egress, Gather, StackConfig, TcpConfig, TcpInput, TcpStack};
 use concord_platform::SparseBuf;
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::Semaphore;
 use tokio::time::Sleep;
 use tokio_util::sync::CancellationToken;
@@ -98,25 +99,26 @@ pub(super) async fn run_prepared<D: Device>(
     let queues = Arc::new(Queues::new(count));
     let stop = stop.child_token();
     let _cancel = stop.clone().drop_guard();
-    let mut tasks = tokio::task::JoinSet::new();
+    let mut running = FuturesUnordered::new();
     for (index, dev) in devs.into_iter().enumerate() {
         let options = StackOptions {
             max_tcp_flows: options.max_tcp_flows.div_ceil(count),
             max_half_open_tcp: options.max_half_open_tcp.div_ceil(count),
             ..options.clone()
         };
-        tasks.spawn(run_queue(
+        running.push(options.tasks.clone().spawn_returning(run_queue(
             options,
             dev,
             Arc::clone(&sink),
             stop.clone(),
             Some((index, Arc::clone(&queues))),
-        ));
+        )));
     }
     let mut result = Ok(());
-    while let Some(joined) = tasks.join_next().await {
-        let outcome = joined.unwrap_or_else(|err| Err(io::Error::other(err)));
-        if let Err(err) = outcome
+    while let Some(joined) = running.next().await {
+        if let Err(err) = joined
+            .map_err(io::Error::other)
+            .and_then(|done| done.unwrap_or(Ok(())))
             && result.is_ok()
         {
             result = Err(err);
@@ -134,12 +136,10 @@ async fn run_queue<D: Device>(
     queue: Option<(usize, Arc<Queues>)>,
 ) -> io::Result<()> {
     let Prepared { dev, ready } = prepared;
-    let handlers = tokio::runtime::Handle::current();
     let stop = stop.child_token();
     let cancelled = stop.clone();
     let work = move || async move {
         let mut driver = Driver::new(options, dev, sink);
-        driver.handlers = handlers;
         if let Some((index, queues)) = queue {
             driver = driver.with_queue(index, &queues);
         }
@@ -275,7 +275,7 @@ struct Driver<D: Device> {
     pool: Arc<TxPool>,
     stats: Arc<StackStats>,
     sink: Arc<dyn FlowSink>,
-    handlers: tokio::runtime::Handle,
+    handlers: Tasks,
     dns: Option<Arc<DnsConfig>>,
     dns_slots: Arc<Semaphore>,
     udp: UdpTable,
@@ -365,7 +365,7 @@ impl<D: Device> Driver<D> {
             pool,
             stats,
             sink,
-            handlers: tokio::runtime::Handle::current(),
+            handlers: options.tasks.clone(),
             dns: options.dns.clone(),
             dns_slots: Arc::new(Semaphore::new(DNS_CONCURRENCY)),
             fragments: Reassembler::default(),

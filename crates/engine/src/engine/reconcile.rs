@@ -23,7 +23,7 @@ impl Engine {
         if address.is_empty() {
             return;
         }
-        match DnsServer::start(address, mark, resolver, &self.tasks, &self.handle) {
+        match DnsServer::start(address, mark, resolver, &self.own) {
             Ok(started) => {
                 tracing::info!("DNS server listening at: {address}");
                 *server = Some(started);
@@ -48,7 +48,10 @@ impl Engine {
         }
         let spec: ListenSpec = listen_spec(&applied.general);
         let handler = Arc::new(self.shared.tunnel.clone());
-        let errors = self.listeners.reconcile(&spec, handler).await;
+        let errors = self
+            .listeners
+            .reconcile(&spec, handler, self.shared.proxy_tasks.tasks())
+            .await;
         for error in &errors {
             tracing::error!("{error}");
         }

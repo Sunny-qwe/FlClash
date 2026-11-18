@@ -1406,3 +1406,187 @@ async fn head_rewrite_cost() {
         costs[2] - costs[0]
     );
 }
+
+/// Takes requests on one connection and answers each with `ok`; `closed` is set once the
+/// connection ends.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a loopback origin outside the core"
+)]
+async fn keep_alive_origin() -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicBool>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = closed.clone();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut seen = Vec::new();
+        let mut buf = [0u8; 1024];
+        loop {
+            match stream.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(count) => seen.extend_from_slice(&buf[..count]),
+            }
+            while let Some(end) = seen.windows(4).position(|w| w == b"\r\n\r\n") {
+                seen.drain(..end + 4);
+                let _ = stream
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
+                    .await;
+            }
+        }
+        flag.store(true, Ordering::SeqCst);
+    });
+    (addr, closed)
+}
+
+#[tokio::test]
+async fn the_upstream_of_a_session_still_open_closes_when_the_engine_stops() {
+    let (_server, rig) = rig(echo(), false, &[]).await;
+    let tracker = tokio_util::task::TaskTracker::new();
+    let stop = tokio_util::sync::CancellationToken::new();
+    rig.config_on(
+        json!({
+            "enable": true,
+            "hostname": ["example.test"],
+            "url-rewrite": [r"^http://example\.test/ad _ reject-dict"],
+        }),
+        concord_common::Tasks::current(tracker.clone(), stop.clone()),
+    );
+    let (origin, closed) = keep_alive_origin().await;
+    rig.dialer.route("example.test", origin);
+    let mut client = Client::plain(&rig, "example.test", 80).await;
+    assert_eq!(client.get("/x").await.text(), "ok");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!closed.load(Ordering::SeqCst));
+
+    stop.cancel();
+    tracker.close();
+    tokio::time::timeout(Duration::from_secs(2), tracker.wait())
+        .await
+        .expect("the session's tasks outlived the stop");
+    eventually(|| closed.load(Ordering::SeqCst)).await;
+    drop(client);
+}
+
+#[tokio::test]
+async fn an_h2_stream_held_on_its_upstream_ends_when_the_client_leaves() {
+    use http_body_util::{BodyExt, StreamBody};
+
+    let service: Service = Arc::new(|_request| {
+        Box::pin(async move {
+            let held = futures_util::stream::pending::<
+                Result<hyper::body::Frame<bytes::Bytes>, std::io::Error>,
+            >();
+            http::Response::builder()
+                .body(StreamBody::new(held).boxed())
+                .unwrap()
+        })
+    });
+    let server = start_service(&["h2"], service).await;
+    let rig = rig_for(&server, None);
+    let tracker = tokio_util::task::TaskTracker::new();
+    rig.config_on(
+        json!({
+            "enable": true,
+            "hostname": ["example.test"],
+            "skip-server-cert-verify": true,
+            "h2": true,
+        }),
+        concord_common::Tasks::current(tracker.clone(), Default::default()),
+    );
+    let client = Client::tls(&rig, "example.test", 443, &["h2"])
+        .await
+        .unwrap();
+    let Wire::H2(sender) = &client.wire else {
+        panic!("not h2")
+    };
+    let request = http::Request::builder()
+        .uri("https://example.test/held")
+        .body(http_body_util::Full::new(bytes::Bytes::new()))
+        .unwrap();
+    let response =
+        tokio::time::timeout(Duration::from_secs(5), sender.clone().send_request(request))
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(!tracker.is_empty());
+
+    drop(response);
+    drop(client);
+    tracker.close();
+    tokio::time::timeout(Duration::from_secs(2), tracker.wait())
+        .await
+        .expect("a stream outlived its client");
+}
+
+#[tokio::test]
+async fn a_relay_ends_when_its_ca_is_retired() {
+    let (_server, rig) = rig(echo(), true, &["http/1.1"]).await;
+    let tracker = tokio_util::task::TaskTracker::new();
+    rig.config_on(
+        json!({"enable": true, "hostname": ["example.test"], "skip-server-cert-verify": true}),
+        concord_common::Tasks::current(tracker.clone(), Default::default()),
+    );
+    let (near, _offer) = offer_on(rig.mitm.interceptor(), flow("example.test", 443));
+    let name = rustls::pki_types::ServerName::try_from("example.test").unwrap();
+    let connector =
+        tokio_rustls::TlsConnector::from(crate::testing::client_config(&rig.root, &["http/1.1"]));
+    let mut tls = connector.connect(name, near).await.unwrap();
+    tls.write_all(b"GET /socket HTTP/1.1\r\nHost: example.test\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+        .await
+        .unwrap();
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        head.push(tls.read_u8().await.unwrap());
+    }
+    assert!(String::from_utf8_lossy(&head).starts_with("HTTP/1.1 101"));
+    tls.write_all(b"ping").await.unwrap();
+    let mut echoed = [0u8; 4];
+    tls.read_exact(&mut echoed).await.unwrap();
+
+    rig.mitm.generate_certificate().unwrap();
+    let mut rest = [0u8; 1];
+    let read = tokio::time::timeout(Duration::from_secs(2), tls.read(&mut rest)).await;
+    assert!(
+        matches!(read, Ok(Ok(0) | Err(_))),
+        "the relay outlived its CA: {read:?}"
+    );
+    tracker.close();
+    tokio::time::timeout(Duration::from_secs(2), tracker.wait())
+        .await
+        .expect("the session's tasks outlived its CA");
+}
+
+#[tokio::test]
+async fn a_finished_session_ends_the_tasks_that_still_hold_it() {
+    let (_server, rig) = rig(echo(), true, &["http/1.1"]).await;
+    let tracker = tokio_util::task::TaskTracker::new();
+    rig.config_on(
+        json!({"enable": true, "hostname": ["example.test"]}),
+        concord_common::Tasks::current(tracker.clone(), Default::default()),
+    );
+    let core = rig.mitm.engine().unwrap().core.clone();
+    let session = crate::session::Session::new(
+        core,
+        crate::session::Scheme::Http,
+        "example.test".into(),
+        flow("example.test", 80),
+    );
+    let holder = session.clone();
+    session.spawn_relay(async move {
+        let _session = holder;
+        std::future::pending::<()>().await
+    });
+    let (client, server) = tokio::io::duplex(64);
+    drop(client);
+    let retired = tokio_util::sync::CancellationToken::new();
+    retired.cancel();
+    session.serve(server, false, Some(retired)).await;
+    drop(session);
+
+    tracker.close();
+    tokio::time::timeout(Duration::from_secs(2), tracker.wait())
+        .await
+        .expect("a task holding the session outlived it");
+}

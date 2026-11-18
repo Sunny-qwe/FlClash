@@ -6,18 +6,18 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use concord_common::BoxStream;
 use concord_common::intercept::{ConnMark, HeldConn, InterceptFlow, UpstreamRequest};
 use concord_common::sync::lock;
+use concord_common::{BoxStream, Tasks};
 use hyper::client::conn::{http1 as client1, http2 as client2};
 use hyper::server::conn::{http1 as server1, http2 as server2};
 use hyper::service::service_fn;
-use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+use hyper_util::rt::{TokioIo, TokioTimer};
 use rustls_pki_types::ServerName;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::task::JoinSet;
+use tokio::task::JoinHandle;
 use tokio_rustls::TlsConnector;
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::body::Body;
 use crate::capture::Cap;
@@ -109,13 +109,19 @@ pub(crate) struct Session {
     key_locks: Mutex<HashMap<PoolKey, Arc<tokio::sync::Mutex<()>>>>,
     ready: Mutex<Option<Ready>>,
     held: Mutex<Option<Arc<dyn HeldConn>>>,
-    drivers: Mutex<JoinSet<()>>,
-    relays: Mutex<JoinSet<()>>,
+    /// The h2 streams, upstream drivers and upgrades of this client connection. They end when
+    /// it is served, when the session drops, or when the engine stops.
+    tasks: Tasks,
+    ended: CancellationToken,
+    relays: Mutex<Vec<JoinHandle<()>>>,
+    _dropped: DropGuard,
     activity: Arc<Activity>,
 }
 
 impl Session {
     pub fn new(core: Arc<Core>, scheme: Scheme, host: String, flow: InterceptFlow) -> Arc<Session> {
+        let ended = core.tasks.child_token();
+        let tasks = core.tasks.with_stop(ended.clone());
         Arc::new(Session {
             core,
             scheme,
@@ -125,8 +131,10 @@ impl Session {
             key_locks: Mutex::default(),
             ready: Mutex::new(None),
             held: Mutex::new(None),
-            drivers: Mutex::default(),
+            tasks,
+            ended: ended.clone(),
             relays: Mutex::default(),
+            _dropped: ended.drop_guard(),
             activity: Arc::default(),
         })
     }
@@ -141,7 +149,7 @@ impl Session {
     }
 
     pub fn spawn_relay(&self, relay: impl Future<Output = ()> + Send + 'static) {
-        lock(&self.relays).spawn(relay);
+        lock(&self.relays).push(self.tasks.spawn(relay));
     }
 
     /// The client connection's flow for the server it came for, so that it is
@@ -372,11 +380,11 @@ impl Session {
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         let sender = if h2 {
-            let (sender, conn) = client2::Builder::new(TokioExecutor::new())
+            let (sender, conn) = client2::Builder::new(self.tasks.clone())
                 .handshake(TokioIo::new(io))
                 .await
                 .map_err(io::Error::other)?;
-            lock(&self.drivers).spawn(async move {
+            self.tasks.spawn(async move {
                 let _ = conn.await;
             });
             Sender::H2(sender)
@@ -386,7 +394,7 @@ impl Session {
                 .handshake(TokioIo::new(io))
                 .await
                 .map_err(io::Error::other)?;
-            lock(&self.drivers).spawn(async move {
+            self.tasks.spawn(async move {
                 let _ = conn.with_upgrades().await;
             });
             Sender::H1(sender)
@@ -412,7 +420,7 @@ impl Session {
             }
         };
         if h2 {
-            let conn = server2::Builder::new(TokioExecutor::new())
+            let conn = server2::Builder::new(self.tasks.clone())
                 .timer(TokioTimer::new())
                 .serve_connection(TokioIo::new(io), service);
             tokio::pin!(conn);
@@ -438,10 +446,14 @@ impl Session {
         self.finish(retired.as_ref()).await;
     }
 
-    /// A hijacked connection, a WebSocket, is still being relayed.
+    /// A hijacked connection, a WebSocket, is still being relayed; a retired CA cuts it short.
     async fn finish(&self, retired: Option<&CancellationToken>) {
-        let mut relays = std::mem::take(&mut *lock(&self.relays));
-        let wait = async { while relays.join_next().await.is_some() {} };
+        let relays = std::mem::take(&mut *lock(&self.relays));
+        let wait = async {
+            for relay in relays {
+                let _ = relay.await;
+            }
+        };
         match retired {
             Some(token) => {
                 tokio::select! {
@@ -451,7 +463,7 @@ impl Session {
             }
             None => wait.await,
         }
-        lock(&self.drivers).abort_all();
+        self.ended.cancel();
         lock(&self.pool).clear();
         self.release();
     }
@@ -490,6 +502,10 @@ impl ScriptDial for SessionDial {
             .await
             .map(|upstream| upstream.stream)
             .map_err(|failure| failure.error)
+    }
+
+    fn tasks(&self) -> Tasks {
+        self.session.tasks.clone()
     }
 }
 

@@ -375,6 +375,7 @@ mod netlink {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     use async_trait::async_trait;
+    use concord_common::Tasks;
     use futures_util::TryStreamExt;
     use rtnetlink::packet_route::AddressFamily;
     use rtnetlink::packet_route::route::{RouteAttribute, RouteMessage};
@@ -392,11 +393,14 @@ mod netlink {
     }
 
     impl NetlinkBackend {
-        pub fn connect() -> io::Result<Self> {
+        pub fn connect(tasks: &Tasks) -> io::Result<Self> {
             let (connection, handle, _) = rtnetlink::new_connection()?;
+            // Outlives the owner's stop: a dropped runner still tears its routes down through it.
+            // Dropping the backend aborts it.
+            let to_drop = tasks.with_stop(tokio_util::sync::CancellationToken::new());
             Ok(NetlinkBackend {
                 handle,
-                connection: tokio::spawn(connection),
+                connection: to_drop.spawn(connection),
             })
         }
     }

@@ -19,7 +19,6 @@ use rquickjs::{
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-use tokio::task::JoinSet;
 use url::Url;
 
 use super::fetch::{Client, Fetch, Fetched};
@@ -205,12 +204,16 @@ pub(super) async fn execute(
             let _ = finished.send(run_thread(setup));
         })
         .map_err(|err| ScriptError(err.to_string()))?;
+    let run = invocation.dial.tasks();
+    let ended = run.child_token();
+    let fetches = run.with_stop(ended.clone());
+    let _ended = ended.drop_guard();
     let client = Arc::new(Client {
         dial: invocation.dial.clone(),
         trust,
         max_body: invocation.max_body_size,
+        tasks: fetches.clone(),
     });
-    let mut fetches = JoinSet::new();
     loop {
         tokio::select! {
             result = &mut outcome => {

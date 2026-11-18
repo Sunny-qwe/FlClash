@@ -16,7 +16,7 @@ default = ["script"]
 script = ["dep:rquickjs"]
 
 [dependencies]
-concord-common = { workspace = true, features = ["io"] }
+concord-common = { workspace = true, features = ["io", "hyper"] }
 concord-config = { workspace = true }
 concord-platform = { workspace = true }
 concord-tls = { workspace = true }

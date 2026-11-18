@@ -2,17 +2,19 @@ use std::io;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use concord_common::{Address, RouteStamp};
+use concord_common::{Address, RouteStamp, Tasks};
 use concord_tls::TrustStore;
 use concord_tunnel::Tunnel;
 use futures_util::FutureExt;
 
 use crate::probe::{Dialed, ProbeEnv};
+use crate::proxy_tasks::ProxyTasks;
 use crate::resources::TunnelFetcher;
 use crate::route::RouteCounters;
 
 pub(crate) struct TunnelProbes {
     pub tunnel: Tunnel,
+    pub tasks: Arc<ProxyTasks>,
     pub route: Arc<RouteCounters>,
     pub fetcher: Arc<TunnelFetcher>,
 }
@@ -37,7 +39,9 @@ impl ProbeEnv for TunnelProbes {
     /// name, so an answer that is not at hand counts as no exit: the route is checked
     /// again rather than held on a guess.
     fn exit_through(&self, target: &str, proxy: Option<&str>) -> Option<String> {
-        tokio::runtime::Handle::try_current().ok()?;
+        if !concord_common::task::in_runtime() {
+            return None;
+        }
         let target = Address::parse(target)?;
         self.tunnel.exit_of(&target, proxy).now_or_never()?
     }
@@ -57,6 +61,10 @@ impl ProbeEnv for TunnelProbes {
 
     fn trust(&self) -> Arc<TrustStore> {
         self.fetcher.trust.load_full()
+    }
+
+    fn tasks(&self) -> Tasks {
+        self.tasks.tasks()
     }
 
     fn suspended(&self) -> bool {

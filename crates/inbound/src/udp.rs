@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
+use concord_common::Tasks;
 use concord_common::addr::unmap;
 use concord_common::sync::lock;
 use concord_common::{Address, InboundInfo, InboundKind, PacketBuf, UdpFlow, UdpPayload, UdpReply};
@@ -25,15 +26,17 @@ pub(crate) struct UdpOut {
     socket: Arc<UdpSocket>,
     v6: bool,
     waiters: Mutex<Vec<Waker>>,
+    tasks: Tasks,
 }
 
 impl UdpOut {
-    pub(crate) fn new(socket: Arc<UdpSocket>) -> Arc<Self> {
+    pub(crate) fn new(socket: Arc<UdpSocket>, tasks: Tasks) -> Arc<Self> {
         let v6 = socket.local_addr().is_ok_and(|addr| addr.is_ipv6());
         Arc::new(UdpOut {
             socket,
             v6,
             waiters: Mutex::new(Vec::new()),
+            tasks,
         })
     }
 
@@ -68,7 +71,7 @@ impl UdpOut {
         drop(waiters);
         if first {
             let out = self.clone();
-            tokio::spawn(async move {
+            self.tasks.spawn(async move {
                 let _ = out.socket.writable().await;
                 let woken = std::mem::take(&mut *lock(&out.waiters));
                 woken.into_iter().for_each(Waker::wake);
@@ -265,7 +268,7 @@ mod tests {
 
     async fn out() -> Arc<UdpOut> {
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        UdpOut::new(Arc::new(socket))
+        UdpOut::new(Arc::new(socket), Tasks::default())
     }
 
     #[derive(Default)]
@@ -314,7 +317,11 @@ mod tests {
             assoc,
         });
         let cancel = CancellationToken::new();
-        let task = tokio::spawn(run(ctx, UdpOut::new(Arc::new(socket)), cancel.clone()));
+        let task = tokio::spawn(run(
+            ctx,
+            UdpOut::new(Arc::new(socket), Tasks::default()),
+            cancel.clone(),
+        ));
 
         let mut seen = 0;
         for _ in 0..10_000 {

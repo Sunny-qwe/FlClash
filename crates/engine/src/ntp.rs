@@ -4,15 +4,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use concord_common::{
-    Address, ClockOffset, CoreError, DialCx, DialEnv, Initiator, IpVersion, PacketBuf, recv_packet,
-    send_packet,
+    Address, ClockOffset, CoreError, DialCx, DialEnv, Initiator, IpVersion, PacketBuf, Tasks,
+    recv_packet, send_packet,
 };
 use rand::Rng;
 use tokio::net::UdpSocket;
-use tokio::runtime::Handle;
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
 
 const NTP_UNIX_GAP_SECS: u64 = 2_208_988_800;
 const PACKET_LEN: usize = 48;
@@ -233,8 +231,7 @@ impl Service {
 /// `ReCreateNTPService`: the caller cancels `stop` to end the service, which also
 /// drops the offset it set.
 pub(crate) fn start(
-    tasks: &TaskTracker,
-    handle: &Handle,
+    tasks: &Tasks,
     settings: NtpSettings,
     env: Arc<DialEnv>,
     clock: Arc<ClockOffset>,
@@ -247,12 +244,12 @@ pub(crate) fn start(
         write: Box::new(concord_platform::set_system_time),
         stop,
     };
-    tasks.spawn_on(service.run(), handle);
+    tasks.spawn_to_end(service.run());
 }
 
 #[cfg(test)]
 fn start_with(
-    handle: &Handle,
+    handle: &tokio::runtime::Handle,
     settings: NtpSettings,
     env: Arc<DialEnv>,
     clock: Arc<ClockOffset>,
@@ -482,7 +479,7 @@ mod tests {
         let stop = CancellationToken::new();
         let (write, written) = recorder();
         start_with(
-            &Handle::current(),
+            &tokio::runtime::Handle::current(),
             settings("127.0.0.1", port, "", false),
             env(Arc::new(ViaSkewed {
                 skew: 0,
@@ -506,7 +503,7 @@ mod tests {
         let stop = CancellationToken::new();
         let (write, written) = recorder();
         start_with(
-            &Handle::current(),
+            &tokio::runtime::Handle::current(),
             settings("127.0.0.1", port, "", true),
             env(Arc::new(ViaSkewed {
                 skew: 0,
@@ -532,7 +529,7 @@ mod tests {
         let calls = Arc::new(Mutex::new(0));
         let counted = calls.clone();
         start_with(
-            &Handle::current(),
+            &tokio::runtime::Handle::current(),
             settings("127.0.0.1", port, "", true),
             env(Arc::new(ViaSkewed {
                 skew: 0,
@@ -561,7 +558,7 @@ mod tests {
         let stop = CancellationToken::new();
         let (write, _) = recorder();
         start_with(
-            &Handle::current(),
+            &tokio::runtime::Handle::current(),
             settings("time.example", 123, "relay", false),
             env(nodes.clone()),
             clock.clone(),
@@ -579,7 +576,7 @@ mod tests {
         let stop = CancellationToken::new();
         let (write, _) = recorder();
         start_with(
-            &Handle::current(),
+            &tokio::runtime::Handle::current(),
             settings("time.invalid", 123, "", false),
             env(Arc::new(ViaSkewed {
                 skew: 0,

@@ -47,6 +47,7 @@ impl Engine {
             DeviceSource::Create,
             congestion,
             Some(exclusion),
+            self.shared.proxy_tasks.tasks(),
         )
         .await
         {
@@ -90,6 +91,7 @@ impl Engine {
                 DeviceSource::Adopt(fd),
                 congestion,
                 None,
+                self.shared.proxy_tasks.tasks(),
             )
             .await?;
             *slot = Some(runner);

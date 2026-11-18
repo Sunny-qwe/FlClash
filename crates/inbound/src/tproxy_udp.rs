@@ -6,7 +6,9 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use concord_common::sync::lock;
-use concord_common::{Address, InboundInfo, InboundKind, PacketBuf, UdpFlow, UdpPayload, UdpReply};
+use concord_common::{
+    Address, InboundInfo, InboundKind, PacketBuf, Tasks, UdpFlow, UdpPayload, UdpReply,
+};
 use tokio::net::UdpSocket;
 use tokio::task::coop::consume_budget;
 use tokio_util::sync::CancellationToken;
@@ -26,6 +28,7 @@ struct Table {
     ctx: Arc<ListenCtx>,
     transparent: Arc<dyn Transparent>,
     cancel: CancellationToken,
+    tasks: Tasks,
     foreign: Mutex<HashMap<Pair, Arc<Foreign>>>,
 }
 
@@ -52,7 +55,7 @@ impl Table {
         });
         foreign.insert(key, held.clone());
         drop(foreign);
-        tokio::spawn(read_back(self.clone(), key, held.clone()));
+        self.tasks.spawn(read_back(self.clone(), key, held.clone()));
         Ok(held)
     }
 
@@ -163,12 +166,14 @@ pub(crate) async fn run(
     socket: UdpSocket,
     transparent: Arc<dyn Transparent>,
     cancel: CancellationToken,
+    tasks: Tasks,
 ) {
     let local = socket.local_addr().ok();
     let table = Arc::new(Table {
         ctx,
         transparent,
         cancel: cancel.clone(),
+        tasks,
         foreign: Mutex::new(HashMap::new()),
     });
     let mut delay = Duration::ZERO;

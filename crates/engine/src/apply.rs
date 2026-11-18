@@ -410,7 +410,7 @@ pub(crate) struct Shared {
     pub rule_providers: ArcSwapOption<RuleProviders>,
     pub fake_ip_store: Arc<FakeIpStore>,
     pub android: bool,
-    pub proxy_tasks: crate::proxy_tasks::ProxyTasks,
+    pub proxy_tasks: Arc<crate::proxy_tasks::ProxyTasks>,
 }
 
 /// Why a config could not be applied. Only the text reaches the host, as the failure message.

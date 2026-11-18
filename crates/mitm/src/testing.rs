@@ -450,6 +450,13 @@ impl Rig {
         self.mitm.apply(Some(raw))
     }
 
+    /// As `config`, with the engine running on `tasks`, as the host's apply does.
+    pub fn config_on(&self, value: serde_json::Value, tasks: concord_common::Tasks) -> Vec<String> {
+        let raw: RawConfig = serde_json::from_value(value).unwrap();
+        self.mitm
+            .apply_section(Some(concord_config::mitm::MitmDef::read(&raw)), tasks)
+    }
+
     pub fn resources(&self) -> std::path::PathBuf {
         self.mitm.authority().resources_dir()
     }
@@ -472,6 +479,7 @@ pub(crate) fn rig_without_ca(server: &TestServer, runtime: Option<Arc<dyn Script
         dialer: dialer.clone(),
         clock: Arc::new(UtcClock),
         runtime,
+        tasks: concord_common::Tasks::default(),
     });
     Rig {
         mitm,

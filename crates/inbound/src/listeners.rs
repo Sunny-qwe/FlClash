@@ -3,7 +3,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use concord_common::FlowHandler;
+use concord_common::{FlowHandler, Tasks};
 use socket2::{SockRef, TcpKeepalive};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -42,7 +42,8 @@ impl Running {
 }
 
 /// Owns the accept tasks. Connections already accepted outlive their listener,
-/// as they do when the Go core closes one.
+/// as they do when the Go core closes one, and end when the `Tasks` of the reconcile that
+/// started the listener stop.
 pub struct Listeners {
     shared: Arc<Shared>,
     transparent: Option<Arc<dyn Transparent>>,
@@ -84,6 +85,7 @@ impl Listeners {
         &self,
         spec: &ListenSpec,
         handler: Arc<dyn FlowHandler>,
+        tasks: Tasks,
     ) -> Vec<ListenError> {
         let mut running = self.running.lock().await;
         self.shared.update(handler, Policy::from_spec(spec));
@@ -121,7 +123,7 @@ impl Listeners {
             if let Some(old) = running.remove(&kind) {
                 old.stop().await;
             }
-            match self.start(kind, key) {
+            match self.start(kind, key, &tasks) {
                 Ok(started) => {
                     tracing::info!("{} proxy listening at: {}", kind.label(), started.local);
                     running.insert(kind, started);
@@ -162,7 +164,7 @@ impl Listeners {
             .collect()
     }
 
-    fn start(&self, kind: ListenerKind, key: BindKey) -> io::Result<Running> {
+    fn start(&self, kind: ListenerKind, key: BindKey, tasks: &Tasks) -> io::Result<Running> {
         let transparent = match kind {
             ListenerKind::Redir | ListenerKind::TProxy => {
                 Some(self.transparent.clone().ok_or_else(|| {
@@ -180,7 +182,7 @@ impl Listeners {
             .has_udp()
             .then(|| bind_udp(local, None))
             .transpose()?
-            .map(|socket| UdpOut::new(Arc::new(socket)));
+            .map(|socket| UdpOut::new(Arc::new(socket), tasks.clone()));
 
         let ctx = Arc::new(ListenCtx {
             shared: self.shared.clone(),
@@ -188,7 +190,7 @@ impl Listeners {
             assoc: Arc::new(Associations::default()),
         });
         let cancel = CancellationToken::new();
-        let mut tasks = Vec::new();
+        let mut running = Vec::new();
         if let Some(out) = udp {
             // mihomo serves a mixed port's UDP with its SOCKS listener, which names it
             // DEFAULT-SOCKS; the associations stay shared with the TCP side.
@@ -197,7 +199,7 @@ impl Listeners {
                 name: Arc::from(ListenerKind::Socks.inbound_name()),
                 assoc: ctx.assoc.clone(),
             });
-            tasks.push(tokio::spawn(crate::udp::run(udp_ctx, out, cancel.clone())));
+            running.push(tasks.spawn(crate::udp::run(udp_ctx, out, cancel.clone())));
         }
         if let Some(transparent) = transparent.clone().filter(|_| kind.has_transparent_udp()) {
             match bind_udp(local, Some(transparent.as_ref())) {
@@ -207,22 +209,22 @@ impl Listeners {
                         name: Arc::from(ListenerKind::TProxy.inbound_name()),
                         assoc: Arc::new(Associations::default()),
                     });
-                    tasks.push(tokio::spawn(crate::tproxy_udp::run(
+                    running.push(tasks.spawn(crate::tproxy_udp::run(
                         udp_ctx,
                         socket,
                         transparent,
                         cancel.clone(),
+                        tasks.clone(),
                     )));
                 }
                 Err(err) => tracing::warn!("Failed to start {} UDP Listener: {err}", kind.label()),
             }
         }
         let accept_ctx = ctx;
-        tasks.push(tokio::spawn(accept_loop(
-            tcp,
-            cancel.clone(),
-            move |stream, from| {
-                tokio::spawn(serve_conn(
+        let connections = tasks.clone();
+        running.push(
+            tasks.spawn(accept_loop(tcp, cancel.clone(), move |stream, from| {
+                connections.spawn(serve_conn(
                     kind,
                     accept_ctx.clone(),
                     stream,
@@ -230,13 +232,13 @@ impl Listeners {
                     transparent.clone(),
                     local,
                 ));
-            },
-        )));
+            })),
+        );
         Ok(Running {
             key,
             local,
             cancel,
-            tasks,
+            tasks: running,
         })
     }
 }

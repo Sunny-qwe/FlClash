@@ -24,7 +24,6 @@ use concord_tls::TrustStore;
 use concord_tun::{Prefix, TunRunner};
 use concord_tunnel::{ConnTable, LiveOptions, Tunnel, TunnelStatus};
 use serde_json::{Value, json};
-use tokio::runtime::Handle;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
@@ -120,7 +119,8 @@ pub struct Engine {
     system_dns: StdMutex<Option<Vec<SocketAddr>>>,
     dns_update_seq: AtomicU64,
     mitm: MitmService,
-    handle: Handle,
+    /// The engine's own tasks on its tracker, which only the end of the work they do stops.
+    own: Tasks,
     prober: Prober,
     /// Every background task the engine starts; shutdown ends them and waits, so nothing
     /// outlives the engine.
@@ -151,10 +151,9 @@ impl Engine {
         let loopback = (!config.android).then(|| loopback_guard.clone());
         let sockets = Arc::new(Sockets::new(config.platform.clone()));
         let tasks = TaskTracker::new();
-        let handle = Handle::current();
-        let own = Tasks::new(tasks.clone(), CancellationToken::new(), handle.clone());
+        let own = Tasks::current(tasks.clone(), CancellationToken::new());
         let table = ConnTable::new(events.clone(), own.clone());
-        let tunnel = Tunnel::new(table.clone(), loopback_guard, own);
+        let tunnel = Tunnel::new(table.clone(), loopback_guard, own.clone());
         let options = Arc::new(ArcSwap::from_pointee(CoreOptions::default()));
         let fetcher = Arc::new(TunnelFetcher {
             tunnel: tunnel.clone(),
@@ -163,8 +162,10 @@ impl Engine {
             user_agent: ArcSwap::from_pointee("clash.meta".to_string()),
         });
         let geo_store = Arc::new(GeoStore::new(".").with_opener(mmap::open_read_only));
+        let proxy_tasks = Arc::new(ProxyTasks::new(own.clone()));
         let prober = Prober::new(Arc::new(TunnelProbes {
             tunnel: tunnel.clone(),
+            tasks: proxy_tasks.clone(),
             route: route.clone(),
             fetcher: fetcher.clone(),
         }));
@@ -190,7 +191,7 @@ impl Engine {
             rule_providers: ArcSwapOption::empty(),
             fake_ip_store: Arc::default(),
             android: config.android,
-            proxy_tasks: ProxyTasks::new(tasks.clone(), handle.clone()),
+            proxy_tasks,
         };
         Arc::new(Engine {
             home: ArcSwapOption::empty(),
@@ -211,7 +212,7 @@ impl Engine {
             system_dns: StdMutex::new(None),
             dns_update_seq: AtomicU64::new(0),
             mitm: MitmService::new(table.clone()),
-            handle,
+            own,
             prober,
             tasks,
             intent: Arc::new(AsyncMutex::new(0)),
@@ -260,8 +261,12 @@ impl Engine {
         if same_home && self.mitm.is_started() {
             return;
         }
-        self.mitm
-            .start(home, &self.shared.tunnel, self.is_running());
+        self.mitm.start(
+            home,
+            &self.shared.tunnel,
+            self.is_running(),
+            self.shared.proxy_tasks.tasks(),
+        );
     }
 
     pub fn mitm(&self) -> &MitmService {
@@ -379,12 +384,12 @@ impl Engine {
             self.publish_change(&mut seq, origin, Change::Applied);
         }
         self.shared.tunnel.set_status(TunnelStatus::Running);
-        self.mitm.apply(&mitm, trust);
+        self.mitm
+            .apply(&mitm, trust, self.shared.proxy_tasks.tasks());
         if applied.store_fake_ip {
             fake_ip_store::start(
                 self.shared.fake_ip_store.clone(),
-                &self.tasks,
-                &self.handle,
+                &self.own,
                 home.clone(),
                 resolver.clone(),
                 applied.stop.clone(),
@@ -395,15 +400,12 @@ impl Engine {
         self.start_ntp(&applied, &outbounds);
         let answered = lock(&self.answered).clone();
         outbounds.start_background(applied.stop.clone(), answered.clone());
-        self.tasks.spawn_on(
-            report_revoked(
-                selections,
-                self.intent.clone(),
-                self.shared.events.clone(),
-                applied.stop.clone(),
-            ),
-            &self.handle,
-        );
+        self.own.spawn_to_end(report_revoked(
+            selections,
+            self.intent.clone(),
+            self.shared.events.clone(),
+            applied.stop.clone(),
+        ));
         self.shared.geo.fetch_deferred(
             &deferred_geo,
             self.shared.fetcher.clone(),
@@ -423,7 +425,7 @@ impl Engine {
         );
         *state = Some(applied);
         drop(state);
-        self.handle
+        self.own
             .spawn_blocking(concord_platform::release_free_memory);
         match rejected {
             Some(message) => Err(Failure::new("config_rejected", message)),
@@ -471,8 +473,7 @@ impl Engine {
             write_to_system = false;
         }
         ntp::start(
-            &self.tasks,
-            &self.handle,
+            &self.own,
             NtpSettings {
                 server: ntp.server.clone(),
                 port: ntp.port,
@@ -484,6 +485,11 @@ impl Engine {
             self.shared.clock.clone(),
             applied.stop.clone(),
         );
+    }
+
+    /// Where work the host starts for the engine runs, such as a delay run; shutdown stops it.
+    pub fn tasks(&self) -> Tasks {
+        self.shared.proxy_tasks.tasks()
     }
 
     pub fn is_running(&self) -> bool {
@@ -518,7 +524,7 @@ impl Engine {
                 runtime.dns.set_system_servers(servers);
             }
         };
-        self.tasks.spawn_on(update, &self.handle);
+        self.own.spawn_to_end(update);
     }
 
     fn publish_change(&self, seq: &mut u64, origin: Origin, change: Change) {

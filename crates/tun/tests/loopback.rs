@@ -666,6 +666,62 @@ async fn udp_dns_is_answered_without_reaching_the_sink() {
     h.shutdown().await;
 }
 
+/// Holds every query until it is dropped, and counts the drops.
+struct Stalled(Arc<std::sync::atomic::AtomicUsize>);
+
+struct CountsDrop(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for CountsDrop {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[async_trait]
+impl DnsHijack for Stalled {
+    async fn answer(&self, _query: &[u8]) -> Option<Vec<u8>> {
+        let _counted = CountsDrop(self.0.clone());
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn dns_answers_in_flight_end_when_their_owner_stops() {
+    let dropped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let tracker = tokio_util::task::TaskTracker::new();
+    let owner = CancellationToken::new();
+    let h = start(StackOptions {
+        dns: Some(Arc::new(DnsConfig {
+            matcher: DnsMatcher::parse(["any:53"]).unwrap(),
+            handler: Arc::new(Stalled(dropped.clone())),
+        })),
+        tasks: concord_common::Tasks::current(tracker.clone(), owner.clone()),
+        ..StackOptions::default()
+    });
+    let client: SocketAddr = "10.0.0.2:5353".parse().unwrap();
+    h.net
+        .inject(&udp_packet(client, "9.9.9.9:53".parse().unwrap(), b"query"));
+    let mut peer = TcpPeer::new("[fd00::2]:40031", "[2606:4700::1111]:53");
+    handshake(&h.net, &mut peer).await;
+    h.net.inject(&peer.data(&[0, 3, b'a', b'b', b'c']));
+    timeout(Duration::from_secs(2), async {
+        while tracker.len() < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("both answers are under way on the owner's tasks");
+    assert_eq!(dropped.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    owner.cancel();
+    tracker.close();
+    timeout(Duration::from_secs(2), tracker.wait())
+        .await
+        .expect("an answer outlived its owner");
+    assert_eq!(dropped.load(std::sync::atomic::Ordering::SeqCst), 2);
+    h.shutdown().await;
+}
+
 #[tokio::test]
 async fn tcp_dns_is_answered_with_length_prefix() {
     let mut h = start(with_dns());

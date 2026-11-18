@@ -2,11 +2,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
 use async_trait::async_trait;
-use concord_common::BoxStream;
 use concord_common::intercept::{ConnInterceptor, InterceptFlow, Offer, UpstreamDialer};
+use concord_common::{BoxStream, Tasks};
 use concord_platform::HomeDir;
 use concord_tls::TrustStore;
-use tokio::runtime::Handle;
 
 use crate::ca::{Authority, CaError, CertificateInfo};
 use crate::capture::{Body, CaptureStore, Exchange, ExchangeList};
@@ -25,6 +24,8 @@ pub struct MitmEnv {
     pub dialer: Arc<dyn UpstreamDialer>,
     pub clock: Arc<dyn LocalClock>,
     pub runtime: Option<Arc<dyn ScriptRuntime>>,
+    /// Where the engines of the sections applied before the next `apply_section` run.
+    pub tasks: Tasks,
 }
 
 #[derive(Default)]
@@ -36,7 +37,7 @@ pub struct Mitm {
     #[cfg(feature = "script")]
     quickjs: Option<Arc<crate::quickjs::QuickJs>>,
     shared: Arc<Shared>,
-    handle: Handle,
+    tasks: Mutex<Tasks>,
     state: Mutex<State>,
     current: Arc<ArcSwapOption<MitmEngine>>,
 }
@@ -95,7 +96,7 @@ impl Mitm {
             #[cfg(feature = "script")]
             quickjs,
             shared,
-            handle: Handle::current(),
+            tasks: Mutex::new(env.tasks),
             state: Mutex::default(),
             current: Arc::new(ArcSwapOption::empty()),
         }
@@ -150,8 +151,10 @@ impl Mitm {
     }
 
     /// As [Mitm::apply] for a profile's section, whose lines that cannot be read its load
-    /// reported: returns the lines that read but cannot be put in force.
-    pub fn apply_section(&self, def: Option<MitmDef>) -> Vec<String> {
+    /// reported: returns the lines that read but cannot be put in force. A new engine runs on
+    /// `tasks`, as do those [Mitm::apply] starts after it.
+    pub fn apply_section(&self, def: Option<MitmDef>, tasks: Tasks) -> Vec<String> {
+        *concord_common::sync::lock(&self.tasks) = tasks;
         self.apply_def(def, false)
     }
 
@@ -179,7 +182,7 @@ impl Mitm {
         let engine = Arc::new(MitmEngine::new(
             config,
             self.shared.clone(),
-            self.handle.clone(),
+            concord_common::sync::lock(&self.tasks).clone(),
         ));
         self.current.store(Some(engine.clone()));
         if let Some(previous) = &previous {

@@ -3,6 +3,7 @@ use std::io;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use concord_common::Tasks;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -52,6 +53,8 @@ pub struct TunDeps {
     pub dns: Option<Arc<dyn DnsHijack>>,
     pub congestion: Congestion,
     pub exclusion: Option<Arc<dyn SelfExclusion>>,
+    /// Where the stack, its DNS answers and a dropped runner's route teardown run.
+    pub tasks: Tasks,
 }
 
 /// Keeps the core's own sockets off the device while the device's routes are in place.
@@ -96,10 +99,14 @@ impl RouteBackend for NullBackend {
     }
 }
 
-fn platform_backend() -> io::Result<BoxedBackend> {
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(unused_variables, reason = "only netlink drives a connection")
+)]
+fn platform_backend(tasks: &Tasks) -> io::Result<BoxedBackend> {
     #[cfg(target_os = "linux")]
     {
-        Ok(Box::new(route::NetlinkBackend::connect()?))
+        Ok(Box::new(route::NetlinkBackend::connect(tasks)?))
     }
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
@@ -120,7 +127,8 @@ pub(crate) struct Platform {
 pub struct TunRunner {
     device_name: String,
     stop: CancellationToken,
-    task: Option<JoinHandle<io::Result<()>>>,
+    task: Option<JoinHandle<Option<io::Result<()>>>>,
+    tasks: Tasks,
     session: Option<RouteSession<BoxedBackend>>,
     exclusion: Option<Arc<dyn SelfExclusion>>,
     stats: Arc<StackStats>,
@@ -150,7 +158,7 @@ impl TunRunner {
             name: device.name().to_owned(),
             index: device.index().unwrap_or(0),
         };
-        let backend = platform_backend().map_err(|err| StartError {
+        let backend = platform_backend(&deps.tasks).map_err(|err| StartError {
             step: StartStep::Routes,
             kind: err.kind(),
             detail: err.to_string(),
@@ -161,27 +169,23 @@ impl TunRunner {
             os: Os::current(),
             backend,
         };
-        Self::start_with(
-            options,
-            device,
-            platform,
-            deps.sink,
-            dns,
-            deps.congestion,
-            deps.exclusion,
-        )
-        .await
+        Self::start_with(options, device, platform, deps, dns).await
     }
 
     pub(crate) async fn start_with<D: Device>(
         options: &TunOptions,
         device: D,
         platform: Platform,
-        sink: Arc<dyn FlowSink>,
+        deps: TunDeps,
         dns: Option<Arc<DnsConfig>>,
-        congestion: Congestion,
-        exclusion: Option<Arc<dyn SelfExclusion>>,
     ) -> Result<Self, StartError> {
+        let TunDeps {
+            sink,
+            congestion,
+            exclusion,
+            tasks,
+            ..
+        } = deps;
         let stats = Arc::new(StackStats::default());
         let stack_options = StackOptions {
             mtu: options.effective_mtu(),
@@ -192,6 +196,7 @@ impl TunRunner {
             congestion,
             dns,
             stats: Arc::clone(&stats),
+            tasks: tasks.clone(),
             ..StackOptions::default()
         };
         let stop = CancellationToken::new();
@@ -204,13 +209,13 @@ impl TunRunner {
                 detail: err.to_string(),
                 undo_failures: 0,
             })?;
-        let task = tokio::spawn(work);
+        let task = tasks.spawn_returning(work);
         if let Err(error) = ready.await {
             stop.cancel();
             let failure = match task.await {
-                Ok(Err(failure)) => failure,
+                Ok(Some(Err(failure))) => failure,
                 Err(failure) => io::Error::other(failure),
-                Ok(Ok(())) => error,
+                Ok(Some(Ok(())) | None) => error,
             };
             return Err(StartError {
                 step: StartStep::Device,
@@ -233,6 +238,7 @@ impl TunRunner {
                     device_name,
                     stop,
                     task: Some(task),
+                    tasks,
                     session: Some(session),
                     exclusion,
                     stats,
@@ -285,7 +291,10 @@ impl TunRunner {
         }
         self.stop.cancel();
         let stack = match self.task.take() {
-            Some(task) => task.await.unwrap_or_else(|err| Err(io::Error::other(err))),
+            Some(task) => match task.await {
+                Ok(outcome) => outcome.unwrap_or(Ok(())),
+                Err(err) => Err(io::Error::other(err)),
+            },
             None => Ok(()),
         };
         StopReport {
@@ -300,19 +309,17 @@ impl Drop for TunRunner {
         self.stop.cancel();
         if let Some(mut session) = self.session.take() {
             let exclusion = self.exclusion.take();
-            match tokio::runtime::Handle::try_current() {
-                Ok(handle) => {
-                    handle.spawn(async move {
-                        let failures = session.teardown().await;
-                        for failure in failures {
-                            tracing::warn!(%failure, "route teardown failed");
-                        }
-                        if let Some(exclusion) = exclusion {
-                            exclusion.release();
-                        }
-                    });
+            let teardown = self.tasks.spawn_to_end(async move {
+                let failures = session.teardown().await;
+                for failure in failures {
+                    tracing::warn!(%failure, "route teardown failed");
                 }
-                Err(_) => tracing::warn!("tun routes left in place: no runtime to undo them"),
+                if let Some(exclusion) = exclusion {
+                    exclusion.release();
+                }
+            });
+            if !teardown {
+                tracing::warn!("tun routes left in place: no runtime to undo them");
             }
         }
     }
@@ -364,6 +371,16 @@ mod tests {
         }
     }
 
+    fn deps(exclusion: Option<Arc<dyn SelfExclusion>>) -> TunDeps {
+        TunDeps {
+            sink: Arc::new(Null),
+            dns: None,
+            congestion: Congestion::Cubic,
+            exclusion,
+            tasks: Tasks::default(),
+        }
+    }
+
     fn platform(os: Os, recorder: Recorder) -> Platform {
         Platform {
             iface: IfaceInfo {
@@ -381,9 +398,7 @@ mod tests {
             options,
             device,
             platform(Os::Linux, recorder),
-            Arc::new(Null),
-            None,
-            Congestion::Cubic,
+            deps(None),
             None,
         )
         .await
@@ -464,10 +479,8 @@ mod tests {
         let mut o = options();
         o.dns_hijack = vec!["not an address".into()];
         let deps = TunDeps {
-            sink: Arc::new(Null),
             dns: Some(Arc::new(Echo)),
-            congestion: Congestion::Cubic,
-            exclusion: None,
+            ..deps(None)
         };
         let err = match dns_config(&o, &deps) {
             Ok(_) => panic!("rule should be rejected"),
@@ -507,10 +520,8 @@ mod tests {
             &options(),
             device,
             platform(Os::Linux, recorder),
-            Arc::new(Null),
+            deps(Some(excluded.clone())),
             None,
-            Congestion::Cubic,
-            Some(excluded.clone()),
         )
         .await;
         (started, excluded)
@@ -560,9 +571,7 @@ mod tests {
             &options(),
             device,
             platform(Os::Other, recorder.clone()),
-            Arc::new(Null),
-            None,
-            Congestion::Cubic,
+            deps(None),
             None,
         )
         .await

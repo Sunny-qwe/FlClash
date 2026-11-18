@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use concord_common::{
-    BoxStream, FlowHandler, FlowMeta, IcmpAnswer, Initiator, SockOpts, UdpFlow, UdpPayload,
+    BoxStream, FlowHandler, FlowMeta, IcmpAnswer, Initiator, SockOpts, Tasks, UdpFlow, UdpPayload,
     UdpReply,
 };
 use concord_config::net::IpCidr;
@@ -77,6 +77,7 @@ const PING_WAIT: Duration = Duration::from_secs(10);
 /// or an address of the device itself is answered by the stack, as mihomo does.
 struct TunFlows {
     tunnel: Tunnel,
+    tasks: Tasks,
     sockets: Arc<Sockets>,
     device: Vec<Prefix>,
 }
@@ -105,7 +106,7 @@ impl FlowHandler for TunFlows {
         }
         let sockets = Arc::clone(&self.sockets);
         let message = message.to_vec();
-        tokio::spawn(async move {
+        self.tasks.spawn(async move {
             match sockets
                 .ping(dst, &message, &SockOpts::default(), PING_WAIT)
                 .await
@@ -229,9 +230,11 @@ pub(crate) async fn start_runner(
     source: DeviceSource,
     congestion: Congestion,
     exclusion: Option<Arc<dyn SelfExclusion>>,
+    tasks: Tasks,
 ) -> Result<TunRunner, StartError> {
     let handler: Arc<dyn FlowHandler> = Arc::new(TunFlows {
         tunnel: tunnel.clone(),
+        tasks: tasks.clone(),
         sockets: Arc::clone(sockets),
         device: options
             .inet4_address
@@ -244,10 +247,15 @@ pub(crate) async fn start_runner(
         options,
         source,
         TunDeps {
-            sink: Arc::new(HandlerSink::new(handler, &options.inbound_name)),
+            sink: Arc::new(HandlerSink::new(
+                handler,
+                &options.inbound_name,
+                tasks.clone(),
+            )),
             dns: Some(Arc::new(TunnelDns(tunnel.clone()))),
             congestion,
             exclusion,
+            tasks,
         },
     )
     .await?;

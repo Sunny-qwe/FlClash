@@ -82,6 +82,10 @@ impl ScriptDial for TaskDial {
             .map(|upstream| upstream.stream)
             .map_err(|failure| failure.error)
     }
+
+    fn tasks(&self) -> concord_common::Tasks {
+        self.core.tasks.clone()
+    }
 }
 
 fn unix_now() -> i64 {
@@ -111,7 +115,7 @@ impl MitmEngine {
             .collect();
         if !crons.is_empty() {
             let (core, engine) = (self.core.clone(), self.tasks_handle());
-            self.core.handle.spawn(schedule(core, engine, crons, stop));
+            self.core.tasks.spawn(schedule(core, engine, crons, stop));
         }
     }
 
@@ -134,7 +138,7 @@ impl MitmEngine {
             if script.kind == ScriptKind::Event && script.event == event {
                 let invocation = event_invocation(&self.core, event);
                 let (core, tasks) = (self.core.clone(), self.tasks_handle());
-                self.core.handle.spawn(async move {
+                self.core.tasks.spawn(async move {
                     let _ = run_task(&core, &tasks, index, invocation).await;
                 });
             }
@@ -247,7 +251,7 @@ async fn schedule(core: Arc<Core>, tasks: Arc<Tasks>, crons: Vec<usize>, stop: C
                     .get(index)
                     .map(|s| s.cronexp.clone())
                     .unwrap_or_default();
-                tokio::spawn(async move {
+                core.tasks.clone().spawn(async move {
                     let mut invocation =
                         ScriptInvocation::base(Arc::new(TaskDial { core: core.clone() }));
                     invocation.cronexp = cronexp;

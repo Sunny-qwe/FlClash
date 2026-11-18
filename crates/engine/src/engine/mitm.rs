@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use arc_swap::ArcSwapOption;
+use concord_common::Tasks;
 use concord_config::MitmDef;
 use concord_mitm::{
     CaError, EVENT_NETWORK_CHANGED, LocalClock, Mitm, MitmEnv, RawConfig as MitmConfig,
@@ -38,13 +39,14 @@ impl MitmService {
         self.current.load().is_some()
     }
 
-    pub(crate) fn start(&self, home: &Arc<HomeDir>, tunnel: &Tunnel, running: bool) {
+    pub(crate) fn start(&self, home: &Arc<HomeDir>, tunnel: &Tunnel, running: bool, tasks: Tasks) {
         let mitm = Arc::new(Mitm::new(MitmEnv {
             home: home.clone(),
             trust: TrustStore::from_parts(Vec::new(), &[], Vec::new()),
             dialer: tunnel.upstream_dialer(),
             clock: Arc::new(DeviceClock),
             runtime: None,
+            tasks,
         }));
         mitm.set_capture(self.capture.load(Ordering::Relaxed));
         mitm.set_pressure(u8::try_from(self.pressure()).unwrap_or(0));
@@ -117,12 +119,12 @@ impl MitmService {
     }
 
     /// `tunnel.UpdateMITM`. The section outlives a rejected config only as "off".
-    pub(crate) fn apply(&self, section: &MitmDef, trust: Arc<TrustStore>) {
+    pub(crate) fn apply(&self, section: &MitmDef, trust: Arc<TrustStore>, tasks: Tasks) {
         let Some(mitm) = self.current.load_full() else {
             return;
         };
         mitm.set_trust(trust);
-        for line in mitm.apply_section(Some(section.clone())) {
+        for line in mitm.apply_section(Some(section.clone()), tasks) {
             tracing::warn!("[MITM] {line}");
         }
         self.table.set_closed_capacity(mitm.capture_entries());

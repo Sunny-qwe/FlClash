@@ -106,8 +106,12 @@ then reconcile listeners, TUN and DNS; providers load afterwards and report `loa
 the built-in empty config and says so. Background tasks belong to the engine's `TaskTracker` and are awaited on
 shutdown, up to a bound. Every other crate registers its tasks there through `concord_common::Tasks`. A config's
 nodes, resolver and groups get one whose tasks end when that part is dropped or the engine stops; the tunnel and the
-connection table get one the stop leaves alone, because closing every connection ends their flows. xtask's
-`task_owner` test keeps `tokio::spawn` out of `proxy`, `transport`, `net`, `tls`, `dns`, `group` and `tunnel`.
+connection table get one the stop leaves alone, because closing every connection ends their flows. The listeners,
+the TUN stack and MITM outlive a shutdown, so they take the config's `Tasks` each time they start or apply, not once:
+the stop is replaced at shutdown, and what they leave running (accepted connections, DNS answers, sessions) ends with
+it. The engine's own work runs on its `Tasks` too. xtask's `task_owner` test keeps `tokio::spawn`, runtime handles,
+`JoinSet` and `TokioExecutor` out of `proxy`, `transport`, `net`, `tls`, `dns`, `group`, `tunnel`, `inbound`, `tun`,
+`mitm`, `engine` and `api`.
 
 The control plane is layered: `proto` (types, errors, the method registry with execution class `inline`, `serial` or
 `concurrent`, stream policies `latest`, `drop_oldest` or `resync`) → `api` (one async function per method) → `rpc`

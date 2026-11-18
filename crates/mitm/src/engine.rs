@@ -12,7 +12,6 @@ use concord_common::sync::lock;
 use concord_common::{BoxStream, PeekedStream};
 use concord_tls::{ClientConfig, TlsError, TrustStore};
 use rustls::AlertDescription;
-use tokio::runtime::Handle;
 use tokio::sync::Semaphore;
 use tokio::time::{timeout, timeout_at};
 use tokio_rustls::TlsAcceptor;
@@ -92,7 +91,8 @@ pub(crate) struct Core {
     pub bodies: Arc<Semaphore>,
     pub session_gate: ScriptGate,
     pub task_gate: ScriptGate,
-    pub handle: Handle,
+    /// Where this section's sessions, scripts and schedule run; the engine stops them.
+    pub tasks: concord_common::Tasks,
     sessions: AtomicUsize,
     quic: Mutex<QuicCache>,
     trust: Arc<TrustStore>,
@@ -308,7 +308,11 @@ pub struct MitmEngine {
 }
 
 impl MitmEngine {
-    pub(crate) fn new(config: Config, shared: Arc<Shared>, handle: Handle) -> MitmEngine {
+    pub(crate) fn new(
+        config: Config,
+        shared: Arc<Shared>,
+        tasks: concord_common::Tasks,
+    ) -> MitmEngine {
         if config.enable && config.decrypt_tls && !config.ca_fingerprint.is_empty() {
             let stale = shared
                 .authority
@@ -337,7 +341,7 @@ impl MitmEngine {
             )),
             session_gate: ScriptGate::new(limits.script_concurrency),
             task_gate: ScriptGate::new(TASK_CONCURRENCY),
-            handle,
+            tasks,
             sessions: AtomicUsize::new(0),
             quic: Mutex::default(),
             client_h2: OnceLock::new(),

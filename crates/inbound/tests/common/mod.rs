@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use concord_common::sync::lock;
-use concord_common::{BoxStream, FlowHandler, FlowMeta, UdpFlow, UdpPayload, UdpReply};
+use concord_common::{BoxStream, FlowHandler, FlowMeta, Tasks, UdpFlow, UdpPayload, UdpReply};
 use concord_inbound::{ListenError, ListenSpec, ListenerKind, Listeners};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -95,12 +95,16 @@ pub async fn open(
     let collided = |error: &ListenError| {
         spec.port(error.kind) == Some(0) && error.source.kind() == io::ErrorKind::AddrInUse
     };
-    let mut errors = listeners.reconcile(spec, handler.clone()).await;
+    let mut errors = listeners
+        .reconcile(spec, handler.clone(), Tasks::default())
+        .await;
     for _ in 1..FRESH_PORT_ATTEMPTS {
         if !errors.iter().any(collided) {
             break;
         }
-        errors = listeners.reconcile(spec, handler.clone()).await;
+        errors = listeners
+            .reconcile(spec, handler.clone(), Tasks::default())
+            .await;
     }
     errors
 }

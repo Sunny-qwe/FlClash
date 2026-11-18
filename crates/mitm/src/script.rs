@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use concord_common::BoxStream;
 use concord_common::sync::lock;
+use concord_common::{BoxStream, Tasks};
 use concord_config::mitm::{IssueKind, LineError, ScriptDef};
 use sha2::{Digest, Sha256};
 
@@ -63,6 +63,9 @@ pub struct ScriptEvent {
 #[async_trait]
 pub trait ScriptDial: Send + Sync {
     async fn dial(&self, host: &str, port: u16) -> io::Result<BoxStream>;
+
+    /// Where the script's own requests run; the run ends them with itself.
+    fn tasks(&self) -> Tasks;
 }
 
 pub type ConsoleSink = Arc<dyn Fn(&str) + Send + Sync>;

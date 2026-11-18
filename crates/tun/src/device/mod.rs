@@ -258,10 +258,9 @@ impl TunDevice {
     fn build(options: &TunOptions, offload: bool) -> io::Result<Self> {
         let mut builder = tun_rs::DeviceBuilder::new().mtu(options.effective_mtu() as u16);
         #[cfg(target_os = "linux")]
-        let queues = tokio::runtime::Handle::try_current().map_or_else(
-            |_| std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
-            |runtime| runtime.metrics().num_workers(),
-        );
+        let queues = concord_common::task::runtime_workers().unwrap_or_else(|| {
+            std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
+        });
         #[cfg(target_os = "linux")]
         {
             builder = builder.offload(offload).multi_queue(queues > 1);

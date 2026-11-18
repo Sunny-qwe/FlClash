@@ -438,3 +438,20 @@ async fn shutdown_ends_a_udp_flow_still_associating_with_its_node() {
         .unwrap();
     shuts_down_promptly(&engine).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[expect(clippy::disallowed_methods, reason = "a client outside the core")]
+async fn shutdown_closes_a_connection_still_in_its_handshake() {
+    let (engine, port, _home) = running("rules:\n  - MATCH,DIRECT\n").await;
+    let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    client.write_all(&[5]).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    shuts_down_promptly(&engine).await;
+    let mut rest = [0u8; 1];
+    let read = tokio::time::timeout(Duration::from_secs(1), client.read(&mut rest)).await;
+    assert!(
+        matches!(read, Ok(Ok(0) | Err(_))),
+        "the connection stayed open: {read:?}"
+    );
+}

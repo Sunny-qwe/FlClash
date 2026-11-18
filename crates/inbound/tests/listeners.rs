@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use common::*;
 use concord_common::sync::lock;
-use concord_common::{Address, InboundKind};
+use concord_common::{Address, InboundKind, Tasks};
 use concord_inbound::{Cidr, ListenSpec, ListenerKind, Listeners, TproxyDatagram, Transparent};
 use concord_test_support::free_port;
 use socket2::Socket;
@@ -72,6 +72,51 @@ async fn a_changed_port_is_rebound_and_live_connections_survive() {
 
     live.write_all(b"alive").await.unwrap();
     assert_eq!(read_exact(&mut live, 5).await, b"alive");
+}
+
+#[tokio::test]
+async fn a_connection_outlives_a_port_change_and_ends_when_its_tasks_stop() {
+    let (first, second) = (free_port(), free_port());
+    let listeners = Listeners::new();
+    let tracker = tokio_util::task::TaskTracker::new();
+    let stop = tokio_util::sync::CancellationToken::new();
+    let tasks = Tasks::current(tracker.clone(), stop.clone());
+    let spec = ListenSpec {
+        mixed_port: Some(first),
+        ..Default::default()
+    };
+    let errors = listeners
+        .reconcile(&spec, Fake::echo(), tasks.clone())
+        .await;
+    assert!(errors.is_empty(), "{errors:?}");
+    let mut waiting = TcpStream::connect(("127.0.0.1", first)).await.unwrap();
+    waiting.write_all(&[5, 1, 0]).await.unwrap();
+    assert_eq!(read_exact(&mut waiting, 2).await, [5, 0]);
+
+    let moved = ListenSpec {
+        mixed_port: Some(second),
+        ..spec
+    };
+    let errors = listeners.reconcile(&moved, Fake::echo(), tasks).await;
+    assert!(errors.is_empty(), "{errors:?}");
+    let mut rest = [0u8; 1];
+    let read = tokio::time::timeout(Duration::from_millis(300), waiting.read(&mut rest)).await;
+    assert!(
+        read.is_err(),
+        "the port change ended a connection it should leave alone: {read:?} {rest:?}"
+    );
+
+    stop.cancel();
+    let read = tokio::time::timeout(Duration::from_secs(1), waiting.read(&mut rest)).await;
+    assert!(
+        matches!(read, Ok(Ok(0) | Err(_))),
+        "the connection outlived its tasks: {read:?}"
+    );
+    listeners.stop_all().await;
+    tracker.close();
+    tokio::time::timeout(Duration::from_secs(2), tracker.wait())
+        .await
+        .expect("a listener task outlived its stop");
 }
 
 #[tokio::test]
@@ -143,7 +188,9 @@ async fn a_lan_address_that_is_not_an_ip_is_an_error_for_every_listener() {
         bind_address: "not-an-ip".into(),
         ..Default::default()
     };
-    let errors = listeners.reconcile(&spec, Fake::echo()).await;
+    let errors = listeners
+        .reconcile(&spec, Fake::echo(), Tasks::default())
+        .await;
     assert_eq!(errors.len(), 2);
     assert!(listeners.bound().await.is_empty());
 }
@@ -191,7 +238,7 @@ async fn auth_and_the_handler_follow_a_reconcile_that_keeps_the_socket() {
     };
     assert!(
         run.listeners
-            .reconcile(&guarded, second.clone())
+            .reconcile(&guarded, second.clone(), Tasks::default())
             .await
             .is_empty()
     );
@@ -205,7 +252,7 @@ async fn auth_and_the_handler_follow_a_reconcile_that_keeps_the_socket() {
     };
     assert!(
         run.listeners
-            .reconcile(&open, second.clone())
+            .reconcile(&open, second.clone(), Tasks::default())
             .await
             .is_empty()
     );
@@ -237,7 +284,9 @@ async fn redir_and_tproxy_without_platform_support_are_reported() {
         mixed_port: Some(0),
         ..Default::default()
     };
-    let errors = listeners.reconcile(&spec, Fake::echo()).await;
+    let errors = listeners
+        .reconcile(&spec, Fake::echo(), Tasks::default())
+        .await;
     let kinds: Vec<_> = errors.iter().map(|error| error.kind).collect();
     assert_eq!(kinds, [ListenerKind::Redir, ListenerKind::TProxy]);
     assert_eq!(errors[0].source.kind(), io::ErrorKind::Unsupported);
@@ -265,7 +314,12 @@ async fn redir_reports_the_destination_the_platform_recovers() {
         redir_port: Some(0),
         ..Default::default()
     };
-    assert!(listeners.reconcile(&spec, fake.clone()).await.is_empty());
+    assert!(
+        listeners
+            .reconcile(&spec, fake.clone(), Tasks::default())
+            .await
+            .is_empty()
+    );
     let addr = listeners.bound().await[0].addr;
     let mut stream = connect(addr).await;
     stream.write_all(b"x").await.unwrap();
@@ -286,7 +340,12 @@ async fn tproxy_takes_the_accepted_local_address_as_the_destination() {
         tproxy_port: Some(0),
         ..Default::default()
     };
-    assert!(listeners.reconcile(&spec, fake.clone()).await.is_empty());
+    assert!(
+        listeners
+            .reconcile(&spec, fake.clone(), Tasks::default())
+            .await
+            .is_empty()
+    );
     let addr = listeners.bound().await[0].addr;
     let mut stream = connect(addr).await;
     stream.write_all(b"x").await.unwrap();
@@ -304,7 +363,12 @@ async fn the_native_redir_listener_binds() {
         redir_port: Some(0),
         ..Default::default()
     };
-    assert!(listeners.reconcile(&spec, Fake::echo()).await.is_empty());
+    assert!(
+        listeners
+            .reconcile(&spec, Fake::echo(), Tasks::default())
+            .await
+            .is_empty()
+    );
     assert_eq!(listeners.bound().await[0].kind, ListenerKind::Redir);
 }
 
@@ -328,7 +392,12 @@ async fn redir_drops_a_connection_whose_destination_cannot_be_recovered() {
         redir_port: Some(0),
         ..Default::default()
     };
-    assert!(listeners.reconcile(&spec, fake.clone()).await.is_empty());
+    assert!(
+        listeners
+            .reconcile(&spec, fake.clone(), Tasks::default())
+            .await
+            .is_empty()
+    );
     let addr = listeners.bound().await[0].addr;
     let mut stream = connect(addr).await;
     let _ = stream.write_all(b"x").await;
@@ -391,7 +460,12 @@ async fn answer_from(kind: ListenerKind) {
         ListenerKind::Redir => spec.redir_port = Some(0),
         _ => spec.tproxy_port = Some(0),
     }
-    assert!(listeners.reconcile(&spec, fake.clone()).await.is_empty());
+    assert!(
+        listeners
+            .reconcile(&spec, fake.clone(), Tasks::default())
+            .await
+            .is_empty()
+    );
     let port = listeners.bound().await[0].addr;
 
     let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -434,7 +508,12 @@ async fn tproxy_closes_the_sockets_it_answered_from_when_the_session_ends() {
         tproxy_port: Some(0),
         ..Default::default()
     };
-    assert!(listeners.reconcile(&spec, fake.clone()).await.is_empty());
+    assert!(
+        listeners
+            .reconcile(&spec, fake.clone(), Tasks::default())
+            .await
+            .is_empty()
+    );
     let port = listeners.bound().await[0].addr;
     let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let mut buf = [0u8; 64];
@@ -463,7 +542,12 @@ async fn a_udp_listener_that_cannot_start_leaves_the_tcp_one_running() {
         redir_port: Some(0),
         ..Default::default()
     };
-    assert!(listeners.reconcile(&spec, Fake::echo()).await.is_empty());
+    assert!(
+        listeners
+            .reconcile(&spec, Fake::echo(), Tasks::default())
+            .await
+            .is_empty()
+    );
     let addr = listeners.bound().await[0].addr;
     let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     client.send_to(b"x", addr).await.unwrap();

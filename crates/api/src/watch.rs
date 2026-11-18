@@ -220,6 +220,15 @@ impl Drop for AbortOnDrop {
     }
 }
 
+/// Ends the stream also when the engine stops the run before its `done`.
+struct CloseOnDrop(Arc<PolicyQueue<DelayRunEvent>>);
+
+impl Drop for CloseOnDrop {
+    fn drop(&mut self) {
+        self.0.close();
+    }
+}
+
 /// Tests every proxy at once, or `concurrency` at a time, and ends with `done`. Dropping the stream
 /// stops the tests that are still running.
 pub fn delay_run(
@@ -231,9 +240,9 @@ pub fn delay_run(
     concurrency: Option<u32>,
 ) -> EventStream<DelayRunEvent> {
     let queue = PolicyQueue::new(policy_of("delay.run"), proxies.len() + 8);
-    let sink = queue.clone();
+    let sink = CloseOnDrop(queue.clone());
     let width = concurrency.map_or(usize::MAX, |width| width.max(1) as usize);
-    let driver = tokio::spawn(async move {
+    let driver = engine.tasks().spawn(async move {
         let mut results = stream::iter(proxies)
             .map(|name| {
                 let (engine, url, expected) = (engine.clone(), url.clone(), expected.clone());
@@ -246,14 +255,13 @@ pub fn delay_run(
             })
             .buffer_unordered(width);
         while let Some((name, result)) = results.next().await {
-            sink.push(DelayRunEvent::Result {
+            sink.0.push(DelayRunEvent::Result {
                 name,
                 url: result.url,
                 value: result.value,
             });
         }
-        sink.push(DelayRunEvent::Done);
-        sink.close();
+        sink.0.push(DelayRunEvent::Done);
     });
     QueueStream::new(queue, AbortOnDrop(driver)).boxed()
 }

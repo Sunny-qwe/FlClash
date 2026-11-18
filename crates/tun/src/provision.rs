@@ -54,11 +54,16 @@ fn failed(step: StartStep, err: &io::Error) -> StartError {
     }
 }
 
+/// The privileged helper runs without an engine; the backend aborts its connection when dropped.
+fn helper_tasks() -> concord_common::Tasks {
+    concord_common::Tasks::default()
+}
+
 /// Removes what a run killed before its release left: the rules in the priority range `options`
 /// uses and the routes in its tables.
 pub async fn clean_stale(options: &TunOptions) -> io::Result<usize> {
     let start = options.iproute2_rule_index;
-    let mut backend = NetlinkBackend::connect()?;
+    let mut backend = NetlinkBackend::connect(&helper_tasks())?;
     let rules = backend.clean_stale((start, start + 10)).await?;
     let routes = backend.flush_tables(&android_tables(options)).await?;
     Ok(rules + routes)
@@ -68,7 +73,8 @@ pub async fn provision(options: &TunOptions) -> Result<Provisioned, StartError> 
     let (fd, name) =
         open_device(options.device.as_deref()).map_err(|err| failed(StartStep::Device, &err))?;
     let index = if_index(&name).map_err(|err| failed(StartStep::Device, &err))?;
-    let backend = NetlinkBackend::connect().map_err(|err| failed(StartStep::Device, &err))?;
+    let backend =
+        NetlinkBackend::connect(&helper_tasks()).map_err(|err| failed(StartStep::Device, &err))?;
     let mtu = options.effective_mtu() as u32;
     let addresses: Vec<(IpAddr, u8)> = options
         .inet4_address

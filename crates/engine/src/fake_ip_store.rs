@@ -3,12 +3,11 @@ use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+use concord_common::Tasks;
 use concord_common::sync::lock;
 use concord_dns::{FakeIpPool, Resolver};
 use concord_platform::HomeDir;
-use tokio::runtime::Handle;
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
 
 /// The `store-fake-ip` files of the engine, written by every config's saver in turn. A write
 /// holds the store from its snapshot to the rename, so the snapshot that lands last is the
@@ -106,8 +105,7 @@ impl FakeIpStore {
 
 pub(crate) fn start(
     store: Arc<FakeIpStore>,
-    tasks: &TaskTracker,
-    handle: &Handle,
+    tasks: &Tasks,
     home: Arc<HomeDir>,
     dns: Arc<Resolver>,
     stop: CancellationToken,
@@ -129,7 +127,7 @@ pub(crate) fn start(
             }
         }
     };
-    tasks.spawn_on(saver, handle);
+    tasks.spawn_to_end(saver);
 }
 
 #[cfg(test)]

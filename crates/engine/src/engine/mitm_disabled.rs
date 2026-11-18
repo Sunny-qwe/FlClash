@@ -27,7 +27,14 @@ impl MitmService {
         false
     }
 
-    pub(crate) fn start(&self, _home: &Arc<HomeDir>, _tunnel: &Tunnel, _running: bool) {}
+    pub(crate) fn start(
+        &self,
+        _home: &Arc<HomeDir>,
+        _tunnel: &Tunnel,
+        _running: bool,
+        _tasks: concord_common::Tasks,
+    ) {
+    }
 
     pub fn certificate(&self) -> Result<Option<Value>, Failure> {
         Err(unavailable())
@@ -61,7 +68,12 @@ impl MitmService {
         Err(unavailable())
     }
 
-    pub(crate) fn apply(&self, section: &concord_config::MitmDef, _trust: Arc<TrustStore>) {
+    pub(crate) fn apply(
+        &self,
+        section: &concord_config::MitmDef,
+        _trust: Arc<TrustStore>,
+        _tasks: concord_common::Tasks,
+    ) {
         if section.enable {
             tracing::warn!("[MITM] this build has no MITM; the section is ignored");
         }

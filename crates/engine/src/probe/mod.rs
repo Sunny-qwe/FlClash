@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use concord_common::{Address, BoxStream, RouteStamp};
+use concord_common::{Address, BoxStream, RouteStamp, Tasks};
 use concord_tls::TrustStore;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -58,6 +58,9 @@ pub trait ProbeEnv: Send + Sync {
     fn stamp(&self) -> RouteStamp;
 
     fn trust(&self) -> Arc<TrustStore>;
+
+    /// Where a probe's connection is driven; the engine stops it at shutdown.
+    fn tasks(&self) -> Tasks;
 
     /// An apply suspends the tunnel before the route epoch moves, and a refusal in that
     /// window would read as a failure of the current route, so a rule-routed probe waits.

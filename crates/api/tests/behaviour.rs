@@ -1225,6 +1225,89 @@ async fn a_delay_run_reports_each_proxy_then_done_and_stops_when_dropped() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_delay_run_still_dialing_ends_its_stream_when_the_core_shuts_down() {
+    let rig = Rig::new().await;
+    let silent = hanging_server().await;
+    rig.write_config(&format!(
+        "proxies:\n  - {{name: silent, type: socks5, server: 127.0.0.1, port: {silent}}}\n\
+         rules:\n  - MATCH,DIRECT\n"
+    ));
+    rig.apply().await.unwrap();
+    let mut run = rig
+        .control
+        .delay_run(DelayRunParams {
+            proxies: vec!["silent".into()],
+            url: Some("http://127.0.0.1:1/x".into()),
+            timeout: Some(30_000),
+            concurrency: None,
+            expected: None,
+            watch: WatchOptions::default(),
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    rig.engine.shutdown().await;
+    let drained = timeout(Duration::from_secs(2), async {
+        while run.events.next().await.is_some() {}
+    })
+    .await;
+    assert!(
+        drained.is_ok(),
+        "the run kept its stream open past the shutdown"
+    );
+    rig.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn after_a_shutdown_a_started_core_serves_its_port_and_finishes_a_delay_run() {
+    let rig = Rig::new().await;
+    let port = free_port();
+    let echo = concord_test_support::tcp_echo().await;
+    rig.write_config(&format!("mixed-port: {port}\nrules:\n  - MATCH,DIRECT\n"));
+    rig.apply().await.unwrap();
+    rig.control.engine_start(Empty::default()).await.unwrap();
+    rig.engine.shutdown().await;
+
+    rig.control
+        .core_init(CoreInitParams {
+            home: rig.home.to_str().unwrap().to_string(),
+            sdk_int: None,
+        })
+        .await
+        .unwrap();
+    rig.apply().await.unwrap();
+    rig.control.engine_start(Empty::default()).await.unwrap();
+    let mut stream = through_the_proxy(port, echo.port()).await;
+    stream.write_all(b"again").await.unwrap();
+    let mut echoed = [0u8; 5];
+    timeout(PATIENCE, stream.read_exact(&mut echoed))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&echoed, b"again");
+
+    let mut run = rig
+        .control
+        .delay_run(DelayRunParams {
+            proxies: vec!["DIRECT".into()],
+            url: Some("http://127.0.0.1:1/x".into()),
+            timeout: Some(1000),
+            concurrency: None,
+            expected: None,
+            watch: WatchOptions::default(),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        next(&mut run.events).await,
+        DelayRunEvent::Result { .. }
+    ));
+    assert!(matches!(next(&mut run.events).await, DelayRunEvent::Done));
+    rig.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_stateless_helpers_answer_with_indexed_issues_and_empty_results() {
     let rig = Rig::new().await;
 

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use concord_common::Tasks;
 use concord_config::mitm::text::canonical_header;
 use concord_tls::TrustStore;
 use http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, HOST};
@@ -39,6 +40,8 @@ pub(crate) struct Client {
     pub dial: Arc<dyn ScriptDial>,
     pub trust: Arc<TrustStore>,
     pub max_body: i64,
+    /// Scoped to the script run: its connections end when the run does.
+    pub tasks: Tasks,
 }
 
 impl Client {
@@ -150,7 +153,9 @@ impl Client {
         let (mut sender, conn) = http1::handshake(TokioIo::new(io))
             .await
             .map_err(|err| err.to_string())?;
-        let driver = tokio::spawn(conn);
+        let driver = self.tasks.spawn(async move {
+            let _ = conn.await;
+        });
         let outcome = self.exchange(&mut sender, method, url, headers, body).await;
         driver.abort();
         outcome

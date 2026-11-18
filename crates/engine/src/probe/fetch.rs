@@ -372,7 +372,7 @@ impl Prober {
             .await
             .map_err(Fail::failed)?;
         let bound = ctx.clone();
-        tokio::spawn(async move {
+        self.env.tasks().spawn(async move {
             tokio::select! {
                 _ = connection => {}
                 _ = bound.done() => {}

@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use concord_common::{
     Address, BoxStream, FlowHandler, FlowKey, FlowMeta, IcmpAnswer, InboundInfo, InboundKind,
-    Network, UdpFlow, UdpPayload, UdpReply,
+    Network, Tasks, UdpFlow, UdpPayload, UdpReply,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -58,17 +58,18 @@ pub trait FlowSink: Send + Sync + 'static {
 pub struct HandlerSink {
     handler: Arc<dyn FlowHandler>,
     inbound: InboundInfo,
-    runtime: Option<tokio::runtime::Handle>,
+    tasks: Tasks,
 }
 
 impl HandlerSink {
-    pub fn new(handler: Arc<dyn FlowHandler>, inbound_name: &str) -> Self {
+    /// The handler runs in the runtime of `tasks`, whichever thread the stack calls from.
+    pub fn new(handler: Arc<dyn FlowHandler>, inbound_name: &str, tasks: Tasks) -> Self {
         let mut inbound = InboundInfo::new(InboundKind::Tun);
         inbound.name = Arc::from(inbound_name);
         HandlerSink {
             handler,
             inbound,
-            runtime: tokio::runtime::Handle::try_current().ok(),
+            tasks,
         }
     }
 
@@ -89,7 +90,7 @@ impl HandlerSink {
 
 impl FlowSink for HandlerSink {
     fn tcp(&self, flow: FlowKey, stream: BoxStream) {
-        let _owner = self.runtime.as_ref().map(tokio::runtime::Handle::enter);
+        let _owner = self.tasks.enter();
         self.handler.handle_tcp(self.meta(&flow), stream);
     }
 
@@ -105,12 +106,12 @@ impl FlowSink for HandlerSink {
     }
 
     fn icmp(&self, dst: IpAddr, message: &[u8], answer: IcmpAnswer) -> bool {
-        let _owner = self.runtime.as_ref().map(tokio::runtime::Handle::enter);
+        let _owner = self.tasks.enter();
         self.handler.handle_icmp(dst, message, answer)
     }
 
     fn udp_round(&self, round: &mut dyn FnMut()) {
-        let _owner = self.runtime.as_ref().map(tokio::runtime::Handle::enter);
+        let _owner = self.tasks.enter();
         self.handler.udp_round(round);
     }
 }
@@ -131,6 +132,8 @@ pub struct StackOptions {
     pub congestion: Congestion,
     pub dns: Option<Arc<DnsConfig>>,
     pub stats: Arc<StackStats>,
+    /// Where the stack and the DNS answers it starts run.
+    pub tasks: Tasks,
 }
 
 impl Default for StackOptions {
@@ -145,6 +148,7 @@ impl Default for StackOptions {
             congestion: Congestion::Cubic,
             dns: None,
             stats: Arc::default(),
+            tasks: Tasks::default(),
         }
     }
 }
@@ -238,7 +242,7 @@ mod tests {
 
     #[test]
     fn tcp_reports_the_destination_as_the_inbound_address_and_udp_none() {
-        let sink = HandlerSink::new(Arc::new(Idle), "tun");
+        let sink = HandlerSink::new(Arc::new(Idle), "tun", Tasks::default());
         let tcp = sink.meta(&key(Network::Tcp));
         assert_eq!(tcp.inbound.addr, Some("1.1.1.1:443".parse().unwrap()));
         assert_eq!(sink.meta(&key(Network::Udp)).inbound.addr, None);
@@ -266,7 +270,12 @@ mod tests {
             }
         }
         let (sent, received) = tokio::sync::oneshot::channel();
-        let sink = HandlerSink::new(Arc::new(Probe(std::sync::Mutex::new(Some(sent)))), "tun");
+        let tasks = Tasks::current(Default::default(), Default::default());
+        let sink = HandlerSink::new(
+            Arc::new(Probe(std::sync::Mutex::new(Some(sent)))),
+            "tun",
+            tasks,
+        );
         std::thread::spawn(move || {
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()

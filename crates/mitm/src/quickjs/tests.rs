@@ -30,6 +30,10 @@ impl ScriptDial for Loopback {
             None => Err(io::Error::other("no route")),
         }
     }
+
+    fn tasks(&self) -> concord_common::Tasks {
+        concord_common::Tasks::default()
+    }
 }
 
 struct Rig {

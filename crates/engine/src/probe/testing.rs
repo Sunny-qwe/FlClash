@@ -108,6 +108,10 @@ impl ProbeEnv for FakeEnv {
         lock(&self.trust).clone()
     }
 
+    fn tasks(&self) -> concord_common::Tasks {
+        concord_common::Tasks::default()
+    }
+
     fn suspended(&self) -> bool {
         self.suspended.load(Ordering::SeqCst)
     }
