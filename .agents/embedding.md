@@ -62,11 +62,13 @@ sockets are not protected by a `VpnService`, so that rule is what keeps them off
 
 ## Session
 
-A host sends `core.hello` (version and capabilities) and `core.init` (its home directory, and the SDK level on
-Android), applies a profile with `config.apply`, and opens listeners and TUN with `engine.start`. Streams (`traffic`, `connection`, `log`, `dns`,
-`route`, `events`, `proxy`) are opened with a `*.watch` call and paced by the host's credit; each declares one policy
-(`latest`, `drop_oldest`, `resync`) and never blocks core work. Engine state and the route counters are the Core's;
-the host keeps no shadow copy.
+A host sends `core.hello` (version and capabilities) and `core.init` (its home directory, and the SDK level on Android),
+applies a profile with `config.apply`, and opens listeners and TUN with `engine.start`. Streams (`traffic`,
+`connection`, `log`, `dns`, `route`, `events`, `proxy`) are opened with a `*.watch` call and paced by the host's credit;
+each declares one policy (`latest`, `drop_oldest`, `resync`) and never blocks core work. The `log` stream's lowest level
+is `debug`: release builds of `concord` and `libconcord.so` compile out `trace` records, Concord's and its dependencies'
+(`tracing` and `log` with `release_max_level_debug`), and other builds send them as `debug`. Engine state and the route
+counters are the Core's; the host keeps no shadow copy.
 
 ## External Controller And State Sync
 

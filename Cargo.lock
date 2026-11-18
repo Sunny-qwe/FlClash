@@ -1104,6 +1104,7 @@ dependencies = [
  "concord-rpc",
  "futures-util",
  "libc",
+ "log",
  "serde_json",
  "tempfile",
  "tokio",
