@@ -210,8 +210,8 @@ pub(super) fn adopt(inner: &Arc<Inner>, session: &Arc<Session>, reply: &Arc<dyn 
         return false;
     }
     inner
-        .handle
-        .spawn(end_adopted(inner.clone(), session.clone()));
+        .tasks
+        .spawn_to_end(end_adopted(inner.clone(), session.clone()));
     true
 }
 

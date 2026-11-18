@@ -354,7 +354,7 @@ impl Outbounds {
         let weak = Arc::downgrade(self);
         let refresher_stop = stop.child_token();
         let refresher_owner = weak.clone();
-        tokio::spawn(async move {
+        self.shared.tasks.spawn(async move {
             loop {
                 let Some(outbounds) = refresher_owner.upgrade() else {
                     return;
@@ -372,17 +372,18 @@ impl Outbounds {
             }
         });
         for provider in &self.providers {
-            tokio::spawn(provider::run(
+            self.shared.tasks.spawn(provider::run(
                 Arc::downgrade(provider),
                 stop.child_token(),
                 answered.clone(),
             ));
         }
-        lock(&self.supervisor).reconcile(&self.checks, &weak, &stop);
+        lock(&self.supervisor).reconcile(&self.checks, &weak, &stop, &self.shared.tasks);
     }
 
     pub fn reconcile_checks(self: &Arc<Self>, stop: &CancellationToken) {
-        lock(&self.supervisor).reconcile(&self.checks, &Arc::downgrade(self), stop);
+        let tasks = &self.shared.tasks;
+        lock(&self.supervisor).reconcile(&self.checks, &Arc::downgrade(self), stop, tasks);
     }
 
     /// Counts a failed dial against the groups it went through, which test
@@ -412,7 +413,7 @@ impl Outbounds {
                 && let Some(outbounds) = self.me.upgrade()
             {
                 let group = group.clone();
-                tokio::spawn(async move {
+                self.shared.tasks.spawn(async move {
                     join_all(group.checks().map(|check| check.check(&outbounds))).await;
                     group.finish_checking();
                 });

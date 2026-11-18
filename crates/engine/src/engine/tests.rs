@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use concord_common::{CoreEvent, CoreOptions, ResourcePhase};
 use concord_platform::NativePlatform;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::sync::mpsc;
 
 use super::*;
 
@@ -277,4 +279,162 @@ async fn shutdown_returns_at_its_bound_when_a_task_never_ends() {
         "{took:?}"
     );
     assert_eq!(engine.tasks.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "an echo origin and a silent DNS upstream outside the core"
+)]
+async fn shutdown_leaves_no_task_of_a_live_flow_a_resolver_or_a_group_running() {
+    let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = origin.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = origin.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0; 64];
+                while let Ok(n) = stream.read(&mut buf).await {
+                    if n == 0 || stream.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    let silent = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let upstream = silent.local_addr().unwrap();
+    let (engine, port, _home) = running(&format!(
+        "dns:\n  enable: true\n  nameserver:\n    - {upstream}\n\
+         proxy-groups:\n  - {{name: g, type: url-test, proxies: [DIRECT], url: 'http://{target}/', interval: 60}}\n\
+         rules:\n  - MATCH,g\n"
+    ))
+    .await;
+    let (mut client, _) = socks(port, 1, target).await;
+    client.write_all(b"ping").await.unwrap();
+    let mut echoed = [0; 4];
+    client.read_exact(&mut echoed).await.unwrap();
+    assert_eq!(&echoed, b"ping");
+    assert!(!engine.tasks.is_empty());
+
+    let started = tokio::time::Instant::now();
+    engine.shutdown().await;
+    assert!(engine.tasks.is_empty(), "{} tasks left", engine.tasks.len());
+    assert!(
+        started.elapsed() < SHUTDOWN_GRACE,
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// An engine started from `config` plus a free mixed port, with its listeners up.
+async fn running(config: &str) -> (Arc<Engine>, u16, tempfile::TempDir) {
+    let mixed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = mixed.local_addr().unwrap().port();
+    drop(mixed);
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("config.yaml"),
+        format!("mixed-port: {port}\n{config}"),
+    )
+    .unwrap();
+    let engine = bare_engine();
+    engine.init(home.path().to_str().unwrap(), 0).unwrap();
+    engine
+        .setup(SetupRequest {
+            base: None,
+            selected: BTreeMap::new(),
+            options: CoreOptions::default(),
+        })
+        .await
+        .unwrap();
+    engine.start_listeners().await;
+    (engine, port, home)
+}
+
+/// Sends a SOCKS5 request for `target` with `command` (1 connect, 3 UDP associate) and returns
+/// the stream with the address the reply binds.
+#[expect(clippy::disallowed_methods, reason = "a client outside the core")]
+async fn socks(port: u16, command: u8, target: SocketAddr) -> (TcpStream, SocketAddr) {
+    let SocketAddr::V4(v4) = target else {
+        panic!("IPv4 expected")
+    };
+    let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    client.write_all(&[5, 1, 0]).await.unwrap();
+    let mut method = [0; 2];
+    client.read_exact(&mut method).await.unwrap();
+    let mut request = vec![5, command, 0, 1];
+    request.extend_from_slice(&v4.ip().octets());
+    request.extend_from_slice(&v4.port().to_be_bytes());
+    client.write_all(&request).await.unwrap();
+    let mut reply = [0; 10];
+    client.read_exact(&mut reply).await.unwrap();
+    assert_eq!(reply[1], 0);
+    let bound = SocketAddr::from((
+        [reply[4], reply[5], reply[6], reply[7]],
+        u16::from_be_bytes([reply[8], reply[9]]),
+    ));
+    (client, bound)
+}
+
+/// An engine routing everything to a SOCKS5 node that takes each connection and never answers,
+/// so a flow stays in its dial; the receiver hears each dial arrive.
+async fn dialing_a_silent_node() -> (
+    Arc<Engine>,
+    u16,
+    mpsc::UnboundedReceiver<()>,
+    tempfile::TempDir,
+) {
+    let silent = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let node = silent.local_addr().unwrap().port();
+    let (arrived, dials) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = silent.accept().await {
+            held.push(stream);
+            let _ = arrived.send(());
+        }
+    });
+    let (engine, port, home) = running(&format!(
+        "proxies:\n  - {{name: silent, type: socks5, server: 127.0.0.1, port: {node}, udp: true}}\n\
+         rules:\n  - MATCH,silent\n"
+    ))
+    .await;
+    (engine, port, dials, home)
+}
+
+async fn shuts_down_promptly(engine: &Engine) {
+    assert!(!engine.tasks.is_empty());
+    let started = tokio::time::Instant::now();
+    engine.shutdown().await;
+    assert!(engine.tasks.is_empty(), "{} tasks left", engine.tasks.len());
+    assert!(
+        started.elapsed() < SHUTDOWN_GRACE / 2,
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_ends_a_tcp_flow_still_dialing_its_node() {
+    let (engine, port, mut dials, _home) = dialing_a_silent_node().await;
+    let _client = socks(port, 1, SocketAddr::from(([192, 0, 2, 1], 80))).await;
+    tokio::time::timeout(Duration::from_secs(5), dials.recv())
+        .await
+        .unwrap();
+    shuts_down_promptly(&engine).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[expect(clippy::disallowed_methods, reason = "a client outside the core")]
+async fn shutdown_ends_a_udp_flow_still_associating_with_its_node() {
+    let (engine, port, mut dials, _home) = dialing_a_silent_node().await;
+    let (_control, relay) = socks(port, 3, SocketAddr::from(([0, 0, 0, 0], 0))).await;
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let mut packet = vec![0, 0, 0, 1, 192, 0, 2, 1, 0, 53];
+    packet.extend_from_slice(b"datagram");
+    socket.send_to(&packet, relay).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), dials.recv())
+        .await
+        .unwrap();
+    shuts_down_promptly(&engine).await;
 }

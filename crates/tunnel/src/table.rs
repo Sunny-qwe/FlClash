@@ -3,10 +3,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use concord_common::sync::lock;
-use concord_common::{ConnRecord, CoreEvent, EventSink, TrafficDelta};
+use concord_common::{ConnRecord, CoreEvent, EventSink, Tasks, TrafficDelta};
 use dashmap::DashMap;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 const REPORT_INTERVAL: Duration = Duration::from_secs(1);
 const RATE_WINDOW: Duration = Duration::from_secs(1);
@@ -170,11 +172,13 @@ pub struct ConnTable {
     reporting: AtomicBool,
     closed_ids: Mutex<ClosedIds>,
     closes: AtomicU64,
+    closing: ArcSwap<CancellationToken>,
     events: Arc<dyn EventSink>,
+    tasks: Tasks,
 }
 
 impl ConnTable {
-    pub fn new(events: Arc<dyn EventSink>) -> Arc<Self> {
+    pub fn new(events: Arc<dyn EventSink>, tasks: Tasks) -> Arc<Self> {
         Arc::new(ConnTable {
             open: DashMap::new(),
             all: Totals::default(),
@@ -185,8 +189,16 @@ impl ConnTable {
             reporting: AtomicBool::new(false),
             closed_ids: Mutex::new(ClosedIds::default()),
             closes: AtomicU64::new(0),
+            closing: ArcSwap::from_pointee(CancellationToken::new()),
             events,
+            tasks,
         })
+    }
+
+    /// Cancelled by the next `close_all`. A flow routes and dials under it, so a close that lands
+    /// before the flow registers ends the setup too; it reads this before [`closes`](Self::closes).
+    pub fn closing(&self) -> CancellationToken {
+        CancellationToken::clone(&self.closing.load())
     }
 
     /// How many times `close_all` has run; a flow reads it before it starts to set up.
@@ -346,6 +358,9 @@ impl ConnTable {
 
     pub fn close_all(&self) {
         self.closes.fetch_add(1, Ordering::SeqCst);
+        self.closing
+            .swap(Arc::new(CancellationToken::new()))
+            .cancel();
         for entry in &self.open {
             entry.value().close();
         }
@@ -353,12 +368,10 @@ impl ConnTable {
 
     fn enqueue_dirty(self: &Arc<Self>, tracked: Arc<Tracked>) {
         lock(&self.dirty).push(tracked);
-        if !self.reporting.swap(true, Ordering::AcqRel) {
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(self.clone().report_traffic());
-            } else {
-                self.reporting.store(false, Ordering::Release);
-            }
+        if !self.reporting.swap(true, Ordering::AcqRel)
+            && !self.tasks.spawn_to_end(self.clone().report_traffic())
+        {
+            self.reporting.store(false, Ordering::Release);
         }
     }
 
@@ -497,7 +510,7 @@ mod tests {
     async fn a_split_metered_stream_counts_each_direction_and_closes_with_the_last_half() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let table = ConnTable::new(Arc::new(Sink::default()));
+        let table = ConnTable::new(Arc::new(Sink::default()), Default::default());
         let registration = table.register(record(false), 0);
         let tracked = registration.tracked().clone();
         let (near, mut far) = tokio::io::duplex(64);
@@ -525,7 +538,7 @@ mod tests {
 
     #[tokio::test]
     async fn only_proxy_totals_leave_out_direct_connections() {
-        let table = ConnTable::new(Arc::new(Sink::default()));
+        let table = ConnTable::new(Arc::new(Sink::default()), Default::default());
         let direct = table.register(record(true), 5);
         let proxied = table.register(record(false), 0);
         direct.tracked().downloaded(10);
@@ -536,7 +549,7 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_the_registration_removes_and_closes_the_connection() {
-        let table = ConnTable::new(Arc::new(Sink::default()));
+        let table = ConnTable::new(Arc::new(Sink::default()), Default::default());
         let record = record(false);
         let registration = table.register(record.clone(), 0);
         assert_eq!(table.len(), 1);
@@ -549,7 +562,7 @@ mod tests {
     #[tokio::test]
     async fn a_closed_connection_is_found_by_its_number_until_newer_ones_push_it_out() {
         const CAPTURE: usize = 8;
-        let table = ConnTable::new(Arc::new(Sink::default()));
+        let table = ConnTable::new(Arc::new(Sink::default()), Default::default());
         table.set_closed_capacity(CAPTURE);
         let first = record(false);
         let (seq, id) = (first.seq, first.id.clone());
@@ -567,7 +580,7 @@ mod tests {
 
     #[tokio::test]
     async fn without_a_capture_a_closed_connection_is_not_remembered() {
-        let table = ConnTable::new(Arc::new(Sink::default()));
+        let table = ConnTable::new(Arc::new(Sink::default()), Default::default());
         let first = record(false);
         let seq = first.seq;
         drop(table.register(first, 0));
@@ -603,7 +616,7 @@ mod tests {
     async fn a_buffer_read_counts_each_segment_once_alongside_plain_reads() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let table = ConnTable::new(Arc::new(Sink::default()));
+        let table = ConnTable::new(Arc::new(Sink::default()), Default::default());
         let (mut stream, mut far) = metered(&table);
         far.write_all(b"do").await.unwrap();
         assert_eq!(next_buffer(&mut stream).await.unwrap(), 2);
@@ -618,7 +631,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_buffer_read_that_waits_counts_nothing() {
-        let table = ConnTable::new(Arc::new(Sink::default()));
+        let table = ConnTable::new(Arc::new(Sink::default()), Default::default());
         let (mut stream, _far) = metered(&table);
         let waited =
             std::future::poll_fn(|cx| std::task::Poll::Ready(read_buffer(&mut stream, cx))).await;
@@ -628,7 +641,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_buffer_read_at_the_end_counts_nothing() {
-        let table = ConnTable::new(Arc::new(Sink::default()));
+        let table = ConnTable::new(Arc::new(Sink::default()), Default::default());
         let (mut stream, far) = metered(&table);
         drop(far);
         assert_eq!(next_buffer(&mut stream).await.unwrap(), 0);
@@ -639,7 +652,7 @@ mod tests {
     async fn a_buffer_read_of_a_closed_connection_fails_and_counts_nothing() {
         use tokio::io::AsyncWriteExt;
 
-        let table = ConnTable::new(Arc::new(Sink::default()));
+        let table = ConnTable::new(Arc::new(Sink::default()), Default::default());
         let (mut stream, mut far) = metered(&table);
         far.write_all(b"late").await.unwrap();
         table.close_all();
@@ -650,7 +663,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn the_rate_is_measured_over_the_time_since_the_last_read() {
-        let table = ConnTable::new(Arc::new(Sink::default()));
+        let table = ConnTable::new(Arc::new(Sink::default()), Default::default());
         let registration = table.register(record(false), 0);
         assert_eq!(table.now(false), (0, 0));
         registration.tracked().downloaded(2000);
@@ -664,7 +677,7 @@ mod tests {
     async fn traffic_is_reported_once_per_change_and_stops_when_idle() {
         let sink = Arc::new(Sink::default());
         sink.accept.store(true, Ordering::Relaxed);
-        let table = ConnTable::new(sink.clone());
+        let table = ConnTable::new(sink.clone(), Default::default());
         let registration = table.register(record(false), 0);
         registration.tracked().uploaded(1);
         registration.tracked().uploaded(1);
@@ -682,7 +695,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_refused_report_drops_a_closed_connection() {
         let sink = Arc::new(Sink::default());
-        let table = ConnTable::new(sink.clone());
+        let table = ConnTable::new(sink.clone(), Default::default());
         let registration = table.register(record(false), 0);
         registration.tracked().uploaded(1);
         drop(registration);
@@ -696,7 +709,7 @@ mod tests {
     async fn traffic_is_still_reported_after_a_panic_poisoned_the_queue() {
         let sink = Arc::new(Sink::default());
         sink.accept.store(true, Ordering::Relaxed);
-        let table = ConnTable::new(sink.clone());
+        let table = ConnTable::new(sink.clone(), Default::default());
         let poisoner = table.clone();
         let _ = std::thread::spawn(move || {
             let _held = lock(&poisoner.dirty);

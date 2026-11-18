@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use concord_common::sync::lock;
 use concord_tls::TlsOptions;
+use concord_transport::TrackedRuntime;
 use hickory_proto::op::Message;
 use quinn::crypto::rustls::QuicClientConfig;
 
@@ -70,7 +71,7 @@ impl Doh3Client {
             quinn::EndpointConfig::default(),
             None,
             socket,
-            Arc::new(quinn::TokioRuntime),
+            Arc::new(TrackedRuntime(self.connector.tasks().clone())),
         )?;
         endpoint.set_default_client_config(self.config.clone());
         let conn = endpoint
@@ -81,7 +82,7 @@ impl Doh3Client {
         let (mut driver, requests) = h3::client::new(h3_quinn::Connection::new(conn.clone()))
             .await
             .map_err(io::Error::other)?;
-        tokio::spawn(async move {
+        self.connector.tasks().spawn(async move {
             let _ = driver.wait_idle().await;
         });
         Ok(Session {

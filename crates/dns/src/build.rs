@@ -282,7 +282,9 @@ impl Resolver {
             sock_opts: deps.sock_opts,
             trust: deps.trust,
             ipv6: deps.ipv6,
+            tasks: deps.tasks,
         });
+        let tasks = shared.tasks.clone();
         let system = Arc::new(SystemServers::new(deps.platform));
         let default_ns = if config.enable {
             Vec::new()
@@ -318,6 +320,7 @@ impl Resolver {
                 cache_algorithm: config.cache_algorithm.clone(),
                 cache_size: config.cache_max_size,
                 ipv6_timeout: timeout,
+                tasks: tasks.clone(),
             };
         let no_filters = || Filters {
             domain: Vec::new(),

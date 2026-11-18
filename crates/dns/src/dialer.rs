@@ -6,8 +6,8 @@ use std::sync::{Arc, Weak};
 use async_trait::async_trait;
 use concord_common::packet::PacketBuf;
 use concord_common::{
-    Address, BoxStream, CoreError, Initiator, PacketSession, SockOpts, SocketFactory, recv_packet,
-    send_packet,
+    Address, BoxStream, CoreError, Initiator, PacketSession, SockOpts, SocketFactory, Tasks,
+    recv_packet, send_packet,
 };
 use concord_transport::SessionSocket;
 use quinn::{AsyncUdpSocket, Runtime, TokioRuntime};
@@ -45,12 +45,12 @@ pub(crate) fn through() -> Arc<[Arc<str>]> {
         .unwrap_or_else(|_| Arc::from(Vec::new()))
 }
 
-pub(crate) fn spawn<F>(task: F) -> JoinHandle<F::Output>
+pub(crate) fn spawn<F>(tasks: &Tasks, task: F) -> JoinHandle<Option<F::Output>>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    tokio::spawn(THROUGH.scope(through(), task))
+    tasks.spawn_returning(THROUGH.scope(through(), task))
 }
 
 async fn passing<T>(name: &str, dial: impl Future<Output = io::Result<T>>) -> io::Result<T> {
@@ -83,6 +83,7 @@ pub(crate) struct Shared {
     pub sock_opts: SockOpts,
     pub trust: Arc<concord_tls::TrustStore>,
     pub ipv6: bool,
+    pub tasks: Tasks,
 }
 
 #[derive(Clone, Copy)]
@@ -136,6 +137,10 @@ pub(crate) struct Connector {
 }
 
 impl Connector {
+    pub(crate) fn tasks(&self) -> &Tasks {
+        &self.shared.tasks
+    }
+
     pub(crate) fn new(shared: Arc<Shared>, via: Via, bootstrap: Option<Arc<Group>>) -> Self {
         Connector {
             shared,
@@ -230,7 +235,7 @@ impl Connector {
         if let Some((dialer, name)) = self.tunnel()? {
             let session = passing(&name, dialer.bind_udp(&name, &Address::Socket(peer))).await?;
             let socket: Arc<dyn AsyncUdpSocket> =
-                SessionSocket::new(session, peer, &Default::default());
+                SessionSocket::new(session, peer, &self.shared.tasks);
             return Ok((socket, peer));
         }
         let sock = self.shared.sockets.bind_udp(peer.ip(), &self.opts())?;

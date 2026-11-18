@@ -408,3 +408,16 @@ fn an_explicit_zero_interval_registers_zero_on_the_provider() {
     assert_eq!(extra_interval("other: 1"), Duration::ZERO);
     assert_eq!(extra_interval("interval: 90"), Duration::from_secs(90));
 }
+
+#[tokio::test]
+async fn a_provider_s_task_ends_when_the_engine_stops() {
+    let (tasks, tracker, engine_stop) = tracked();
+    let rig = Rig::tracked(FILE_PROVIDER, tasks);
+    write_file(&rig, &list(&["n1"]));
+    rig.out
+        .start_background(CancellationToken::new(), answered());
+    until_phases(&rig, 2).await;
+    assert!(!tracker.is_empty());
+    engine_stop.cancel();
+    assert!(ended_within(&tracker, Duration::from_secs(1)).await);
+}

@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use concord_common::{Address, BoxStream};
+use concord_common::{Address, BoxStream, Tasks};
 use concord_tls::{TlsConnector, TlsOptions, TrustStore};
 use http::{HeaderMap, Method};
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::client::conn::{http1, http2};
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::rt::TokioIo;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HttpError {
@@ -105,9 +105,10 @@ pub async fn connect(
     io: BoxStream,
     target: &Target,
     tls: &TlsSettings,
+    tasks: &Tasks,
 ) -> Result<Connection, HttpError> {
     if !target.tls {
-        return handshake(TokioIo::new(io), target, false).await;
+        return handshake(TokioIo::new(io), target, false, tasks).await;
     }
     let alpn = if tls.offer_h2 {
         vec!["h2".to_string(), "http/1.1".to_string()]
@@ -128,24 +129,29 @@ pub async fn connect(
         .await
         .map_err(|err| HttpError::Tls(err.to_string()))?;
     let h2 = stream.negotiated_alpn() == Some(b"h2".as_slice());
-    handshake(TokioIo::new(stream), target, h2).await
+    handshake(TokioIo::new(stream), target, h2, tasks).await
 }
 
-async fn handshake<I>(io: TokioIo<I>, target: &Target, h2: bool) -> Result<Connection, HttpError>
+async fn handshake<I>(
+    io: TokioIo<I>,
+    target: &Target,
+    h2: bool,
+    tasks: &Tasks,
+) -> Result<Connection, HttpError>
 where
     I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     let sender = if h2 {
-        let (sender, conn) = http2::handshake(TokioExecutor::new(), io)
+        let (sender, conn) = http2::handshake(tasks.clone(), io)
             .await
             .map_err(protocol)?;
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             let _ = conn.await;
         });
         Sender::H2(sender)
     } else {
         let (sender, conn) = http1::handshake(io).await.map_err(protocol)?;
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             let _ = conn.await;
         });
         Sender::H1(sender)
@@ -249,7 +255,7 @@ mod tests {
             }
         });
         let target = Target::parse("http://probe.test/generate_204").unwrap();
-        let mut conn = handshake(TokioIo::new(client), &target, false)
+        let mut conn = handshake(TokioIo::new(client), &target, false, &Default::default())
             .await
             .unwrap();
         for _ in 0..2 {

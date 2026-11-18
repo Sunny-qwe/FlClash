@@ -40,12 +40,59 @@ impl Meter for TrackedMeter<'_> {
     }
 }
 
-pub(crate) async fn handle(inner: Arc<Inner>, meta: FlowMeta, mut stream: BoxStream) {
+pub(crate) async fn handle(inner: Arc<Inner>, meta: FlowMeta, stream: BoxStream) {
     let accepted = Instant::now();
+    let closing = inner.table.closing();
     let closes = inner.table.closes();
     let Some(runtime) = inner.runtime_for(meta.inbound.kind) else {
         return;
     };
+    let Some(Some(SetUp {
+        flow,
+        stream,
+        head,
+        remote,
+        decision,
+    })) = closing
+        .run_until_cancelled(set_up(&inner, &runtime, meta, stream, accepted))
+        .await
+    else {
+        return;
+    };
+    let live = inner.live();
+    tracing::info!("{}", decision.match_text(&flow, &live));
+
+    let Some(registration) = inner
+        .table
+        .register_since(record_of(&flow, &decision, &remote), closes)
+    else {
+        return;
+    };
+    let tracked = registration.tracked();
+    let local: BoxStream = if head.is_empty() {
+        stream
+    } else {
+        Box::new(PeekedStream::new(head, stream))
+    };
+    let cancel = tracked.record.cancel.clone();
+    relay(local, remote, &TrackedMeter(tracked), &cancel).await;
+}
+
+struct SetUp {
+    flow: FlowState,
+    stream: BoxStream,
+    head: Vec<u8>,
+    remote: BoxStream,
+    decision: Decision,
+}
+
+async fn set_up(
+    inner: &Arc<Inner>,
+    runtime: &Arc<Runtime>,
+    meta: FlowMeta,
+    mut stream: BoxStream,
+    accepted: Instant,
+) -> Option<SetUp> {
     let mut flow = FlowState::new(meta);
     if !flow.valid() {
         tracing::warn!(
@@ -53,7 +100,7 @@ pub(crate) async fn handle(inner: Arc<Inner>, meta: FlowMeta, mut stream: BoxStr
             flow.meta.src,
             flow.meta.dst
         );
-        return;
+        return None;
     }
 
     let mut pre_handle_failed = false;
@@ -79,12 +126,12 @@ pub(crate) async fn handle(inner: Arc<Inner>, meta: FlowMeta, mut stream: BoxStr
             flow.source_detail(),
             flow.remote_text()
         );
-        return;
+        return None;
     }
 
     if let Some(slot) = inner.interceptor.load_full() {
         match slot.0.offer(&flow.intercept(), stream, head).await {
-            Offer::Taken => return,
+            Offer::Taken => return None,
             Offer::Declined {
                 stream: declined,
                 head: read,
@@ -95,35 +142,23 @@ pub(crate) async fn handle(inner: Arc<Inner>, meta: FlowMeta, mut stream: BoxStr
         }
     }
 
-    let Ok((remote, decision)) = dial_reading_first_bytes(
-        &inner,
-        &runtime,
+    let (remote, decision) = dial_reading_first_bytes(
+        inner,
+        runtime,
         &mut flow,
         &mut stream,
         &mut head,
         accepted + FIRST_BYTES_WINDOW,
     )
     .await
-    else {
-        return;
-    };
-    let live = inner.live();
-    tracing::info!("{}", decision.match_text(&flow, &live));
-
-    let Some(registration) = inner
-        .table
-        .register_since(record_of(&flow, &decision, &remote), closes)
-    else {
-        return;
-    };
-    let tracked = registration.tracked();
-    let local: BoxStream = if head.is_empty() {
-        stream
-    } else {
-        Box::new(PeekedStream::new(head, stream))
-    };
-    let cancel = tracked.record.cancel.clone();
-    relay(local, remote, &TrackedMeter(tracked), &cancel).await;
+    .ok()?;
+    Some(SetUp {
+        flow,
+        stream,
+        head,
+        remote,
+        decision,
+    })
 }
 
 /// A read the remote has no header to pair with is dropped unfinished, which loses nothing.

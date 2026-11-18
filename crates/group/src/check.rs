@@ -345,6 +345,7 @@ impl Supervisor {
         checks: &[Arc<Check>],
         owner: &Weak<Outbounds>,
         stop: &CancellationToken,
+        tasks: &concord_common::Tasks,
     ) {
         let wanted: HashMap<&str, &Arc<Check>> = checks
             .iter()
@@ -368,7 +369,7 @@ impl Supervisor {
                 self.restarts += 1;
             }
             let cancel = stop.child_token();
-            tokio::spawn(process((*check).clone(), owner.clone(), cancel.clone()));
+            tasks.spawn(process((*check).clone(), owner.clone(), cancel.clone()));
             self.running
                 .insert(id.to_string(), Running { spec, cancel });
         }

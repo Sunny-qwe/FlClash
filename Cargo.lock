@@ -1038,6 +1038,7 @@ dependencies = [
  "async-trait",
  "compact_str",
  "concord-test-support",
+ "hyper",
  "serde",
  "thiserror 2.0.21",
  "tokio",
@@ -1142,6 +1143,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tracing",
 ]
 

@@ -24,7 +24,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use concord_config::proxy::TlsOpts;
 use concord_tls::{QuicTls, TlsOptions, TrustStore};
-use concord_transport::SessionSocket;
+use concord_transport::{SessionSocket, TrackedRuntime, close_on_stop};
 
 use crate::ctx::{BuildCtx, BuildError};
 use crate::link::EnvSlot;
@@ -110,35 +110,6 @@ pub(crate) struct QuicConn {
     pub(crate) conn: quinn::Connection,
     endpoint: Endpoint,
     pub(crate) tasks: Tasks,
-}
-
-/// quinn spawns an endpoint's driver and each connection's through its runtime. They run until
-/// the connection has drained after its close (3 PTO, RFC 9000 section 10.2), which is what
-/// sends the CONNECTION_CLOSE, so they run to their end.
-struct TrackedRuntime(Tasks);
-
-impl std::fmt::Debug for TrackedRuntime {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("TrackedRuntime")
-    }
-}
-
-impl Runtime for TrackedRuntime {
-    fn new_timer(&self, at: std::time::Instant) -> Pin<Box<dyn quinn::AsyncTimer>> {
-        TokioRuntime.new_timer(at)
-    }
-
-    fn spawn(&self, future: Pin<Box<dyn std::future::Future<Output = ()> + Send>>) {
-        self.0.spawn_to_end(future);
-    }
-
-    fn wrap_udp_socket(&self, socket: std::net::UdpSocket) -> io::Result<Arc<dyn AsyncUdpSocket>> {
-        TokioRuntime.wrap_udp_socket(socket)
-    }
-
-    fn now(&self) -> std::time::Instant {
-        TokioRuntime.now()
-    }
 }
 
 impl Drop for QuicConn {
@@ -366,18 +337,6 @@ impl QuicLink {
             tasks: self.tasks.clone(),
         })
     }
-}
-
-/// The peer hears the connection close when the engine stops, as sing-box's outbounds send
-/// CONNECTION_CLOSE from their `Close`.
-fn close_on_stop(tasks: &Tasks, conn: quinn::Connection) {
-    let stop = tasks.clone();
-    tasks.spawn_to_end(async move {
-        tokio::select! {
-            () = stop.stopped() => conn.close(quinn::VarInt::from_u32(0), b""),
-            _ = conn.closed() => {}
-        }
-    });
 }
 
 /// What a link keeps of its obfuscation; each connection builds its own state.

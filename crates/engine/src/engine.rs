@@ -9,7 +9,7 @@ use arc_swap::{ArcSwap, ArcSwapOption};
 use concord_common::sync::lock;
 use concord_common::{
     Change, ClockOffset, CoreEvent, CoreOptions, EventSink, Origin, RouteStamp, RouteView,
-    StateChange,
+    StateChange, Tasks,
 };
 use concord_config::Profile;
 use concord_config::general::ControllerCors;
@@ -150,8 +150,11 @@ impl Engine {
         let loopback_guard = LoopbackGuard::new(!config.android);
         let loopback = (!config.android).then(|| loopback_guard.clone());
         let sockets = Arc::new(Sockets::new(config.platform.clone()));
-        let table = ConnTable::new(events.clone());
-        let tunnel = Tunnel::new(table.clone(), loopback_guard);
+        let tasks = TaskTracker::new();
+        let handle = Handle::current();
+        let own = Tasks::new(tasks.clone(), CancellationToken::new(), handle.clone());
+        let table = ConnTable::new(events.clone(), own.clone());
+        let tunnel = Tunnel::new(table.clone(), loopback_guard, own);
         let options = Arc::new(ArcSwap::from_pointee(CoreOptions::default()));
         let fetcher = Arc::new(TunnelFetcher {
             tunnel: tunnel.clone(),
@@ -166,8 +169,6 @@ impl Engine {
             fetcher: fetcher.clone(),
         }));
         let clock = Arc::new(ClockOffset::default());
-        let tasks = TaskTracker::new();
-        let handle = Handle::current();
         let shared = Shared {
             platform: config.platform,
             sockets,

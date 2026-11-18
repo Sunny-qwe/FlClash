@@ -376,6 +376,20 @@ impl Rig {
         store: Arc<SelectionStore>,
         keep: Option<&Rig>,
     ) -> Result<Rig, crate::GroupError> {
+        Rig::try_on(profile, store, keep, concord_common::Tasks::default())
+    }
+
+    pub fn tracked(yaml: &str, tasks: concord_common::Tasks) -> Rig {
+        let store = Arc::new(SelectionStore::new());
+        Rig::try_on(&profile(yaml), store, None, tasks).unwrap_or_else(|err| panic!("build: {err}"))
+    }
+
+    fn try_on(
+        profile: &Profile,
+        store: Arc<SelectionStore>,
+        keep: Option<&Rig>,
+        tasks: concord_common::Tasks,
+    ) -> Result<Rig, crate::GroupError> {
         let dir = tempfile::tempdir().unwrap();
         let home = Arc::new(HomeDir::new(dir.path()));
         let book = keep.map_or_else(|| Arc::new(Book::default()), |rig| rig.book.clone());
@@ -402,6 +416,7 @@ impl Rig {
             home: home.clone(),
             trust: TrustStore::new(b"", Vec::new()),
             factory: Arc::new(FakeFactory { book: book.clone() }),
+            tasks,
         };
         let out = Outbounds::build(&mut profile.clone(), deps)?;
         Ok(Rig {
@@ -454,4 +469,26 @@ impl Rig {
             .await
             .value
     }
+}
+
+pub fn tracked() -> (
+    concord_common::Tasks,
+    tokio_util::task::TaskTracker,
+    tokio_util::sync::CancellationToken,
+) {
+    let tracker = tokio_util::task::TaskTracker::new();
+    let stop = tokio_util::sync::CancellationToken::new();
+    let tasks = concord_common::Tasks::new(
+        tracker.clone(),
+        stop.clone(),
+        tokio::runtime::Handle::current(),
+    );
+    (tasks, tracker, stop)
+}
+
+pub async fn ended_within(tracker: &tokio_util::task::TaskTracker, bound: Duration) -> bool {
+    tracker.close();
+    let ended = tokio::time::timeout(bound, tracker.wait()).await.is_ok();
+    tracker.reopen();
+    ended
 }

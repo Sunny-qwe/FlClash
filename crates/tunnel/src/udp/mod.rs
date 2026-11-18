@@ -410,8 +410,8 @@ mod tests {
     }
 
     fn inner() -> (Tunnel, Arc<Inner>) {
-        let table = ConnTable::new(Arc::new(NullSink));
-        let tunnel = Tunnel::new(table, LoopbackGuard::new(false));
+        let table = ConnTable::new(Arc::new(NullSink), Default::default());
+        let tunnel = Tunnel::new(table, LoopbackGuard::new(false), Default::default());
         let inner = tunnel.inner().clone();
         (tunnel, inner)
     }

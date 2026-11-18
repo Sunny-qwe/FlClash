@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use concord_tls::TlsOptions;
+use concord_transport::TrackedRuntime;
 use hickory_proto::op::Message;
 use quinn::crypto::rustls::QuicClientConfig;
 
@@ -61,7 +62,7 @@ impl DoqClient {
             quinn::EndpointConfig::default(),
             None,
             socket,
-            Arc::new(quinn::TokioRuntime),
+            Arc::new(TrackedRuntime(self.connector.tasks().clone())),
         )?;
         endpoint.set_default_client_config(self.config.clone());
         let conn = endpoint

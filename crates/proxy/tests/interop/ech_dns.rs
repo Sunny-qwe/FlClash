@@ -133,6 +133,7 @@ pub(super) async fn start(list: Vec<u8>, names: &'static [&'static str]) -> Arc<
             sock_opts: SockOpts::default(),
             ipv6: true,
             store_fake_ip: false,
+            tasks: Default::default(),
         },
     )
     .unwrap();

@@ -34,6 +34,8 @@ pub struct ResolverDeps {
     pub sock_opts: SockOpts,
     pub ipv6: bool,
     pub store_fake_ip: bool,
+    /// Where the resolver's queries, connection drivers and QUIC endpoints run.
+    pub tasks: concord_common::Tasks,
 }
 
 pub struct Resolver {

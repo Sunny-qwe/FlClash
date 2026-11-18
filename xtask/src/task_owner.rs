@@ -1,6 +1,8 @@
-//! Holds the proxy layer's background tasks to `concord_common::Tasks`, which registers each with
+//! Holds the background tasks below the engine to `concord_common::Tasks`, which registers each with
 //! the engine's tracker so shutdown can stop it and wait for it. A task started with
-//! `tokio::spawn`, or on a runtime handle taken with `Handle::current`, outlives the engine.
+//! `tokio::spawn`, on a runtime `Handle`, in a `JoinSet` or by hyper's `TokioExecutor` outlives the
+//! engine. The check reads names, not types: it sees these by the paths and imports that name
+//! them, so a handle that arrives without its type being named stays out of its sight.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -15,6 +17,9 @@ const OWNED: &[&str] = &[
     "crates/transport/src",
     "crates/net/src",
     "crates/tls/src",
+    "crates/dns/src",
+    "crates/group/src",
+    "crates/tunnel/src",
 ];
 
 pub(crate) fn check(root: &Path) -> Result<(), String> {
@@ -110,11 +115,51 @@ struct Unowned {
 
 fn unowned_call(path: &syn::Path) -> Option<String> {
     let names: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+    unowned_names(&names).then(|| names.join("::"))
+}
+
+fn unowned_names(names: &[String]) -> bool {
     let tail: Vec<&str> = names.iter().rev().take(2).map(String::as_str).collect();
-    let spawns = matches!(tail.first(), Some(&("spawn" | "spawn_local")))
-        && (names.len() == 1 || names.first().is_some_and(|first| first == "tokio"));
-    let takes_handle = matches!(tail.as_slice(), ["current" | "try_current", "Handle"]);
-    (spawns || takes_handle).then(|| names.join("::"))
+    let from_tokio = names.first().is_some_and(|first| first == "tokio");
+    let spawns = matches!(tail.as_slice(), ["spawn" | "spawn_local", ..])
+        && (names.len() == 1 || from_tokio || tail.get(1) == Some(&"task"));
+    let takes_handle = matches!(tail.as_slice(), ["current" | "try_current", "Handle"])
+        || (from_tokio && tail.first() == Some(&"Handle"));
+    let runs_its_own = names
+        .iter()
+        .any(|name| name == "JoinSet" || name == "TokioExecutor");
+    spawns || takes_handle || runs_its_own
+}
+
+/// Every path a `use` brings in, with `self` folded into its parent and renames under their
+/// original name.
+fn imported(tree: &syn::UseTree, prefix: &mut Vec<String>, found: &mut Vec<(usize, Vec<String>)>) {
+    match tree {
+        syn::UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            imported(&path.tree, prefix, found);
+            prefix.pop();
+        }
+        syn::UseTree::Name(name) if name.ident == "self" => {
+            found.push((name.ident.span().start().line, prefix.clone()));
+        }
+        syn::UseTree::Name(name) => {
+            let mut full = prefix.clone();
+            full.push(name.ident.to_string());
+            found.push((name.ident.span().start().line, full));
+        }
+        syn::UseTree::Rename(rename) => {
+            let mut full = prefix.clone();
+            full.push(rename.ident.to_string());
+            found.push((rename.ident.span().start().line, full));
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                imported(item, prefix, found);
+            }
+        }
+        syn::UseTree::Glob(_) => {}
+    }
 }
 
 impl<'ast> Visit<'ast> for Unowned {
@@ -136,6 +181,31 @@ impl<'ast> Visit<'ast> for Unowned {
         }
     }
 
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        if is_test(&item.attrs) {
+            return;
+        }
+        let mut found = Vec::new();
+        imported(&item.tree, &mut Vec::new(), &mut found);
+        for (line, names) in found {
+            if unowned_names(&names) {
+                self.found.push((line, format!("use {}", names.join("::"))));
+            }
+        }
+    }
+
+    fn visit_type_path(&mut self, ty: &'ast syn::TypePath) {
+        if let Some(name) = unowned_call(&ty.path) {
+            let line = ty
+                .path
+                .segments
+                .first()
+                .map_or(0, |segment| segment.ident.span().start().line);
+            self.found.push((line, name));
+        }
+        visit::visit_type_path(self, ty);
+    }
+
     fn visit_expr_path(&mut self, expr: &'ast syn::ExprPath) {
         if let Some(call) = unowned_call(&expr.path) {
             let line = expr
@@ -154,7 +224,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_proxy_layer_spawns_only_through_tasks() {
+    fn the_crates_below_the_engine_spawn_only_through_tasks() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         if let Err(problems) = check(&root) {
             panic!("{problems}");
@@ -182,6 +252,39 @@ mod tests {
         assert!(found[0].starts_with("crates/proxy/src/a.rs:2: `tokio::spawn`"));
         assert!(
             found[1].starts_with("crates/proxy/src/a.rs:3: `tokio::runtime::Handle::try_current`")
+        );
+    }
+
+    #[test]
+    fn a_spawn_by_another_name_a_handle_a_join_set_or_hyper_s_executor_is_reported() {
+        let source = "\
+use tokio::task;
+use tokio::task::{JoinHandle, spawn as go};
+use tokio::runtime::Handle;
+use hyper_util::rt::TokioExecutor;
+fn a(handle: tokio::runtime::Handle) {
+    task::spawn(async {});
+    let mut set = tokio::task::JoinSet::new();
+    let _ = TokioExecutor::new();
+    task::spawn_blocking(|| ());
+}
+";
+        let found = unowned("crates/proxy/src/a.rs", &syn::parse_file(source).unwrap());
+        let lines: Vec<&str> = found
+            .iter()
+            .map(|problem| problem.split(" starts").next().unwrap())
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "crates/proxy/src/a.rs:2: `use tokio::task::spawn`",
+                "crates/proxy/src/a.rs:3: `use tokio::runtime::Handle`",
+                "crates/proxy/src/a.rs:4: `use hyper_util::rt::TokioExecutor`",
+                "crates/proxy/src/a.rs:5: `tokio::runtime::Handle`",
+                "crates/proxy/src/a.rs:6: `task::spawn`",
+                "crates/proxy/src/a.rs:7: `tokio::task::JoinSet::new`",
+                "crates/proxy/src/a.rs:8: `TokioExecutor::new`",
+            ]
         );
     }
 

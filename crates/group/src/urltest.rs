@@ -86,7 +86,7 @@ impl Outbounds {
             skip_cert_verify: false,
             offer_h2: false,
         };
-        let mut connection = http::connect(io, &target, &settings)
+        let mut connection = http::connect(io, &target, &settings, &self.shared.tasks)
             .await
             .map_err(|err| err.to_string())?;
         let first = connection

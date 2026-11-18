@@ -277,6 +277,7 @@ pub fn deps(sink: &Arc<Sink>) -> ResolverDeps {
         sock_opts: SockOpts::default(),
         ipv6: true,
         store_fake_ip: false,
+        tasks: Default::default(),
     }
 }
 

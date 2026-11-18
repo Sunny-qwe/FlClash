@@ -1,4 +1,7 @@
 use concord_common::{FindProcessMode, LogLevel, TunnelMode};
+use concord_config::Profile;
+use concord_config::tun::TunConfig;
+use concord_tun::{Congestion, TunDevice};
 use serde::Serialize;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -149,4 +152,106 @@ pub struct SubscriptionInfo {
     pub total: i64,
     #[serde(rename = "Expire")]
     pub expire: i64,
+}
+
+/// Everything an apply of `profile` warns about; `concord -t` reports the same list.
+pub(crate) fn warning_views(profile: &Profile, android: bool) -> Vec<WarningView> {
+    let mut warnings = profile
+        .report
+        .warnings
+        .iter()
+        .map(|warning| WarningView {
+            level: match warning.level {
+                concord_config::Level::Info => "info",
+                concord_config::Level::Warning => "warning",
+            },
+            code: warning.code,
+            path: warning.path.clone(),
+            message: warning.message.clone(),
+        })
+        .collect::<Vec<_>>();
+    warnings.extend(tun_congestion_warning(&profile.tun, android));
+    warnings.extend(tun_offload_warning(&profile.tun, TunDevice::OFFLOADS));
+    warnings
+}
+
+pub(crate) fn log_warnings(warnings: &[WarningView]) {
+    for warning in warnings {
+        if warning.level == "info" {
+            tracing::info!("[Config] {}: {}", warning.path, warning.message);
+        } else {
+            tracing::warn!("[Config] {}: {}", warning.path, warning.message);
+        }
+    }
+}
+
+/// Android takes the congestion control from the host's VPN options, not the profile.
+fn tun_congestion_warning(tun: &TunConfig, android: bool) -> Option<WarningView> {
+    let name = &tun.congestion_controller;
+    if !tun.enable || android || Congestion::parse(name).1 {
+        return None;
+    }
+    Some(WarningView {
+        level: "warning",
+        code: "not_applied",
+        path: "tun.congestion-controller".to_string(),
+        message: format!("{name} is not available, so cubic runs instead"),
+    })
+}
+
+/// The Linux device asks for offload whatever `gso` says, where sing-tun enables it only when
+/// asked (`tun_linux.go`); no other platform has it, in either core.
+fn tun_offload_warning(tun: &TunConfig, offloads: bool) -> Option<WarningView> {
+    (tun.enable && offloads && tun.gso == Some(false)).then(|| WarningView {
+        level: "warning",
+        code: "not_applied",
+        path: "tun.gso".to_string(),
+        message: "offload is used whenever the device supports it".to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unavailable_tun_congestion_control_is_reported() {
+        let mut tun = TunConfig {
+            enable: true,
+            congestion_controller: "bbr".into(),
+            ..TunConfig::default()
+        };
+        let warning = tun_congestion_warning(&tun, false).unwrap();
+        assert_eq!(
+            (warning.code, warning.path.as_str()),
+            ("not_applied", "tun.congestion-controller")
+        );
+        assert!(tun_congestion_warning(&tun, true).is_none());
+        for name in ["", "cubic", "Reno"] {
+            tun.congestion_controller = name.into();
+            assert!(tun_congestion_warning(&tun, false).is_none(), "{name}");
+        }
+        tun.congestion_controller = "bbr3".into();
+        tun.enable = false;
+        assert!(tun_congestion_warning(&tun, false).is_none());
+    }
+
+    #[test]
+    fn only_turning_linux_offload_off_is_reported() {
+        let mut tun = TunConfig {
+            enable: true,
+            gso: Some(false),
+            ..TunConfig::default()
+        };
+        let warning = tun_offload_warning(&tun, true).unwrap();
+        assert_eq!(
+            (warning.code, warning.path.as_str()),
+            ("not_applied", "tun.gso")
+        );
+        assert!(tun_offload_warning(&tun, false).is_none());
+        for gso in [None, Some(true)] {
+            tun.gso = gso;
+            assert!(tun_offload_warning(&tun, true).is_none(), "{gso:?}");
+        }
+    }
 }

@@ -28,19 +28,31 @@ pub(super) async fn session_for(
         .entry(key.clone())
         .or_insert_with(|| Arc::new(OnceCell::new()))
         .clone();
-    let outcome = slot
-        .get_or_try_init(|| {
-            new_session(inner, runtime, state, decision, reply, key.clone(), target)
-        })
-        .await;
-    match outcome {
-        Ok(session) => Ok(session.clone()),
-        Err(err) => {
-            inner
-                .nat
-                .slots
-                .remove_if(&key, |_, current| Arc::ptr_eq(current, &slot));
-            Err(err)
+    let _unfilled = Unfilled {
+        slots: &inner.nat.slots,
+        key: &key,
+        slot: &slot,
+    };
+    slot.get_or_try_init(|| {
+        new_session(inner, runtime, state, decision, reply, key.clone(), target)
+    })
+    .await
+    .cloned()
+}
+
+/// Takes the slot back out when its session failed or its setup was dropped, so a later flow
+/// starts a new one and the scanner sees the table empty.
+struct Unfilled<'a> {
+    slots: &'a DashMap<SessionKey, Arc<OnceCell<Arc<Session>>>>,
+    key: &'a SessionKey,
+    slot: &'a Arc<OnceCell<Arc<Session>>>,
+}
+
+impl Drop for Unfilled<'_> {
+    fn drop(&mut self) {
+        if !self.slot.initialized() {
+            self.slots
+                .remove_if(self.key, |_, current| Arc::ptr_eq(current, self.slot));
         }
     }
 }
@@ -91,8 +103,8 @@ pub(super) async fn new_session(
     });
     if !adopt(inner, &session, reply) {
         inner
-            .handle
-            .spawn(receive_loop(inner.clone(), session.clone()));
+            .tasks
+            .spawn_to_end(receive_loop(inner.clone(), session.clone()));
     }
     Ok(session)
 }
@@ -220,8 +232,8 @@ pub(super) fn enqueue(
     drop(overflow);
     if !session.sender_running.swap(true, Ordering::AcqRel) {
         inner
-            .handle
-            .spawn(drain_overflow(inner.clone(), session.clone()));
+            .tasks
+            .spawn_to_end(drain_overflow(inner.clone(), session.clone()));
     }
 }
 

@@ -170,13 +170,36 @@ async fn the_supervisor_restarts_only_a_schedule_whose_spec_changed() {
     let mut supervisor = Supervisor::default();
     let stop = CancellationToken::new();
     let weak = Arc::downgrade(&rig.out);
-    supervisor.reconcile(rig.out.checks(), &weak, &stop);
+    supervisor.reconcile(rig.out.checks(), &weak, &stop, &Default::default());
     assert_eq!((supervisor.running(), supervisor.restarts()), (1, 0));
-    supervisor.reconcile(rig.out.checks(), &weak, &stop);
+    supervisor.reconcile(rig.out.checks(), &weak, &stop, &Default::default());
     assert_eq!(supervisor.restarts(), 0);
     let check = rig.out.group("u").unwrap().checks().next().unwrap().clone();
     check.register_extra("http://extra.test/", &StatusRanges::default(), "", 60);
-    supervisor.reconcile(rig.out.checks(), &weak, &stop);
+    supervisor.reconcile(rig.out.checks(), &weak, &stop, &Default::default());
     assert_eq!(supervisor.restarts(), 1);
     stop.cancel();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_schedule_s_task_ends_when_the_config_or_the_engine_stops() {
+    for engine_stops in [false, true] {
+        let (tasks, tracker, engine_stop) = tracked();
+        let rig = Rig::tracked(&url_test(""), tasks);
+        let (stop, answered) = (CancellationToken::new(), CancellationToken::new());
+        answered.cancel();
+        rig.out.start_background(stop.clone(), answered);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(connects(&rig, "a"), 1);
+        assert!(!tracker.is_empty());
+        if engine_stops {
+            engine_stop.cancel();
+        } else {
+            stop.cancel();
+        }
+        assert!(
+            ended_within(&tracker, Duration::from_secs(1)).await,
+            "{engine_stops}"
+        );
+    }
 }

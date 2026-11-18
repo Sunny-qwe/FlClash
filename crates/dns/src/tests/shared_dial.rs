@@ -9,9 +9,11 @@ use std::net::SocketAddr;
 use std::sync::Weak;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use concord_common::{BoxStream, PacketSession};
+use concord_common::{BoxStream, PacketSession, Tasks};
 use futures_util::{FutureExt, poll};
 use tokio::net::{TcpListener, TcpStream};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::shared_dial::{Got, SharedDial};
 
@@ -296,6 +298,16 @@ async fn upstream_answering(
     barrier: Option<Arc<tokio::sync::Barrier>>,
     handler: Handler,
 ) -> (Arc<crate::Resolver>, Arc<CountingDialer>) {
+    upstream_on(protocol, fail, barrier, handler, Tasks::default()).await
+}
+
+async fn upstream_on(
+    protocol: &str,
+    fail: bool,
+    barrier: Option<Arc<tokio::sync::Barrier>>,
+    handler: Handler,
+    tasks: Tasks,
+) -> (Arc<crate::Resolver>, Arc<CountingDialer>) {
     let addr = match protocol {
         "doq" => serve_quic(handler).await.addr,
         "h3" => serve_h3(handler).await.addr,
@@ -323,6 +335,7 @@ async fn upstream_answering(
     let sink = Arc::new(Sink::default());
     let mut deps = deps(&sink);
     deps.dialer = Arc::downgrade(&dialer) as Weak<dyn crate::UpstreamDialer>;
+    deps.tasks = tasks;
     let resolver = crate::Resolver::new(&config(&[url]), &HostsConfig::default(), deps).unwrap();
     (resolver, dialer)
 }
@@ -541,4 +554,57 @@ async fn concurrent_cold_http2_dials_leave_a_usable_cached_sender() {
         vec![ip("10.0.2.1")]
     );
     assert_eq!(dialer.attempts.load(Ordering::SeqCst), 16);
+}
+
+fn tracked() -> (Tasks, TaskTracker, CancellationToken) {
+    let (tracker, stop) = (TaskTracker::new(), CancellationToken::new());
+    let tasks = Tasks::new(
+        tracker.clone(),
+        stop.clone(),
+        tokio::runtime::Handle::current(),
+    );
+    (tasks, tracker, stop)
+}
+
+async fn ended_within(tracker: &TaskTracker, bound: Duration) -> bool {
+    tracker.close();
+    let ended = tokio::time::timeout(bound, tracker.wait()).await.is_ok();
+    tracker.reopen();
+    ended
+}
+
+#[tokio::test]
+async fn an_upstream_s_connection_tasks_end_when_the_resolver_is_dropped() {
+    for protocol in ["h3", "doq", "h2"] {
+        let (tasks, tracker, _stop) = tracked();
+        let handler = answer_with(Ipv4Addr::new(10, 0, 2, 1));
+        let (resolver, _dialer) = upstream_on(protocol, false, None, handler, tasks).await;
+        let query = crate::msg::build_query("tracked.test", RecordType::A).unwrap();
+        resolver.exchange(&query, Initiator::App).await.unwrap();
+        assert!(!tracker.is_empty(), "{protocol}: nothing is tracked");
+        drop(resolver);
+        assert!(
+            ended_within(&tracker, Duration::from_secs(5)).await,
+            "{protocol}: {} tasks outlive the resolver",
+            tracker.len()
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_query_in_flight_ends_when_its_owner_stops() {
+    let (tasks, tracker, stop) = tracked();
+    let server = serve_udp(silent(), Duration::ZERO).await;
+    let mut deps = deps(&Arc::new(Sink::default()));
+    deps.tasks = tasks;
+    let resolver =
+        crate::Resolver::new(&config(&[server.udp_url()]), &HostsConfig::default(), deps).unwrap();
+    let query = crate::msg::build_query("silent.test", RecordType::A).unwrap();
+    let asking = tokio::spawn(async move { resolver.exchange(&query, Initiator::App).await });
+    while tracker.is_empty() {
+        tokio::task::yield_now().await;
+    }
+    stop.cancel();
+    assert!(ended_within(&tracker, Duration::from_secs(1)).await);
+    assert!(asking.await.unwrap().is_err());
 }

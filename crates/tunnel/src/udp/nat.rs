@@ -168,7 +168,7 @@ pub(super) fn start_flow(
     start_scanner(inner);
 
     let task = establish(inner.clone(), runtime, flow, id, state, reply);
-    inner.handle.spawn(task);
+    inner.tasks.spawn_to_end(task);
 }
 
 pub(super) async fn establish(
@@ -179,17 +179,23 @@ pub(super) async fn establish(
     mut state: FlowState,
     reply: Arc<dyn UdpReply>,
 ) {
-    finish_sniffing(&flow, &mut state).await;
-    let _ = pre_handle(&mut state, &runtime.dns);
-
-    match connect(&inner, &runtime, &flow, &id, &mut state, reply).await {
-        Ok(()) => {}
-        Err(err) => {
+    let closing = inner.table.closing();
+    let set_up = async {
+        finish_sniffing(&flow, &mut state).await;
+        let _ = pre_handle(&mut state, &runtime.dns);
+        connect(&inner, &runtime, &flow, &id, &mut state, reply).await
+    };
+    match closing.run_until_cancelled(set_up).await {
+        Some(Ok(())) => {}
+        Some(Err(err)) => {
             tracing::debug!(
                 "[UDP] {} --> {} failed: {err}",
                 state.source_detail(),
                 state.remote_text()
             );
+            inner.nat.flows.remove(&id);
+        }
+        None => {
             inner.nat.flows.remove(&id);
         }
     }

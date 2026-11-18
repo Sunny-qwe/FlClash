@@ -4,7 +4,7 @@ pub(super) fn start_scanner(inner: &Arc<Inner>) {
     if inner.nat.scanning.swap(true, Ordering::AcqRel) {
         return;
     }
-    inner.handle.spawn(scan(inner.clone()));
+    inner.tasks.spawn_to_end(scan(inner.clone()));
 }
 
 /// Coarse on purpose: nothing per packet beyond storing a counter, and no task at

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use concord_common::sync::lock;
-use concord_common::{CoreError, EventSink, Initiator, LookupIps};
+use concord_common::{CoreError, EventSink, Initiator, LookupIps, Tasks};
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use hickory_proto::op::{Message, ResponseCode};
@@ -134,12 +134,23 @@ impl Error for Shared {
     }
 }
 
-fn spawn_batch(clients: Vec<ClientRef>, req: Message, cx: Cx) -> JoinHandle<io::Result<Batch>> {
-    dialer::spawn(async move { batch_exchange(&clients, &req, cx).await })
+fn spawn_batch(
+    tasks: &Tasks,
+    clients: Vec<ClientRef>,
+    req: Message,
+    cx: Cx,
+) -> JoinHandle<Option<io::Result<Batch>>> {
+    dialer::spawn(
+        tasks,
+        async move { batch_exchange(&clients, &req, cx).await },
+    )
 }
 
-async fn joined(handle: JoinHandle<io::Result<Batch>>) -> io::Result<Batch> {
-    handle.await.map_err(io::Error::other)?
+async fn joined(handle: JoinHandle<Option<io::Result<Batch>>>) -> io::Result<Batch> {
+    handle
+        .await
+        .map_err(io::Error::other)?
+        .unwrap_or_else(|| Err(io::Error::from(io::ErrorKind::Interrupted)))
 }
 
 pub(crate) enum PolicyItem {
@@ -224,6 +235,7 @@ pub(crate) struct GroupParts {
     pub cache_algorithm: String,
     pub cache_size: i32,
     pub ipv6_timeout: Duration,
+    pub tasks: Tasks,
 }
 
 /// One of the resolvers mihomo builds: its servers, its policy, its own cache.
@@ -334,9 +346,15 @@ impl Group {
         if self.parts.fallback.is_empty() {
             return batch_exchange(&self.parts.main, req, cx).await;
         }
-        let main = spawn_batch(self.parts.main.clone(), req.clone(), cx);
-        let mut fallback = (!self.parts.fallback_lazy)
-            .then(|| spawn_batch(self.parts.fallback.clone(), req.clone(), cx));
+        let main = spawn_batch(&self.parts.tasks, self.parts.main.clone(), req.clone(), cx);
+        let mut fallback = (!self.parts.fallback_lazy).then(|| {
+            spawn_batch(
+                &self.parts.tasks,
+                self.parts.fallback.clone(),
+                req.clone(),
+                cx,
+            )
+        });
         if let Ok(batch) = joined(main).await {
             let ips = msg::answer_ips(&batch.msg);
             if !ips.is_empty() && ips.iter().all(|ip| !self.should_ip_fallback(*ip)) {
@@ -346,9 +364,14 @@ impl Group {
                 return Ok(batch);
             }
         }
-        let handle = fallback
-            .take()
-            .unwrap_or_else(|| spawn_batch(self.parts.fallback.clone(), req.clone(), cx));
+        let handle = fallback.take().unwrap_or_else(|| {
+            spawn_batch(
+                &self.parts.tasks,
+                self.parts.fallback.clone(),
+                req.clone(),
+                cx,
+            )
+        });
         joined(handle).await
     }
 
@@ -410,7 +433,7 @@ impl Group {
         drop(flights);
         let group = Arc::clone(self);
         let request = req.clone();
-        dialer::spawn(async move {
+        dialer::spawn(&self.parts.tasks, async move {
             let result = group.run_query(&request, initiator).await;
             {
                 let mut flights = lock(&group.flights);
@@ -555,10 +578,9 @@ impl Group {
     ) -> io::Result<LookupIps> {
         let group = Arc::clone(self);
         let name = host.to_string();
-        let v6_task =
-            dialer::spawn(
-                async move { group.lookup_one(&name, RecordType::AAAA, initiator).await },
-            );
+        let v6_task = dialer::spawn(&self.parts.tasks, async move {
+            group.lookup_one(&name, RecordType::AAAA, initiator).await
+        });
         let v4 = self.lookup_one(host, RecordType::A, initiator).await;
         let wait = if self.parts.ipv6_timeout.is_zero() {
             DEFAULT_IPV6_WAIT
@@ -566,7 +588,7 @@ impl Group {
             self.parts.ipv6_timeout
         };
         let v6 = match tokio::time::timeout(wait, v6_task).await {
-            Ok(Ok(Ok(ips))) => ips,
+            Ok(Ok(Some(Ok(ips)))) => ips,
             _ => Vec::new(),
         };
         match v4 {

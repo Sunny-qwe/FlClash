@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use concord_common::{DialEnv, EventSink, NodeDialer, Outbound};
+use concord_common::{DialEnv, EventSink, NodeDialer, Outbound, Tasks};
 use concord_config::proxy::ProxyDef;
 use concord_platform::HomeDir;
 use concord_tls::TrustStore;
@@ -82,4 +82,6 @@ pub struct GroupDeps {
     pub home: Arc<HomeDir>,
     pub trust: Arc<TrustStore>,
     pub factory: Arc<dyn NodeFactory>,
+    /// Where provider updates, health checks and their HTTP connections run.
+    pub tasks: Tasks,
 }

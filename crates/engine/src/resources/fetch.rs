@@ -79,7 +79,9 @@ impl Fetcher for TunnelFetcher {
                     .dial_inner(&target.address(), request.via_proxy.as_deref())
                     .await
                     .map_err(|err| dial_error(&err))?;
-                let mut connection = connect(stream, &target, &tls).await.map_err(http_error)?;
+                let mut connection = connect(stream, &target, &tls, self.tunnel.tasks())
+                    .await
+                    .map_err(http_error)?;
                 connection
                     .send(http::Method::GET, &headers, Bytes::new(), limit)
                     .await

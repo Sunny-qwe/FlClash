@@ -12,7 +12,7 @@ repository.workspace = true
 doctest = false
 
 [dependencies]
-concord-common = { workspace = true, features = ["io"] }
+concord-common = { workspace = true, features = ["io", "hyper"] }
 concord-config = { workspace = true }
 concord-platform = { workspace = true }
 concord-proxy = { workspace = true }

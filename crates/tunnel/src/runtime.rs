@@ -8,7 +8,7 @@ use arc_swap::{ArcSwap, ArcSwapOption};
 use concord_common::packet::PacketSession;
 use concord_common::{
     Address, BoxStream, FindProcessMode, FlowHandler, FlowKey, FlowMeta, HostResolver, InboundKind,
-    Initiator, IpVersion, LookupIps, ProcessInfo, TunnelMode, UdpFlow, UdpPayload, UdpReply,
+    Initiator, IpVersion, LookupIps, ProcessInfo, Tasks, TunnelMode, UdpFlow, UdpPayload, UdpReply,
 };
 use concord_dns::Resolver;
 use concord_group::{Outbounds, Touch};
@@ -16,7 +16,6 @@ use concord_net::LoopbackGuard;
 use concord_platform::Platform;
 use concord_rules::RouteProgram;
 use concord_rules::geo::GeoStore;
-use tokio::runtime::Handle;
 
 use crate::flow::FlowState;
 use crate::intercept::{ConnInterceptor, UpstreamDialer};
@@ -169,7 +168,7 @@ pub(crate) struct Inner {
     pub table: Arc<ConnTable>,
     pub loopback: Arc<LoopbackGuard>,
     pub nat: UdpNat,
-    pub handle: Handle,
+    pub tasks: Tasks,
     pub interceptor: ArcSwapOption<InterceptorSlot>,
     runtime: ArcSwapOption<Runtime>,
     live: ArcSwap<LiveOptions>,
@@ -202,14 +201,15 @@ pub struct Tunnel {
 }
 
 impl Tunnel {
-    /// Call inside the runtime that should carry the flows.
-    pub fn new(table: Arc<ConnTable>, loopback: Arc<LoopbackGuard>) -> Self {
+    /// Flows run on `tasks`; they end when the connection table closes them, not when the engine
+    /// stops.
+    pub fn new(table: Arc<ConnTable>, loopback: Arc<LoopbackGuard>, tasks: Tasks) -> Self {
         Tunnel {
             inner: Arc::new(Inner {
                 table,
                 loopback,
                 nat: UdpNat::default(),
-                handle: Handle::current(),
+                tasks,
                 interceptor: ArcSwapOption::empty(),
                 runtime: ArcSwapOption::empty(),
                 live: ArcSwap::from_pointee(LiveOptions::default()),
@@ -262,6 +262,10 @@ impl Tunnel {
 
     pub fn set_live(&self, live: LiveOptions) {
         self.inner.live.store(Arc::new(live));
+    }
+
+    pub fn tasks(&self) -> &Tasks {
+        &self.inner.tasks
     }
 
     pub fn table(&self) -> &Arc<ConnTable> {
@@ -375,8 +379,8 @@ impl RouteExplanation {
 impl FlowHandler for Tunnel {
     fn handle_tcp(&self, meta: FlowMeta, stream: BoxStream) {
         self.inner
-            .handle
-            .spawn(tcp::handle(self.inner.clone(), meta, stream));
+            .tasks
+            .spawn_to_end(tcp::handle(self.inner.clone(), meta, stream));
     }
 
     fn handle_udp(&self, flow: UdpFlow<'_>, payload: UdpPayload<'_>, reply: &Arc<dyn UdpReply>) {

@@ -102,6 +102,7 @@ async fn immediate_http1_reuse_waits_for_the_same_connection() {
             sock_opts: deps.sock_opts,
             trust: deps.trust,
             ipv6: deps.ipv6,
+            tasks: deps.tasks,
         }),
         Via::Named("unavailable".to_string()),
         None,

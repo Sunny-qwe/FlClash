@@ -15,6 +15,7 @@ doctest = false
 default = ["io"]
 # `config` and `rules` stay free of tokio, so everything async sits behind this.
 io = ["dep:tokio", "dep:tokio-util", "dep:async-trait", "dep:uuid"]
+hyper = ["io", "dep:hyper"]
 
 [dependencies]
 compact_str = { workspace = true }
@@ -24,6 +25,7 @@ tokio = { workspace = true, optional = true, features = ["net", "io-util", "time
 tokio-util = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
+hyper = { workspace = true, optional = true }
 
 [dev-dependencies]
 concord-test-support = { workspace = true }

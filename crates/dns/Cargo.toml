@@ -12,7 +12,7 @@ repository.workspace = true
 doctest = false
 
 [dependencies]
-concord-common = { workspace = true, features = ["io"] }
+concord-common = { workspace = true, features = ["io", "hyper"] }
 concord-config = { workspace = true }
 concord-tls = { workspace = true }
 concord-transport = { workspace = true }
@@ -40,6 +40,7 @@ tracing = { workspace = true }
 [dev-dependencies]
 concord-net = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true }
 rustls = { workspace = true }
 rcgen = { workspace = true }
 

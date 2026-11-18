@@ -1,5 +1,6 @@
-//! Background tasks of the proxy layer, owned by the engine: every one is registered with the
-//! engine's tracker, so shutdown can stop them and wait until they are gone.
+//! Background tasks of the crates below the engine (nodes, the resolver, groups, the tunnel), owned
+//! by the engine: every one is registered with the engine's tracker, so shutdown can stop them and
+//! wait until they are gone.
 
 use std::future::Future;
 
@@ -43,27 +44,45 @@ impl Tasks {
         self.tracker.spawn_on(self.until_stopped(task), &handle)
     }
 
-    /// A teardown nothing waits for, started where there may be no runtime (a `Drop`); without
-    /// one it is skipped. It ends when the owner stops, like `spawn`.
-    pub fn spawn_detached<F>(&self, task: F)
+    /// Like `spawn`, for a caller that awaits the output: `None` when the owner stopped first.
+    pub fn spawn_returning<F>(&self, task: F) -> JoinHandle<Option<F::Output>>
     where
-        F: Future<Output = ()> + Send + 'static,
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
     {
-        if let Some(handle) = self.runtime() {
-            self.tracker.spawn_on(self.until_stopped(task), &handle);
-        }
+        let handle = self.handle.clone().unwrap_or_else(Handle::current);
+        let stop = self.stop.clone();
+        self.tracker.spawn_on(
+            async move { stop.run_until_cancelled_owned(task).await },
+            &handle,
+        )
     }
 
-    /// Runs `task` to its end even after the owner stops. Only for a teardown whose end a
-    /// protocol or library bounds: a QUIC connection draining after its close, a device that
-    /// aborts and joins its own tasks.
-    pub fn spawn_to_end<F>(&self, task: F)
+    /// A teardown nothing waits for, started where there may be no runtime (a `Drop`); without
+    /// one it is skipped and this returns false. It ends when the owner stops, like `spawn`.
+    pub fn spawn_detached<F>(&self, task: F) -> bool
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        if let Some(handle) = self.runtime() {
-            self.tracker.spawn_on(task, &handle);
-        }
+        let Some(handle) = self.runtime() else {
+            return false;
+        };
+        self.tracker.spawn_on(self.until_stopped(task), &handle);
+        true
+    }
+
+    /// Runs `task` to its end even after the owner stops, or skips it and returns false without a
+    /// runtime. Only for a task something else bounds: a QUIC connection draining after its close,
+    /// a device that aborts and joins its own tasks, a flow the connection table closes.
+    pub fn spawn_to_end<F>(&self, task: F) -> bool
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let Some(handle) = self.runtime() else {
+            return false;
+        };
+        self.tracker.spawn_on(task, &handle);
+        true
     }
 
     pub fn stopped(&self) -> WaitForCancellationFuture<'_> {
@@ -86,6 +105,20 @@ impl Tasks {
         async move {
             let _ = stop.run_until_cancelled_owned(task).await;
         }
+    }
+}
+
+/// hyper's HTTP/2 connections start a task per request body through their executor.
+#[cfg(feature = "hyper")]
+impl<F> hyper::rt::Executor<F> for Tasks
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    fn execute(&self, future: F) {
+        self.spawn(async move {
+            future.await;
+        });
     }
 }
 

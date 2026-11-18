@@ -12,7 +12,7 @@ use http::{Request, StatusCode, header};
 use http_body_util::{BodyExt, Empty, Limited};
 use hyper::body::Incoming;
 use hyper::client::conn::{http1, http2};
-use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+use hyper_util::rt::{TokioIo, TokioTimer};
 
 use crate::client::{BoxIo, Client, Params, checked, decode, encode, with_random_id, with_timeout};
 use crate::dialer::{Connector, Cx};
@@ -176,14 +176,14 @@ impl DohClient {
             .await
             .map_err(|_| crate::client::timed_out())??;
         if h2 {
-            let (sender, conn) = http2::Builder::new(TokioExecutor::new())
+            let (sender, conn) = http2::Builder::new(self.connector.tasks().clone())
                 .timer(TokioTimer::new())
                 .keep_alive_interval(PING_INTERVAL)
                 .keep_alive_timeout(PING_TIMEOUT)
                 .handshake(TokioIo::new(io))
                 .await
                 .map_err(io::Error::other)?;
-            tokio::spawn(async move {
+            self.connector.tasks().spawn(async move {
                 let _ = conn.await;
             });
             Ok(Sender::H2(sender))
@@ -191,7 +191,7 @@ impl DohClient {
             let (sender, conn) = http1::handshake(TokioIo::new(io))
                 .await
                 .map_err(io::Error::other)?;
-            tokio::spawn(async move {
+            self.connector.tasks().spawn(async move {
                 let _ = conn.await;
             });
             Ok(Sender::H1(sender))
